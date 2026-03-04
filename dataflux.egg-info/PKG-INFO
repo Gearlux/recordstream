@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: dataflux
+Version: 0.1.0
+Summary: Clean, functional data pipelines for ML research and production.
+Author-email: Gearlux <info@gearlux.ai>
+Requires-Dist: confluid
+Requires-Dist: logflow
+Requires-Dist: numpy
+Requires-Dist: typing-extensions

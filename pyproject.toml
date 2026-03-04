@@ -1,0 +1,28 @@
+[project]
+name = "dataflux"
+version = "0.1.0"
+description = "Clean, functional data pipelines for ML research and production."
+authors = [{ name = "Gearlux", email = "info@gearlux.ai" }]
+dependencies = [
+    "confluid",
+    "logflow",
+    "numpy",
+    "h5py",
+    "zarr",
+    "typing-extensions",
+]
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dataflux*"]
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+line_length = 120
