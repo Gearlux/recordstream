@@ -85,6 +85,26 @@ def _worker_task(sample: Sample, ops: List[Any]) -> Optional[Sample]:
 
 
 @confluid.configurable
+class JointFlux:
+    """
+    Aggregates multiple Flux streams into a single joint stream.
+    Each sub-flux maintains its own unique transformation chain.
+    """
+
+    def __init__(self, fluxes: List["Flux"]) -> None:
+        self.fluxes = fluxes
+
+    def __iter__(self) -> Iterator[Sample]:
+        """Iterate through all sub-fluxes sequentially."""
+        for flux in self.fluxes:
+            yield from flux
+
+    def __len__(self) -> int:
+        """Total length is the sum of all sub-fluxes."""
+        return sum(len(f) for f in self.fluxes)
+
+
+@confluid.configurable
 class Flux:
     """
     The primary stream engine for DataFlux.
@@ -100,6 +120,17 @@ class Flux:
     def from_source(cls, source: Any) -> "Flux":
         """Create a Flux from a DataSource."""
         return cls(source=source)
+
+    @classmethod
+    def joint(cls, fluxes: List["Flux"]) -> "Flux":
+        """Create a new Flux that aggregates multiple other Flux streams."""
+        return cls(source=JointFlux(fluxes))
+
+    def __len__(self) -> int:
+        """Return the length of the underlying source if available."""
+        if self.source is not None and hasattr(self.source, "__len__"):
+            return len(self.source)  # type: ignore
+        return 0
 
     def to_sink(self, sink: Any) -> None:
         """Write the entire flux to a DataSink."""
