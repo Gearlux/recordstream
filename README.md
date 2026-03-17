@@ -72,7 +72,7 @@ Flux.from_source(HDF5Source("input.h5")) \
 ## 🔧 Installation
 
 ```bash
-pip install dataflux
+pip install git+https://github.com/Gearlux/dataflux.git@main
 ```
 
 ## 📄 License
