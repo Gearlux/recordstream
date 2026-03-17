@@ -1,16 +1,34 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Environments
 .venv/
-build/
+env/
+venv/
+ENV/
+
+# Distribution / packaging
 dist/
+build/
 *.egg-info/
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Testing / Coverage
 .pytest_cache/
 .mypy_cache/
 .coverage
-coverage.xml
-test-report.xml
-flake8.txt
-flake8-report.xml
+htmlcov/
+
+# Project-Specific (Data & Logs)
+data/
 logs/
-*.egg-info/
+models/*.pt
+models/*.onnx
+*.h5
+*.zarr

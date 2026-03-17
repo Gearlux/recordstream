@@ -16,6 +16,21 @@ Part of the **Modular Quartet**: `LogFlow`, `Confluid`, `Liquify`, and `DataFlux
 -   **Passive Introspection:** Automatically generates JSON manifests for visual orchestration in **FluxStudio**.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
 
+## 🎯 Design Goals & Requirements
+
+### Stream Engine
+- **Functional API:** Provide a lazy, chainable pipeline API (`map`, `filter`, `batch`).
+- **Standardized Samples:** Use the `Sample(input, target, metadata)` triplet as the primary data unit.
+- **Parallel Execution:** Support high-performance multiprocess execution via `.parallel(workers=N)` using the `spawn` context.
+
+### Storage
+- **High-Performance Sinks:** Native support for HDF5 (sequential), Zarr (concurrent), and Directory (irregular) storage.
+- **JointFlux Pattern:** Support aggregating multiple heterogeneous data sources into a single stream, preserving per-source transform chains.
+
+### Metadata & Discovery
+- **Passive Introspection:** Automatically discover available tools and ops for serialized manifests.
+- **Serialization Symmetry:** Ensure full-pipeline states are serializable and reconstructible via Confluid.
+
 ## 🛠 Quick Start
 
 ```python

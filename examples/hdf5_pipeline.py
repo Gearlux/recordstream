@@ -8,11 +8,11 @@ from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
 
 
 # 1. Define a simple transform
-def rescale(data: np.ndarray, scale: float = 1.0):
+def rescale(data: np.ndarray, scale: float = 1.0) -> np.ndarray:
     return data * scale
 
 
-def main():
+def main() -> None:
     # 2. Setup paths
     h5_path = Path("examples/test_data.h5")
 

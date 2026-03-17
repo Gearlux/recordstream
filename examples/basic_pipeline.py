@@ -5,11 +5,11 @@ from dataflux.core import Flux
 
 
 # 1. Define simple functional transformations
-def add_noise(data: np.ndarray, std: float = 0.1):
+def add_noise(data: np.ndarray, std: float = 0.1) -> np.ndarray:
     return data + np.random.normal(0, std, data.shape)
 
 
-def multiply(data: np.ndarray, factor: float = 2.0):
+def multiply(data: np.ndarray, factor: float = 2.0) -> np.ndarray:
     return data * factor
 
 

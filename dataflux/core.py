@@ -9,9 +9,10 @@ from typing import (
     List,
     Optional,
     Union,
+    cast,
 )
 
-import confluid  # type: ignore[import-not-found]
+from confluid import configurable
 
 from dataflux.sample import Sample
 
@@ -19,25 +20,25 @@ from dataflux.sample import Sample
 class OptionalContextManager:
     """Helper for 'with' statements where the object might not be a context manager."""
 
-    def __enter__(self):
+    def __enter__(self) -> "OptionalContextManager":
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         pass
 
 
-@confluid.configurable
+@configurable
 class FilterOp:
     """Configurable filter operation."""
 
-    def __init__(self, p: Callable):
+    def __init__(self, p: Callable[[Sample], bool]):
         self.p = p
 
-    def __call__(self, s: Sample):
+    def __call__(self, s: Sample) -> Optional[Sample]:
         return s if self.p(s) else None
 
 
-@confluid.configurable
+@configurable
 class WrappedOp:
     """Configurable transformation wrapper with smart mapping."""
 
@@ -68,7 +69,7 @@ class WrappedOp:
                 new_target = self.func(sample.target, **self.kw)
                 return sample._replace(target=new_target)
             elif self.s == "all":
-                return self.func(sample, **self.kw)
+                return cast(Sample, self.func(sample, **self.kw))
             return sample
         except Exception as e:
             raise e
@@ -84,7 +85,7 @@ def _worker_task(sample: Sample, ops: List[Any]) -> Optional[Sample]:
     return current_sample
 
 
-@confluid.configurable
+@configurable
 class JointFlux:
     """
     Aggregates multiple Flux streams into a single joint stream.
@@ -104,7 +105,7 @@ class JointFlux:
         return sum(len(f) for f in self.fluxes)
 
 
-@confluid.configurable
+@configurable
 class Flux:
     """
     The primary stream engine for DataFlux.
@@ -166,7 +167,7 @@ class Flux:
         self.ops.append(FilterOp(predicate))
         return self
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[Sample]:
         """Execute the pipeline lazily (single or multi-process)."""
         if not self.source:
             return
@@ -209,6 +210,6 @@ class Flux:
         """Materialize the full flux into a list."""
         return list(self)
 
-    def to_torch(self):
+    def to_torch(self) -> None:
         """Bridge to PyTorch Dataset protocol."""
         pass
