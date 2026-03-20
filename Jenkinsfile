@@ -26,6 +26,7 @@ pipeline {
                 stage('Black') {
                     steps {
                         script {
+                            sh "rm -f black-diff.txt black-checkstyle.xml"
                             def rc = sh(script: "${VENV_BIN}/black --check --diff dataflux tests examples > black-diff.txt 2>&1", returnStatus: true)
                             sh """${VENV_BIN}/python3 -c "
 import sys, os
@@ -55,6 +56,7 @@ with open('black-checkstyle.xml', 'w') as f:
                 stage('Isort') {
                     steps {
                         script {
+                            sh "rm -f isort-diff.txt isort-checkstyle.xml"
                             def rc = sh(script: "${VENV_BIN}/isort --check-only --diff dataflux tests examples > isort-diff.txt 2>&1", returnStatus: true)
                             sh """${VENV_BIN}/python3 -c "
 import sys, os
@@ -83,8 +85,8 @@ with open('isort-checkstyle.xml', 'w') as f:
                 }
                 stage('Flake8') {
                     steps {
+                        sh "rm -f flake8.txt"
                         sh "${VENV_BIN}/flake8 dataflux tests examples --config=.flake8 --tee --output-file=flake8.txt"
-
                     }
                     post {
                         always {
@@ -98,6 +100,7 @@ with open('isort-checkstyle.xml', 'w') as f:
                 }
                 stage('Mypy') {
                     steps {
+                        sh "rm -f mypy.txt"
                         sh "${VENV_BIN}/mypy dataflux tests examples > mypy.txt || true"
                     }
                     post {
