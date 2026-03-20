@@ -22,12 +22,9 @@ def get_callable_path(func: Callable) -> str:
         try:
             main_module = sys.modules["__main__"]
             file_path = Path(main_module.__file__).resolve()  # type: ignore
-            if file_path.parent == Path.cwd():
-                module_name = file_path.name
-            else:
-                module_name = file_path.name
+            module_name = file_path.name
         except (AttributeError, KeyError):
-            pass
+            pass  # pragma: no cover
 
     if module_name is None or name is None:
         raise ValueError(f"Could not determine path for {func}")

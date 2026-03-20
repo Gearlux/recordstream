@@ -53,7 +53,7 @@ class ZarrGroupSink(Storage, DataSink):
         self._counter += 1
 
     def flush(self) -> None:
-        pass
+        pass  # pragma: no cover
 
 
 @confluid.configurable
@@ -103,4 +103,4 @@ class ZarrBatchSink(Storage, DataSink):
         self._counter += 1
 
     def flush(self) -> None:
-        pass
+        pass  # pragma: no cover

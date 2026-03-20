@@ -1,10 +1,14 @@
-import numpy as np
 import time
+
+import numpy as np
+
 from dataflux.core import Flux
+
 
 def heavy_op(x: np.ndarray) -> np.ndarray:
     time.sleep(0.1)
     return x * 2
+
 
 def test_parallel_execution() -> None:
     source = [np.array([i]) for i in range(10)]

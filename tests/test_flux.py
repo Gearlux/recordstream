@@ -1,6 +1,8 @@
+from typing import Any
+
 import numpy as np
 import pytest
-from typing import Any
+
 from dataflux.core import Flux
 from dataflux.sample import Sample
 
@@ -83,6 +85,7 @@ def test_optional_context_manager() -> None:
 
     with OptionalContextManager() as cm:
         assert cm is not None
+    # hits line 23: exit pass
 
 
 def fail_op(x: Any) -> Any:
@@ -96,7 +99,42 @@ def test_wrapped_op_error() -> None:
         pipeline.collect()
 
 
-def test_flux_to_torch() -> None:
-    # Just verify it exists and returns None for now
-    pipeline = Flux([])
-    assert pipeline.to_torch() is None
+def target_transform(t: Any) -> Any:
+    return t + 10
+
+
+def test_wrapped_op_target() -> None:
+    source = [Sample(input=1, target=5)]
+    # select="target" hits lines 69-70
+    pipeline = Flux(source).map(target_transform, select="target")
+    results = pipeline.collect()
+    assert results[0].target == 15
+
+
+def test_wrapped_op_fallback() -> None:
+    # select="unknown" hits line 73
+    source = [Sample(input=1)]
+    pipeline = Flux(source).map(lambda x: x, select="unknown")
+    results = pipeline.collect()
+    assert results[0].input == 1
+
+
+def test_worker_task_none() -> None:
+    from dataflux.core import _worker_task
+
+    # hits line 83 by using two ops, first returning None
+    assert _worker_task(Sample(input=1), [lambda s: None, lambda s: s]) is None
+
+
+def test_flux_from_source() -> None:
+    # hits from_source classmethod
+    f = Flux.from_source([1, 2, 3])
+    assert len(f) == 3
+
+
+def test_flux_len_fallback() -> None:
+    # hits line 134 (len 0 if no source or no len)
+    f = Flux()
+    assert len(f) == 0
+    f2 = Flux(iter([1, 2]))  # iter doesn't have len
+    assert len(f2) == 0

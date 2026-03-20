@@ -1,4 +1,3 @@
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -90,9 +89,10 @@ def test_get_callable_path_main(monkeypatch: Any) -> None:
     finally:
         local_func.__module__ = orig_mod
 
+
 def test_resolve_callable_direct() -> None:
     # Test non-string non-callable returns self
-    assert resolve_callable(123) == 123 # type: ignore
+    assert resolve_callable(123) == 123  # type: ignore
     path = get_callable_path(sample_func)
     resolved = resolve_callable(path)
     assert resolved == sample_func
@@ -115,7 +115,7 @@ def test_introspect_callable() -> None:
     assert schema["name"] == "sample_func"
     assert schema["doc"] == "Sample docstring."
     assert len(schema["parameters"]) == 2
-    
+
     p0 = schema["parameters"][0]
     assert p0["name"] == "a"
     assert "int" in p0["type"]
@@ -125,6 +125,22 @@ def test_introspect_callable() -> None:
     assert p1["name"] == "b"
     assert p1["default"] == "default"
     assert p1["required"] is False
+
+
+def test_resolve_callable_script(tmp_path: Path) -> None:
+    # hits lines 52-57 (loading from .py file)
+    script_path = tmp_path / "dynamic.py"
+    script_path.write_text("def my_dynamic_func(): return 42")
+
+    path = f"{script_path}:my_dynamic_func"
+    resolved = resolve_callable(path)
+    assert resolved() == 42
+
+
+def test_introspect_signature_error() -> None:
+    # hits line 88
+    # inspect.signature fails on some builtins
+    assert introspect_callable(iter) == {}
 
 
 def test_scan_module(tmp_path: Path) -> None:
@@ -137,7 +153,7 @@ def func_in_script(x: int) -> int:
 class ClassInScript:
     pass
 """)
-    
+
     schemas = scan_module(script_path)
     names = [s["name"] for s in schemas]
     assert "func_in_script" in names

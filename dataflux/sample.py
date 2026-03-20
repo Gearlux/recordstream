@@ -18,12 +18,14 @@ class Sample(NamedTuple):
         if isinstance(obj, cls):
             return obj
         if isinstance(obj, tuple):
-            if len(obj) == 3:
+            if len(obj) >= 3:
                 return cls(obj[0], obj[1], obj[2] or {})
             if len(obj) == 2:
                 return cls(obj[0], obj[1], {})
             if len(obj) == 1:
                 return cls(obj[0], None, {})
+            # Empty tuple
+            return cls(None, None, {})
         if isinstance(obj, dict):
             return cls(
                 input=obj.get("input"),

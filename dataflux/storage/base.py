@@ -36,7 +36,7 @@ class Storage:
         return self
 
     def close(self) -> None:
-        pass
+        pass  # pragma: no cover
 
     def __enter__(self) -> "Storage":
         return self.open()

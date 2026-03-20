@@ -138,7 +138,11 @@ class Flux:
         from dataflux.storage.base import Storage
 
         # 1. Open sink if it's a context-aware storage
-        target_sink = sink if isinstance(sink, Storage) else OptionalContextManager()
+        if isinstance(sink, Storage):
+            target_sink: Any = sink
+        else:
+            target_sink = OptionalContextManager()
+
         with target_sink:
             for sample in self:
                 sink.write(sample)
@@ -209,7 +213,3 @@ class Flux:
     def collect(self) -> List[Sample]:
         """Materialize the full flux into a list."""
         return list(self)
-
-    def to_torch(self) -> None:
-        """Bridge to PyTorch Dataset protocol."""
-        pass

@@ -1,12 +1,15 @@
+from typing import Any, cast
+
 import numpy as np
-import torch
+
 from dataflux.sample import Sample
+
 
 def test_sample_from_any() -> None:
     # 1. From dict
     d = {"input": np.array([1, 2]), "target": 1, "metadata": {"id": "test"}}
     s = Sample.from_any(d)
-    assert np.array_equal(s.input, d["input"])
+    assert np.array_equal(s.input, cast(Any, d["input"]))
     assert s.target == 1
     assert s.metadata["id"] == "test"
 
@@ -16,11 +19,18 @@ def test_sample_from_any() -> None:
     assert np.array_equal(s2.input, t[0])
     assert s2.target == 0
 
-    # 3. From single item (input only)
-    val = np.array([5, 6])
-    s3 = Sample.from_any(val)
-    assert np.array_equal(s3.input, val)
+    # 3. From tuple (input,) - hits line 22
+    t3 = (np.array([7, 8]),)
+    s3 = Sample.from_any(t3)
+    assert np.array_equal(s3.input, t3[0])
     assert s3.target is None
+
+    # 4. From single item (input only)
+    val = np.array([5, 6])
+    s4 = Sample.from_any(val)
+    assert np.array_equal(s4.input, val)
+    assert s4.target is None
+
 
 def test_sample_to_tuple() -> None:
     s = Sample(input=1, target=2, metadata={"a": 3})
