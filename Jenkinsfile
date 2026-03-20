@@ -15,8 +15,8 @@ pipeline {
                 echo 'Installing Dependencies...'
                 sh "${VENV_BIN}/pip install --upgrade pip"
                 sh "${VENV_BIN}/pip uninstall -y logflow confluid || true"
-                sh "${VENV_BIN}/pip install --no-cache-dir git+https://github.com/Gearlux/logflow.git@main"
-                sh "${VENV_BIN}/pip install --no-cache-dir git+https://github.com/Gearlux/confluid.git@main"
+                sh "${VENV_BIN}/pip install --no-cache-dir 'git+https://github.com/Gearlux/logflow.git@main'"
+                sh "${VENV_BIN}/pip install --no-cache-dir 'git+https://github.com/Gearlux/confluid.git@main'"
                 sh "${VENV_BIN}/pip install -e .[dev] || ${VENV_BIN}/pip install -e ."
             }
         }

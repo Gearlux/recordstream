@@ -9,7 +9,19 @@ dependencies = [
     "numpy",
     "h5py",
     "zarr",
+    "torch",
     "typing-extensions",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "flake8-junit-report>=2.1.0",
+    "mypy>=1.0.0",
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
 ]
 
 [build-system]
