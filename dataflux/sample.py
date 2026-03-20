@@ -24,4 +24,10 @@ class Sample(NamedTuple):
                 return cls(obj[0], obj[1], {})
             if len(obj) == 1:
                 return cls(obj[0], None, {})
+        if isinstance(obj, dict):
+            return cls(
+                input=obj.get("input"),
+                target=obj.get("target"),
+                metadata=obj.get("metadata", {}),
+            )
         return cls(obj, None, {})

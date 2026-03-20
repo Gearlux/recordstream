@@ -45,6 +45,7 @@ def test_joint_flux_logic() -> None:
 
     joint = Flux.joint([flux_a, flux_b])
 
+    assert len(joint) == 4
     results = joint.collect()
     assert len(results) == 4
     assert results[0].input == 10.0

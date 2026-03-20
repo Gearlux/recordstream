@@ -112,6 +112,8 @@ def scan_module(path_or_name: Union[str, Path]) -> List[Dict[str, Any]]:
     if is_py:
         # Load as a file-based module
         mod_path = Path(path_or_name).resolve()
+        if not mod_path.exists():
+            return []
         # Use the filename stem so it matches the expected module name
         mod_name = mod_path.stem
         spec = importlib.util.spec_from_file_location(mod_name, str(mod_path))
