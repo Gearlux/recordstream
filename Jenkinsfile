@@ -83,7 +83,8 @@ with open('isort-checkstyle.xml', 'w') as f:
                 }
                 stage('Flake8') {
                     steps {
-                        sh "${VENV_BIN}/flake8 dataflux tests examples --tee --output-file=flake8.txt || true"
+                        sh "${VENV_BIN}/flake8 dataflux tests examples --config=.flake8 --tee --output-file=flake8.txt"
+
                     }
                     post {
                         always {
