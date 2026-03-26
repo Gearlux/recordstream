@@ -8,7 +8,7 @@ from dataflux.storage.directory import DirectorySink
 from dataflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
 
 
-def main():
+def main() -> None:
     # --- 1. DirectorySink (Irregular Lengths) ---
     print("--- Testing DirectorySink ---")
     dir_path = Path("examples/dir_store")

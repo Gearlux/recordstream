@@ -1,0 +1,10 @@
+[run]
+source = dataflux
+omit =
+    */tests/*
+    */examples/*
+    */__init__.py
+
+[report]
+show_missing = True
+precision = 2

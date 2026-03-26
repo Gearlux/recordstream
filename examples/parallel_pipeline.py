@@ -5,14 +5,14 @@ import numpy as np
 from dataflux.core import Flux
 
 
-def heavy_computation(data: np.ndarray, intensity: int = 10):
+def heavy_computation(data: np.ndarray, intensity: int = 10) -> np.ndarray:
     """Simulate a heavy CPU-bound transformation."""
     # Artificial delay to simulate processing time
     time.sleep(0.1)
     return data * intensity
 
 
-def main():
+def main() -> None:
     # 1. Create a large synthetic dataset
     print("--- Creating data source (20 items) ---")
     raw_data = [np.random.randn(100) for _ in range(20)]

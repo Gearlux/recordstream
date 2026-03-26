@@ -7,13 +7,13 @@ from dataflux.core import Flux
 from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
 
 
-def heavy_rescale(data: np.ndarray, factor: float = 1.0):
+def heavy_rescale(data: np.ndarray, factor: float = 1.0) -> np.ndarray:
     """A simulated heavy transformation."""
     time.sleep(0.05)  # Simulate CPU work
     return data * factor
 
 
-def main():
+def main() -> None:
     h5_path = Path("examples/stream_results.h5")
     num_samples = 50
 

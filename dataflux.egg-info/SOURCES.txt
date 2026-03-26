@@ -1,8 +1,0 @@
-pyproject.toml
-dataflux/core.py
-dataflux/types.py
-dataflux.egg-info/PKG-INFO
-dataflux.egg-info/SOURCES.txt
-dataflux.egg-info/dependency_links.txt
-dataflux.egg-info/requires.txt
-dataflux.egg-info/top_level.txt

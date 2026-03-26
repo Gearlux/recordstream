@@ -9,9 +9,10 @@ from typing import (
     List,
     Optional,
     Union,
+    cast,
 )
 
-import confluid  # type: ignore[import-not-found]
+from confluid import configurable
 
 from dataflux.sample import Sample
 
@@ -19,25 +20,25 @@ from dataflux.sample import Sample
 class OptionalContextManager:
     """Helper for 'with' statements where the object might not be a context manager."""
 
-    def __enter__(self):
+    def __enter__(self) -> "OptionalContextManager":
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         pass
 
 
-@confluid.configurable
+@configurable
 class FilterOp:
     """Configurable filter operation."""
 
-    def __init__(self, p: Callable):
+    def __init__(self, p: Callable[[Sample], bool]):
         self.p = p
 
-    def __call__(self, s: Sample):
+    def __call__(self, s: Sample) -> Optional[Sample]:
         return s if self.p(s) else None
 
 
-@confluid.configurable
+@configurable
 class WrappedOp:
     """Configurable transformation wrapper with smart mapping."""
 
@@ -68,7 +69,7 @@ class WrappedOp:
                 new_target = self.func(sample.target, **self.kw)
                 return sample._replace(target=new_target)
             elif self.s == "all":
-                return self.func(sample, **self.kw)
+                return cast(Sample, self.func(sample, **self.kw))
             return sample
         except Exception as e:
             raise e
@@ -84,7 +85,27 @@ def _worker_task(sample: Sample, ops: List[Any]) -> Optional[Sample]:
     return current_sample
 
 
-@confluid.configurable
+@configurable
+class JointFlux:
+    """
+    Aggregates multiple Flux streams into a single joint stream.
+    Each sub-flux maintains its own unique transformation chain.
+    """
+
+    def __init__(self, fluxes: List["Flux"]) -> None:
+        self.fluxes = fluxes
+
+    def __iter__(self) -> Iterator[Sample]:
+        """Iterate through all sub-fluxes sequentially."""
+        for flux in self.fluxes:
+            yield from flux
+
+    def __len__(self) -> int:
+        """Total length is the sum of all sub-fluxes."""
+        return sum(len(f) for f in self.fluxes)
+
+
+@configurable
 class Flux:
     """
     The primary stream engine for DataFlux.
@@ -101,12 +122,27 @@ class Flux:
         """Create a Flux from a DataSource."""
         return cls(source=source)
 
+    @classmethod
+    def joint(cls, fluxes: List["Flux"]) -> "Flux":
+        """Create a new Flux that aggregates multiple other Flux streams."""
+        return cls(source=JointFlux(fluxes))
+
+    def __len__(self) -> int:
+        """Return the length of the underlying source if available."""
+        if self.source is not None and hasattr(self.source, "__len__"):
+            return len(self.source)  # type: ignore
+        return 0
+
     def to_sink(self, sink: Any) -> None:
         """Write the entire flux to a DataSink."""
         from dataflux.storage.base import Storage
 
         # 1. Open sink if it's a context-aware storage
-        target_sink = sink if isinstance(sink, Storage) else OptionalContextManager()
+        if isinstance(sink, Storage):
+            target_sink: Any = sink
+        else:
+            target_sink = OptionalContextManager()
+
         with target_sink:
             for sample in self:
                 sink.write(sample)
@@ -135,7 +171,7 @@ class Flux:
         self.ops.append(FilterOp(predicate))
         return self
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[Sample]:
         """Execute the pipeline lazily (single or multi-process)."""
         if not self.source:
             return
@@ -177,7 +213,3 @@ class Flux:
     def collect(self) -> List[Sample]:
         """Materialize the full flux into a list."""
         return list(self)
-
-    def to_torch(self):
-        """Bridge to PyTorch Dataset protocol."""
-        pass

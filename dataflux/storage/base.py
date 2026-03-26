@@ -1,4 +1,4 @@
-from typing import Iterator, Protocol, runtime_checkable
+from typing import Any, Iterator, Protocol, runtime_checkable
 
 from dataflux.sample import Sample
 
@@ -36,10 +36,10 @@ class Storage:
         return self
 
     def close(self) -> None:
-        pass
+        pass  # pragma: no cover
 
     def __enter__(self) -> "Storage":
         return self.open()
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()

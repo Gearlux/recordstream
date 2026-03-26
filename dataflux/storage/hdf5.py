@@ -1,15 +1,25 @@
 from pathlib import Path
-from typing import Any, Iterator, List, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
-import confluid  # type: ignore[import-not-found]
 import h5py  # type: ignore[import-untyped]
-import numpy as np
+import torch
+from confluid import configurable
+from logflow import get_logger
 
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, DataSource, Storage
 
+logger = get_logger("dataflux.storage.hdf5")
 
-@confluid.configurable
+
+def to_numpy(data: Any) -> Any:
+    """Utility to convert torch tensors to numpy arrays for HDF5 storage."""
+    if isinstance(data, torch.Tensor):
+        return data.detach().cpu().numpy()
+    return data
+
+
+@configurable
 class HDF5Source(Storage, DataSource):
     """Clean, high-performance HDF5 data source."""
 
@@ -18,12 +28,10 @@ class HDF5Source(Storage, DataSource):
         self.sample_key = sample_key
         self.target_key = target_key
         self._file: Optional[h5py.File] = None
-        self._indices: List[str] = []
 
     def open(self) -> "HDF5Source":
         if self._file is None:
             self._file = h5py.File(self.path, "r")
-            self._build_index()
         return self
 
     def close(self) -> None:
@@ -31,47 +39,30 @@ class HDF5Source(Storage, DataSource):
             self._file.close()
             self._file = None
 
-    def _build_index(self) -> None:
-        """Simple index: look for datasets matching sample_key."""
-        self._indices = []
-        if self._file is None:
-            return
-
-        def visitor(name: str, obj: Any) -> None:
-            if isinstance(obj, h5py.Dataset) and name.endswith(self.sample_key):
-                self._indices.append(name)
-
-        self._file.visititems(visitor)
-
-    def __len__(self) -> int:
-        if not self._indices:
-            self.open()
-        return len(self._indices)
-
     def __iter__(self) -> Iterator[Sample]:
         self.open()
         if self._file is None:
             return
 
-        for idx in self._indices:
-            ds = self._file[idx]
-            data = np.array(ds)
+        prefixes = sorted([k.split("_data")[0] for k in self._file.keys() if k.endswith("_data")])
 
-            # Resolve target
-            target = None
-            if self.target_key:
-                target_path = idx.replace(self.sample_key, self.target_key)
-                if target_path in self._file:
-                    target = np.array(self._file[target_path])
+        for pref in prefixes:
+            data = self._file[f"{pref}_data"][()]
+            target = self._file[f"{pref}_target"][()] if f"{pref}_target" in self._file else None
+            metadata = dict(self._file[f"{pref}_data"].attrs)
+            # Source returns Tensors to match schema
+            yield Sample(input=torch.from_numpy(data), target=target, metadata=metadata)
 
-            # Resolve metadata from attributes
-            metadata = dict(ds.attrs)
-            yield Sample(data, target, metadata)
+    def __len__(self) -> int:
+        self.open()
+        if self._file is None:
+            return 0
+        return len([k for k in self._file.keys() if k.endswith("_data")])
 
 
-@confluid.configurable
+@configurable
 class HDF5Sink(Storage, DataSink):
-    """Clean HDF5 data sink focused on Sample triplets."""
+    """High-performance HDF5 data sink focused on Sample triplets."""
 
     def __init__(self, path: Union[str, Path], compression: Optional[str] = "gzip", overwrite: bool = False) -> None:
         self.path = Path(path)
@@ -82,8 +73,9 @@ class HDF5Sink(Storage, DataSink):
 
     def open(self) -> "HDF5Sink":
         if self._file is None:
-            mode = "w" if self.overwrite else "a"
+            mode = "w" if self.overwrite and self._counter == 0 else "a"
             self.path.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Opening HDF5 file for writing: {self.path} (mode={mode})")
             self._file = h5py.File(self.path, mode)
         return self
 
@@ -99,16 +91,31 @@ class HDF5Sink(Storage, DataSink):
 
         prefix = f"{self._counter:05d}"
 
-        # Write data
-        ds = self._file.create_dataset(f"{prefix}_data", data=sample.input, compression=self.compression)
+        # Convert tensors to numpy for h5py
+        input_data = to_numpy(sample.input)
+        target_data = to_numpy(sample.target)
 
-        # Write attributes (metadata)
+        # 1. Write Data
+        kwargs = {}
+        if self.compression and hasattr(input_data, "shape") and len(input_data.shape) > 0:
+            kwargs["compression"] = self.compression
+
+        ds = self._file.create_dataset(f"{prefix}_data", data=input_data, **kwargs)
+
+        # 2. Write Attributes (Metadata)
         for k, v in sample.metadata.items():
-            ds.attrs[k] = v
+            try:
+                ds.attrs[k] = v
+            except Exception:
+                ds.attrs[k] = str(v)
 
-        # Write target
-        if sample.target is not None:
-            self._file.create_dataset(f"{prefix}_target", data=sample.target, compression=self.compression)
+        # 3. Write Target
+        if target_data is not None:
+            t_kwargs = {}
+            if self.compression and hasattr(target_data, "shape") and len(target_data.shape) > 0:
+                t_kwargs["compression"] = self.compression
+
+            self._file.create_dataset(f"{prefix}_target", data=target_data, **t_kwargs)
 
         self._counter += 1
 
