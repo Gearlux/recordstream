@@ -146,15 +146,13 @@ def test_introspect_signature_error() -> None:
 def test_scan_module(tmp_path: Path) -> None:
     # Create a dummy script
     script_path = tmp_path / "my_script.py"
-    script_path.write_text(
-        """
+    script_path.write_text("""
 def func_in_script(x: int) -> int:
     return x * 2
 
 class ClassInScript:
     pass
-"""
-    )
+""")
 
     schemas = scan_module(script_path)
     names = [s["name"] for s in schemas]
