@@ -112,10 +112,16 @@ class Flux:
     Wraps any iterable or indexed dataset and provides a functional API.
     """
 
-    def __init__(self, source: Optional[Iterable[Any]] = None, ops: Optional[List[Any]] = None) -> None:
+    def __init__(
+        self,
+        source: Optional[Iterable[Any]] = None,
+        ops: Optional[List[Any]] = None,
+        chunk_size: int = 0,
+    ) -> None:
         self.source = source
         self.ops: List[Any] = ops or []
         self._workers = 1
+        self._chunk_size = chunk_size
 
     @classmethod
     def from_source(cls, source: Any) -> "Flux":
@@ -158,6 +164,16 @@ class Flux:
         self._workers = workers
         return self
 
+    def batch(self, chunk_size: int) -> "Flux":
+        """
+        Group samples into chunks (lists of N samples).
+
+        Args:
+            chunk_size: Number of samples per chunk.
+        """
+        self._chunk_size = chunk_size
+        return self
+
     def map(self, func: Callable, select: str = "input", **kwargs: Any) -> "Flux":
         """
         Append a transformation to the flux.
@@ -171,15 +187,24 @@ class Flux:
         self.ops.append(FilterOp(predicate))
         return self
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Any]:
         """Execute the pipeline lazily (single or multi-process)."""
         if not self.source:
             return
 
-        if self._workers > 1:
-            yield from self._iter_parallel()
+        it = self._iter_parallel() if self._workers > 1 else self._iter_sequential()
+
+        if self._chunk_size > 0:
+            batch = []
+            for sample in it:
+                batch.append(sample)
+                if len(batch) == self._chunk_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
         else:
-            yield from self._iter_sequential()
+            yield from it
 
     def _iter_sequential(self) -> Iterator[Sample]:
         """Standard single-threaded execution."""
