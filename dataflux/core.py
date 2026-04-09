@@ -116,12 +116,12 @@ class Flux:
         self,
         source: Optional[Iterable[Any]] = None,
         ops: Optional[List[Any]] = None,
-        chunk_size: int = 0,
+        chunk_size: Optional[int] = 0,
     ) -> None:
         self.source = source
         self.ops: List[Any] = ops or []
         self._workers = 1
-        self._chunk_size = chunk_size
+        self._chunk_size = chunk_size or 0
 
     @classmethod
     def from_source(cls, source: Any) -> "Flux":
