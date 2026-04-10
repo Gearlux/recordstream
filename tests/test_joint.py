@@ -70,7 +70,7 @@ def test_joint_serialization() -> None:
     assert "!class:MockSource" in yaml_state
     assert "name: source_a" in yaml_state
 
-    # 2. Reconstruct
+    # 2. Reconstruct — instances dump with () so they reload as live objects
     new_pipeline = confluid.load(yaml_state)
 
     # 3. Manually provide data to the reconstructed sources

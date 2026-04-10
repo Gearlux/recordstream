@@ -139,6 +139,19 @@ class Flux:
             return len(self.source)  # type: ignore
         return 0
 
+    def __getitem__(self, index: int) -> Sample:
+        """Random access: get the i-th sample with ops applied."""
+        if self.source is None or not hasattr(self.source, "__getitem__"):
+            raise TypeError("Flux source does not support indexing")
+        raw = self.source[index]
+        sample = Sample.from_any(raw)
+        for op in self.ops:
+            result = op(sample)
+            if result is None:
+                raise IndexError(f"Sample {index} filtered out by {op}")
+            sample = result
+        return sample
+
     def to_sink(self, sink: Any) -> None:
         """Write the entire flux to a DataSink."""
         from dataflux.storage.base import Storage

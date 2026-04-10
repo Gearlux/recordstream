@@ -60,6 +60,13 @@ class HuggingFaceSource:
             yield Sample(input=input_val, target=target_val, metadata=metadata)
             counter += 1
 
+    def __getitem__(self, index: int) -> Sample:
+        item = self._dataset[index]
+        metadata = {f: item.get(f) for f in self.metadata_features}
+        metadata["hf_path"] = self.path
+        metadata["hf_split"] = self.split
+        return Sample(input=item.get(self.input_feature), target=item.get(self.target_feature), metadata=metadata)
+
     def __len__(self) -> int:
         if self.count is not None:
             return self.count

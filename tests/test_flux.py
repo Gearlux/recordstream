@@ -138,3 +138,40 @@ def test_flux_len_fallback() -> None:
     assert len(f) == 0
     f2 = Flux(iter([1, 2]))  # iter doesn't have len
     assert len(f2) == 0
+
+
+# --- Indexed access (__getitem__) ---
+
+
+def test_getitem_basic() -> None:
+    source = [np.array([10]), np.array([20]), np.array([30])]
+    flux = Flux(source)
+    sample = flux[1]
+    assert isinstance(sample, Sample)
+    assert np.array_equal(sample.input, np.array([20]))
+
+
+def test_getitem_with_ops() -> None:
+    source = [np.array([1]), np.array([2]), np.array([3])]
+    flux = Flux(source).map(double_it)
+    assert np.array_equal(flux[0].input, np.array([2]))
+    assert np.array_equal(flux[2].input, np.array([6]))
+
+
+def test_getitem_no_source() -> None:
+    flux = Flux()
+    with pytest.raises(TypeError):
+        flux[0]
+
+
+def test_getitem_non_indexable_source() -> None:
+    flux = Flux(iter([1, 2, 3]))  # iterators don't support indexing
+    with pytest.raises(TypeError):
+        flux[0]
+
+
+def test_getitem_out_of_range() -> None:
+    source = [np.array([1])]
+    flux = Flux(source)
+    with pytest.raises(IndexError):
+        flux[5]
