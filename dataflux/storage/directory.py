@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Union
 
-import confluid  # type: ignore[import-not-found]
+import confluid
 import numpy as np
 
 from dataflux.sample import Sample

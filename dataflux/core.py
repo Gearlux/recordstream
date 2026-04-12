@@ -1,17 +1,8 @@
 import concurrent.futures
 import multiprocessing
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Union, cast
 
+import torch.utils.data
 from confluid import configurable
 
 from dataflux.sample import Sample
@@ -106,7 +97,7 @@ class JointFlux:
 
 
 @configurable
-class Flux:
+class Flux(torch.utils.data.Dataset[Sample]):
     """
     The primary stream engine for DataFlux.
     Wraps any iterable or indexed dataset and provides a functional API.
@@ -135,8 +126,10 @@ class Flux:
 
     def __len__(self) -> int:
         """Return the length of the underlying source if available."""
-        if self.source is not None and hasattr(self.source, "__len__"):
-            return len(self.source)  # type: ignore
+        from collections.abc import Sized
+
+        if isinstance(self.source, Sized):
+            return len(self.source)
         return 0
 
     def __getitem__(self, index: int) -> Sample:
