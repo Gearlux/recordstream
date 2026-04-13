@@ -11,7 +11,9 @@ dependencies = [
     "zarr",
     "torch",
     "typing-extensions",
+    "datasets",
 ]
+requires-python = ">=3.12"
 
 [project.optional-dependencies]
 dev = [
@@ -22,6 +24,7 @@ dev = [
     "mypy>=1.0.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "Pillow",
 ]
 
 [build-system]
@@ -42,3 +45,12 @@ line_length = 120
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+[[tool.mypy.overrides]]
+module = [
+    "datasets.*",
+    "h5py.*",
+    "PIL.*",
+    "zarr.*",
+]
+ignore_missing_imports = true

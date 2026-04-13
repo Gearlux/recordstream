@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import List, Optional, Union
 
-import confluid  # type: ignore[import-not-found]
+import confluid
 import zarr
 
 from dataflux.sample import Sample
@@ -31,9 +31,11 @@ class ZarrGroupSink(Storage, DataSink):
 
     def write(self, sample: Sample) -> None:
         self.open()
+        if self._root is None:
+            raise RuntimeError("Zarr group not open")
         # Use require_group to handle existing nodes safely
         name = f"sample_{self._counter:06d}"
-        grp = self._root.require_group(name)  # type: ignore
+        grp = self._root.require_group(name)
 
         # 1. Save data and target (Explicit shape/dtype for Zarr v3)
         # Use require_dataset or delete if exists
@@ -93,9 +95,11 @@ class ZarrBatchSink(Storage, DataSink):
 
     def write(self, sample: Sample) -> None:
         self.open()
+        if self._data_arr is None:
+            raise RuntimeError("Zarr array not open")
         # Append to the primary array
         # Zarr handles the resizing and chunking internally
-        self._data_arr.append([sample.input], axis=0)  # type: ignore
+        self._data_arr.append([sample.input], axis=0)
 
         # Note: Handling metadata in a single-array sink requires
         # a separate attribute list or sidecar file.

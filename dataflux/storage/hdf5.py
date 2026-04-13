@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
 
-import h5py  # type: ignore[import-untyped]
+import h5py
 import torch
 from confluid import configurable
 from logflow import get_logger

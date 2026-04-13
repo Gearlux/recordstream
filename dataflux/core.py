@@ -1,17 +1,8 @@
 import concurrent.futures
 import multiprocessing
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Union,
-    cast,
-)
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Union, cast
 
+import torch.utils.data
 from confluid import configurable
 
 from dataflux.sample import Sample
@@ -106,16 +97,22 @@ class JointFlux:
 
 
 @configurable
-class Flux:
+class Flux(torch.utils.data.Dataset[Sample]):
     """
     The primary stream engine for DataFlux.
     Wraps any iterable or indexed dataset and provides a functional API.
     """
 
-    def __init__(self, source: Optional[Iterable[Any]] = None, ops: Optional[List[Any]] = None) -> None:
+    def __init__(
+        self,
+        source: Optional[Iterable[Any]] = None,
+        ops: Optional[List[Any]] = None,
+        chunk_size: Optional[int] = 0,
+    ) -> None:
         self.source = source
         self.ops: List[Any] = ops or []
         self._workers = 1
+        self._chunk_size = chunk_size or 0
 
     @classmethod
     def from_source(cls, source: Any) -> "Flux":
@@ -129,9 +126,24 @@ class Flux:
 
     def __len__(self) -> int:
         """Return the length of the underlying source if available."""
-        if self.source is not None and hasattr(self.source, "__len__"):
-            return len(self.source)  # type: ignore
+        from collections.abc import Sized
+
+        if isinstance(self.source, Sized):
+            return len(self.source)
         return 0
+
+    def __getitem__(self, index: int) -> Sample:
+        """Random access: get the i-th sample with ops applied."""
+        if self.source is None or not hasattr(self.source, "__getitem__"):
+            raise TypeError("Flux source does not support indexing")
+        raw = self.source[index]
+        sample = Sample.from_any(raw)
+        for op in self.ops:
+            result = op(sample)
+            if result is None:
+                raise IndexError(f"Sample {index} filtered out by {op}")
+            sample = result
+        return sample
 
     def to_sink(self, sink: Any) -> None:
         """Write the entire flux to a DataSink."""
@@ -158,6 +170,16 @@ class Flux:
         self._workers = workers
         return self
 
+    def batch(self, chunk_size: int) -> "Flux":
+        """
+        Group samples into chunks (lists of N samples).
+
+        Args:
+            chunk_size: Number of samples per chunk.
+        """
+        self._chunk_size = chunk_size
+        return self
+
     def map(self, func: Callable, select: str = "input", **kwargs: Any) -> "Flux":
         """
         Append a transformation to the flux.
@@ -171,15 +193,24 @@ class Flux:
         self.ops.append(FilterOp(predicate))
         return self
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Any]:
         """Execute the pipeline lazily (single or multi-process)."""
         if not self.source:
             return
 
-        if self._workers > 1:
-            yield from self._iter_parallel()
+        it = self._iter_parallel() if self._workers > 1 else self._iter_sequential()
+
+        if self._chunk_size > 0:
+            batch = []
+            for sample in it:
+                batch.append(sample)
+                if len(batch) == self._chunk_size:
+                    yield batch
+                    batch = []
+            if batch:
+                yield batch
         else:
-            yield from self._iter_sequential()
+            yield from it
 
     def _iter_sequential(self) -> Iterator[Sample]:
         """Standard single-threaded execution."""

@@ -4,7 +4,7 @@ import inspect
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Union, cast
 
 
 def get_callable_path(func: Callable) -> str:
@@ -21,8 +21,10 @@ def get_callable_path(func: Callable) -> str:
     if module_name == "__main__":
         try:
             main_module = sys.modules["__main__"]
-            file_path = Path(main_module.__file__).resolve()  # type: ignore
-            module_name = file_path.name
+            main_file = getattr(main_module, "__file__", None)
+            if main_file:
+                file_path = Path(main_file).resolve()
+                module_name = file_path.name
         except (AttributeError, KeyError):
             pass  # pragma: no cover
 
@@ -38,7 +40,7 @@ def resolve_callable(path: Union[str, Callable]) -> Callable:
         return path
 
     if not isinstance(path, str) or ":" not in path:
-        return path  # type: ignore
+        raise ValueError(f"Invalid callable path format: {path}. Expected 'module:function'")
 
     mod_name, func_name = path.split(":", 1)
 
@@ -61,10 +63,10 @@ def resolve_callable(path: Union[str, Callable]) -> Callable:
 
     try:
         parts = func_name.split(".")
-        func = mod
+        func: Any = mod
         for part in parts:
             func = getattr(func, part)
-        return func  # type: ignore
+        return cast(Callable, func)
     except AttributeError as e:
         raise AttributeError(f"Module '{mod_name}' has no attribute '{func_name}': {e}")
 

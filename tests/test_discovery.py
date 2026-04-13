@@ -4,12 +4,7 @@ from typing import Any
 
 import pytest
 
-from dataflux.discovery import (
-    get_callable_path,
-    introspect_callable,
-    resolve_callable,
-    scan_module,
-)
+from dataflux.discovery import get_callable_path, introspect_callable, resolve_callable, scan_module
 
 
 def sample_func(a: int, b: str = "default") -> str:
@@ -91,8 +86,10 @@ def test_get_callable_path_main(monkeypatch: Any) -> None:
 
 
 def test_resolve_callable_direct() -> None:
-    # Test non-string non-callable returns self
-    assert resolve_callable(123) == 123  # type: ignore
+    # Test non-string non-callable raises ValueError
+    with pytest.raises(ValueError, match="Invalid callable path format"):
+        resolve_callable(123)  # type: ignore
+
     path = get_callable_path(sample_func)
     resolved = resolve_callable(path)
     assert resolved == sample_func
@@ -106,8 +103,9 @@ def test_resolve_callable_direct() -> None:
     # Test already a callable
     assert resolve_callable(sample_func) == sample_func
 
-    # Test non-string/no-colon
-    assert resolve_callable("simple_string") == "simple_string"
+    # Test non-string/no-colon raises ValueError
+    with pytest.raises(ValueError, match="Invalid callable path format"):
+        resolve_callable("simple_string")
 
 
 def test_introspect_callable() -> None:

@@ -69,6 +69,21 @@ Flux.from_source(HDF5Source("input.h5")) \
     .to_sink(ZarrGroupSink("output.zarr"))
 ```
 
+## 🌐 Ecosystem Integration
+
+DataFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines.
+
+### Intake (Data Discovery & Catalogs)
+-   **Use Intake for:** Data discovery, remote storage abstraction (S3/GCS), and sharing "canned" datasets via YAML catalogs.
+-   **Integration:** Wrap an Intake driver in a DataFlux `DataSource` to gain functional `.map()`, `.filter()`, and `.parallel()` capabilities on cataloged data.
+
+### Hugging Face (Community & Standardized Datasets)
+-   **Use Hugging Face for:** Accessing community datasets and leveraging the `datasets` library for efficient Arrow/Parquet loading.
+-   **Integration:** Use DataFlux to transform `datasets.Dataset` objects into standardized `Sample` triplets, ensuring metadata traceability that often goes missing in simple dictionary-based records.
+
+### DataFlux (The Functional Engine)
+-   **Use DataFlux for:** The "inner loop" of your experiment. When you need high-performance multiprocess streaming, per-sample metadata preservation, and 100% reproducible pipelines via **Confluid** serialization.
+
 ## 🔧 Installation
 
 ```bash
