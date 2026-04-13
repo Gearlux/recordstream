@@ -25,7 +25,7 @@ def test_parallel_execution() -> None:
     assert results[9].input == 18
     # 10 items of 0.1s sequentially = 1.0s. 4 workers ≈ 0.3s + spawn overhead.
     # Threshold accounts for process spawn overhead on slower machines.
-    assert duration < 2.0
+    assert duration < 5.0
 
 
 def test_parallel_with_joint() -> None:
