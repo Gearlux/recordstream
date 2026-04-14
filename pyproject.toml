@@ -35,6 +35,9 @@ build-backend = "setuptools.build_meta"
 where = ["."]
 include = ["dataflux*"]
 
+[tool.setuptools.package-data]
+dataflux = ["py.typed"]
+
 [tool.black]
 line-length = 120
 
