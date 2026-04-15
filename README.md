@@ -69,6 +69,54 @@ Flux.from_source(HDF5Source("input.h5")) \
     .to_sink(ZarrGroupSink("output.zarr"))
 ```
 
+## ✂️ Train / Val Splitting
+
+`DatasetSplit` carves a subset view out of any indexable source (implementing `__len__` and `__getitem__`). It supports three modes:
+
+1. **Fraction mode** — pick a reproducible train/val split from a single source:
+
+    ```yaml
+    hf_train: !class:dataflux.sources.HuggingFaceSource()
+      path: mnist
+      split: train
+
+    train_set: !class:dataflux.sources.DatasetSplit()
+      source: !ref:hf_train
+      split: train
+      val_fraction: 0.1
+      seed: 42
+
+    val_set: !class:dataflux.sources.DatasetSplit()
+      source: !ref:hf_train
+      split: val
+      val_fraction: 0.1
+      seed: 42
+    ```
+
+    Same seed + same source length ⇒ deterministic, disjoint, complementary views.
+
+2. **Range mode** — explicit slice:
+
+    ```yaml
+    first_half: !class:dataflux.sources.DatasetSplit()
+      source: !ref:hf_train
+      start: 0
+      end: 5000
+    ```
+
+3. **HuggingFace native slicing** (alternative, no `DatasetSplit` needed):
+
+    ```yaml
+    train_src: !class:dataflux.sources.HuggingFaceSource()
+      path: mnist
+      split: "train[:90%]"
+    val_src: !class:dataflux.sources.HuggingFaceSource()
+      path: mnist
+      split: "train[90%:]"
+    ```
+
+> **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared by both splits. Use `!clone:` when you want an independent deep copy instead.
+
 ## 🌐 Ecosystem Integration
 
 DataFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines.

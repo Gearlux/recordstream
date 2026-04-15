@@ -2,7 +2,7 @@
 name = "dataflux"
 version = "0.1.0"
 description = "Clean, functional data pipelines for ML research and production."
-authors = [{ name = "Gearlux", email = "info@gearlux.ai" }]
+authors = [{ name = "Taidal", email = "info@gearlux.ai" }]
 dependencies = [
     "confluid",
     "logflow",

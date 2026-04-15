@@ -1,0 +1,37 @@
+# DataFlux DatasetSplit Example
+#
+# Shows how to use DatasetSplit to carve a single HuggingFace source
+# into disjoint train/val views sharing the same seed.
+#
+# Reload with `confluid.load(...)` and iterate the Fluxes.
+
+hf_train: !class:dataflux.sources.HuggingFaceSource()
+  path: mnist
+  split: train
+  input_feature: image
+  target_feature: label
+
+hf_test: !class:dataflux.sources.HuggingFaceSource()
+  path: mnist
+  split: test
+  input_feature: image
+  target_feature: label
+
+# 90/10 train/val split, deterministic via seed=42
+train_set: !class:dataflux.core.Flux()
+  source: !class:dataflux.sources.DatasetSplit()
+    source: !ref:hf_train
+    split: train
+    val_fraction: 0.1
+    seed: 42
+
+val_set: !class:dataflux.core.Flux()
+  source: !class:dataflux.sources.DatasetSplit()
+    source: !ref:hf_train
+    split: val
+    val_fraction: 0.1
+    seed: 42
+
+# Test set stays untouched until final evaluation.
+test_set: !class:dataflux.core.Flux()
+  source: !ref:hf_test
