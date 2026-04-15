@@ -30,7 +30,9 @@ pipeline {
                             sh "rm -f black-diff.txt black-checkstyle.xml"
                             def targets = sh(script: "for d in dataflux tests examples; do if [ -d \"\$d\" ] && find \"\$d\" -name '*.py' | grep -q .; then printf \"%s \" \"\$d\"; fi; done || true", returnStdout: true).trim()
                             if (targets) {
-                                def rc = sh(script: "${VENV_BIN}/black --check --diff ${targets} > black-diff.txt 2>&1", returnStatus: true)
+                                def exitCode = sh(script: "${VENV_BIN}/black --check --diff ${targets} > black-diff.txt 2>&1", returnStatus: true)
+                                
+                                // Generate checkstyle report
                                 sh """${VENV_BIN}/python3 -c "
 import sys, os
 if not os.path.exists('black-diff.txt'): sys.exit(0)
@@ -45,6 +47,9 @@ with open('black-checkstyle.xml', 'w') as f:
             f.write('  </file>\\n')
     f.write('</checkstyle>\\n')
 " """
+                                if (exitCode != 0) {
+                                    error("Black found formatting issues. See Checkstyle report.")
+                                }
                             } else {
                                 echo "No python files found for Black. Skipping."
                             }
@@ -70,7 +75,9 @@ with open('black-checkstyle.xml', 'w') as f:
                             sh "rm -f isort-diff.txt isort-checkstyle.xml"
                             def targets = sh(script: "for d in dataflux tests examples; do if [ -d \"\$d\" ] && find \"\$d\" -name '*.py' | grep -q .; then printf \"%s \" \"\$d\"; fi; done || true", returnStdout: true).trim()
                             if (targets) {
-                                def rc = sh(script: "${VENV_BIN}/isort --check-only --diff ${targets} > isort-diff.txt 2>&1", returnStatus: true)
+                                def exitCode = sh(script: "${VENV_BIN}/isort --check-only --diff ${targets} > isort-diff.txt 2>&1", returnStatus: true)
+                                
+                                // Generate checkstyle report
                                 sh """${VENV_BIN}/python3 -c "
 import sys, os
 if not os.path.exists('isort-diff.txt'): sys.exit(0)
@@ -85,6 +92,9 @@ with open('isort-checkstyle.xml', 'w') as f:
             f.write('  </file>\\n')
     f.write('</checkstyle>\\n')
 " """
+                                if (exitCode != 0) {
+                                    error("Isort found import order issues. See Checkstyle report.")
+                                }
                             } else {
                                 echo "No python files found for Isort. Skipping."
                             }
