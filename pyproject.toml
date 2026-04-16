@@ -55,5 +55,7 @@ module = [
     "h5py.*",
     "PIL.*",
     "zarr.*",
+    "intake.*",
+    "xarray.*",
 ]
 ignore_missing_imports = true
