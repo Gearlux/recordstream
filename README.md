@@ -117,6 +117,48 @@ Flux.from_source(HDF5Source("input.h5")) \
 
 > **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared by both splits. Use `!clone:` when you want an independent deep copy instead.
 
+## 🔗 Paired Join (Binary ↔ Annotations)
+
+`PairedSource` joins a primary `DataSource` (e.g. raw binary samples) with a secondary mapping-shaped annotation store via a key function. It generalises the common "I have data, and I have a sidecar file of annotations that covers some of it" pattern. Three join policies cover the scenarios we actually see in ML research:
+
+| Policy | Iterates | Use case |
+|---|---|---|
+| `left_outer` (default) | Every primary sample; attaches annotation when the key matches | Process everything, use labels where available |
+| `inner` | Only primary samples whose key is in the store | Train/evaluate on the labeled subset |
+| `right_driven` | Every key in the annotation store; resolves the primary sample via `primary_resolver(key, primary)` | Very sparse labels where full-primary enumeration is costly |
+
+```yaml
+primary: !class:waivefront.rfuav.data.source.RFUAVSource()
+  root: /Volumes/Data/RFUAV
+  window_samples: 1000000
+
+labels: !class:annotaide.store.JSONFileAnnotationStore()
+  path: /Volumes/Data/RFUAV-labels
+
+paired: !class:dataflux.paired.PairedSource()
+  primary: !ref:primary
+  secondary: !ref:labels
+  key_fn: "waivefront.rfuav.keys:sample_window_key"
+  policy: left_outer
+```
+
+Annotation records are **flattened into `Sample.metadata`**, so a detection record `{bboxes, labels, scores}` shows up as three independent metadata keys. Two `metadata` keys are always populated: `annotated: bool` and `annotation_key: str`. Optional `prefix` and `store_full_under` parameters shape the layout.
+
+### Coarser-granularity keys (broadcast and slicing)
+
+`key_fn` is free to return a coarser key than the sample granularity. When multiple primary samples map to the same key, they all look up the same record:
+
+- **Without `extract_fn`** — the record is broadcast identically into every matching sample's metadata (e.g. a scalar pack-level class label inherited by every window of that pack).
+- **With `extract_fn`** — the record is projected per sample. The callable is invoked as `extract_fn(record, sample) -> dict | None`; returning `None` marks the sample unannotated (and filters it under `policy="inner"`). Use this when a pack-level annotation carries time-ranged content that must be trimmed to each window's bounds.
+
+Multi-granularity joins (e.g. pack-level + window-level annotations merged together) compose by chaining `PairedSource` instances — the output of one is itself a `DataSource` that the next can consume.
+
+### Callable resolution
+
+`key_fn`, `extract_fn`, and `primary_resolver` all accept either a callable **or** a `"module:function"` string path resolved through `dataflux.discovery.resolve_callable`. The string form is what survives YAML round-trip via Confluid.
+
+See [`examples/paired_annotations.py`](examples/paired_annotations.py) for a runnable end-to-end walkthrough of all four scenarios.
+
 ## 🌐 Ecosystem Integration
 
 DataFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines.
