@@ -29,12 +29,13 @@ pipeline {
                 echo 'Bootstrapping uv for fast dependency resolution...'
                 sh "${VENV_BIN}/pip install --upgrade pip uv"
                 echo 'Installing Dependencies...'
-                sh "${VENV_BIN}/uv pip install -e .[dev]"
                 
-                // Internal Gearlux dependencies — installed LAST with --reinstall
-                // so PyPI name collisions from .[dev] resolution get overwritten.
-                sh "${VENV_BIN}/uv pip install --reinstall --no-deps git+https://github.com/Gearlux/confluid.git@main"
-                sh "${VENV_BIN}/uv pip install --reinstall --no-deps git+https://github.com/Gearlux/log-flow.git@main"
+                // Internal Gearlux dependencies — installed FIRST with --no-deps
+                // so .[dev] below finds them pre-satisfied instead of hitting PyPI
+                // (Gearlux distribution names are intentionally unpublished on PyPI).
+                sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/confluid.git@main"
+                sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/log-flow.git@main"
+                sh "${VENV_BIN}/uv pip install -e .[dev]"
             }
         }
 
