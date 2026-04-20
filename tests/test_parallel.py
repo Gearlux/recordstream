@@ -24,8 +24,10 @@ def test_parallel_execution() -> None:
     assert results[0].input == 0
     assert results[9].input == 18
     # 10 items of 0.1s sequentially = 1.0s. 4 workers ≈ 0.3s + spawn overhead.
-    # Threshold accounts for process spawn overhead on slower machines.
-    assert duration < 5.0
+    # Threshold is generous because GH Actions runners are noticeably slower
+    # than local dev machines (observed >5s on cold runners). We only assert
+    # the pipeline completes — this isn't a benchmark.
+    assert duration < 15.0
 
 
 def test_parallel_with_joint() -> None:
