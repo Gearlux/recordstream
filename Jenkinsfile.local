@@ -41,9 +41,10 @@ pipeline {
                 sh "${VENV_BIN}/uv pip install -e .[dev]"
                 
                 // Internal Gearlux dependencies (local editable) — installed LAST
-                // with --reinstall so any PyPI name collision gets overwritten.
-                sh "${VENV_BIN}/uv pip install --reinstall -e ${env.WORKSPACE_ROOT}/confluid"
-                sh "${VENV_BIN}/uv pip install --reinstall -e ${env.WORKSPACE_ROOT}/logflow"
+                // with --reinstall --no-deps to overwrite any PyPI name collision
+                // WITHOUT re-resolving transitive deps (which would undo the fix).
+                sh "${VENV_BIN}/uv pip install --reinstall --no-deps -e ${env.WORKSPACE_ROOT}/confluid"
+                sh "${VENV_BIN}/uv pip install --reinstall --no-deps -e ${env.WORKSPACE_ROOT}/logflow"
             }
         }
 

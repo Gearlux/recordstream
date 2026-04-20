@@ -34,7 +34,7 @@ pipeline {
                 // Internal Gearlux dependencies — installed LAST with --reinstall
                 // so PyPI name collisions from .[dev] resolution get overwritten.
                 sh "${VENV_BIN}/uv pip install --reinstall --no-deps git+https://github.com/Gearlux/confluid.git@main"
-                sh "${VENV_BIN}/uv pip install --reinstall --no-deps git+https://github.com/Gearlux/logflow.git@main"
+                sh "${VENV_BIN}/uv pip install --reinstall --no-deps git+https://github.com/Gearlux/log-flow.git@main"
             }
         }
 

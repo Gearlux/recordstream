@@ -1,11 +1,11 @@
 [project]
-name = "dataflux"
+name = "data-flux"
 version = "0.1.0"
 description = "Clean, functional data pipelines for ML research and production."
 authors = [{ name = "Taidal", email = "info@gearlux.ai" }]
 dependencies = [
-    "confluid",
-    "logflow",
+    "confluid>=0.1.0",
+    "log-flow>=0.1.0",
     "numpy",
     "h5py",
     "zarr",
