@@ -28,6 +28,10 @@ dev = [
     "intake>=2.0",
     "xarray",
 ]
+notebook = [
+    "matplotlib",
+    "datasets",
+]
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
