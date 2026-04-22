@@ -1,21 +1,12 @@
 import concurrent.futures
 import multiprocessing
+from contextlib import nullcontext
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Union, cast
 
 import torch.utils.data
 from confluid import configurable
 
 from dataflux.sample import Sample
-
-
-class OptionalContextManager:
-    """Helper for 'with' statements where the object might not be a context manager."""
-
-    def __enter__(self) -> "OptionalContextManager":
-        return self
-
-    def __exit__(self, *args: Any) -> None:
-        pass
 
 
 @configurable
@@ -149,11 +140,8 @@ class Flux(torch.utils.data.Dataset[Sample]):
         """Write the entire flux to a DataSink."""
         from dataflux.storage.base import Storage
 
-        # 1. Open sink if it's a context-aware storage
-        if isinstance(sink, Storage):
-            target_sink: Any = sink
-        else:
-            target_sink = OptionalContextManager()
+        # Open sink if it's a context-aware storage; otherwise no-op context.
+        target_sink: Any = sink if isinstance(sink, Storage) else nullcontext()
 
         with target_sink:
             for sample in self:

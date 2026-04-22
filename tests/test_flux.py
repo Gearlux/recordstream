@@ -80,14 +80,6 @@ def test_filter_op() -> None:
     assert op(s2) is None
 
 
-def test_optional_context_manager() -> None:
-    from dataflux.core import OptionalContextManager
-
-    with OptionalContextManager() as cm:
-        assert cm is not None
-    # hits line 23: exit pass
-
-
 def fail_op(x: Any) -> Any:
     raise ValueError("Intentional failure")
 
