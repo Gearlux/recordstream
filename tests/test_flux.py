@@ -167,3 +167,95 @@ def test_getitem_out_of_range() -> None:
     flux = Flux(source)
     with pytest.raises(IndexError):
         flux[5]
+
+
+class _IterableWithLen:
+    """Iterable source with ``__iter__`` + ``__len__`` but NO ``__getitem__``.
+
+    Mirrors the shape of ``waivefront.regions_source.RegionsJsonSource``.
+    Tracks how many times ``__iter__`` is invoked so tests can prove Flux
+    materializes only once per Flux lifetime.
+    """
+
+    def __init__(self, items: list) -> None:
+        self._items = items
+        self.iter_calls = 0
+
+    def __iter__(self) -> Any:
+        self.iter_calls += 1
+        return iter(self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+def test_getitem_iterable_with_len_materializes_once() -> None:
+    """Flux caches iterable-only sources on first __getitem__ and reuses the cache."""
+    source = _IterableWithLen([np.array([1]), np.array([2]), np.array([3])])
+    flux = Flux(source)
+
+    # Cache is empty until first random access.
+    assert flux._indexable_cache is None
+    assert source.iter_calls == 0
+
+    s0 = flux[0]
+    s1 = flux[1]
+    s2 = flux[2]
+
+    assert np.array_equal(s0.input, np.array([1]))
+    assert np.array_equal(s1.input, np.array([2]))
+    assert np.array_equal(s2.input, np.array([3]))
+    # The source was iterated exactly once across the three random-access calls.
+    assert source.iter_calls == 1
+    assert flux._indexable_cache is not None
+    assert len(flux._indexable_cache) == 3
+
+
+def test_getitem_indexable_source_does_not_populate_cache() -> None:
+    """List-backed (indexable) sources take the fast path and don't trigger the cache."""
+    source = [np.array([1]), np.array([2])]
+    flux = Flux(source)
+    _ = flux[0]
+    _ = flux[1]
+    # Fast path: cache is never populated.
+    assert flux._indexable_cache is None
+
+
+def test_getitem_on_deferred_fluid_source_raises_actionable_error() -> None:
+    """When the user hands Flux a still-deferred Confluid Class marker, indexing
+    must raise with a human-readable hint — not the cryptic ``num_samples=0``
+    or ``does not support indexing``.
+    """
+    from confluid import Class
+
+    class Dummy:
+        def __init__(self, x: int = 0) -> None:
+            self.x = x
+
+    flux = Flux(Class(Dummy, x=1))
+    with pytest.raises(TypeError, match="deferred Confluid marker"):
+        flux[0]
+    with pytest.raises(TypeError, match="deferred Confluid marker"):
+        len(flux)
+
+
+def test_deferred_fluid_op_raises_actionable_error() -> None:
+    """Same guard applies to ops: a still-deferred Class in ops[] surfaces a
+    clear message pointing the YAML author at the `!class:X()` fix instead of
+    letting DataLoader workers report `'Class' object is not callable`.
+    """
+    from confluid import Class
+
+    class DummyOp:
+        def __init__(self, factor: int = 1) -> None:
+            self.factor = factor
+
+        def __call__(self, sample: Sample) -> Sample:
+            return sample
+
+    source = [np.array([1]), np.array([2])]
+    flux = Flux(source, ops=[Class(DummyOp, factor=2)])
+    with pytest.raises(TypeError, match=r"Flux\.ops\[0\] is still a deferred Confluid marker"):
+        flux[0]
+    with pytest.raises(TypeError, match=r"Flux\.ops\[0\] is still a deferred Confluid marker"):
+        list(flux)
