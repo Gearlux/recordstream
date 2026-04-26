@@ -232,7 +232,9 @@ def test_getitem_on_deferred_fluid_source_raises_actionable_error() -> None:
         def __init__(self, x: int = 0) -> None:
             self.x = x
 
-    flux = Flux(Class(Dummy, x=1))
+    # Deliberately wrong type — this test verifies Flux raises a clear error
+    # when handed a still-deferred Confluid marker as the source.
+    flux = Flux(Class(Dummy, x=1))  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="deferred Confluid marker"):
         flux[0]
     with pytest.raises(TypeError, match="deferred Confluid marker"):

@@ -207,17 +207,14 @@ class Flux(torch.utils.data.Dataset[Sample]):
         """
         source = self._guard_live_source()
         if source is None:
-            raise TypeError(
-                "Flux source is None — cannot index. Pass a DataSource / iterable to Flux(source=...)."
-            )
+            raise TypeError("Flux source is None — cannot index. Pass a DataSource / iterable to Flux(source=...).")
 
         if hasattr(source, "__getitem__"):
             raw = source[index]
         elif hasattr(source, "__len__"):
             if self._indexable_cache is None:
                 logger.debug(
-                    f"Flux: materializing iterable-only source "
-                    f"{type(source).__name__} for map-style random access."
+                    f"Flux: materializing iterable-only source " f"{type(source).__name__} for map-style random access."
                 )
                 self._indexable_cache = list(source)
             raw = self._indexable_cache[index]
