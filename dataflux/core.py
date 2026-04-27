@@ -5,8 +5,51 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Unio
 
 import torch.utils.data
 from confluid import configurable
+from confluid.fluid import Fluid as _ConfluidFluid
+from logflow import get_logger
 
 from dataflux.sample import Sample
+
+logger = get_logger(__name__)
+
+
+def _describe_deferred_source(source: Any) -> str:
+    """Return a human-friendly description of a still-deferred Confluid source.
+
+    Surfaces the tag/target so the error explains WHAT was deferred instead
+    of just noting it isn't a live object.
+    """
+    target = getattr(source, "target", "<unknown>")
+    target_name = target if isinstance(target, str) else getattr(target, "__qualname__", str(target))
+    return f"{type(source).__name__}(target={target_name!r})"
+
+
+def _fluid_source_guidance(source: Any) -> str:
+    """Build an actionable message when Flux.source is still a Confluid Fluid."""
+    return (
+        f"Flux.source is still a deferred Confluid marker: {_describe_deferred_source(source)}. "
+        "Confluid has not materialized it yet. Fixes: (a) in YAML, write the source as "
+        "`!class:X()` (with parens) instead of `!class:X` so it becomes an Instance and is "
+        "materialized at load time; (b) or call `flow(source)` on the source before handing "
+        "it to Flux."
+    )
+
+
+def _fluid_op_guidance(op: Any, index: int) -> str:
+    """Build an actionable message when a Flux op is still a Confluid Fluid."""
+    return (
+        f"Flux.ops[{index}] is still a deferred Confluid marker: {_describe_deferred_source(op)}. "
+        "Ops must be live callables at iteration time. Fixes: (a) in YAML, write each op as "
+        "`!class:X()` (with parens) so it becomes an Instance and is materialized at load "
+        "time; (b) or call `flow(op)` on the op before handing it to Flux."
+    )
+
+
+def _check_ops_materialized(ops: List[Any]) -> None:
+    """Raise a single actionable error if any op is still a Confluid Fluid marker."""
+    for i, op in enumerate(ops):
+        if isinstance(op, _ConfluidFluid):
+            raise TypeError(_fluid_op_guidance(op, i))
 
 
 @configurable
@@ -104,6 +147,22 @@ class Flux(torch.utils.data.Dataset[Sample]):
         self.ops: List[Any] = ops or []
         self._workers = 1
         self._chunk_size = chunk_size or 0
+        # Populated on first random access when the source is iterable-only
+        # (has ``__len__`` but not ``__getitem__``).
+        self._indexable_cache: Optional[List[Any]] = None
+
+    def _guard_live_source(self) -> Any:
+        """Return the source, surfacing a clear error when it's still a Fluid marker.
+
+        Flux does not materialize deferred Confluid markers itself — that's
+        Confluid's job — but if a user hands Flux a deferred Class/Instance
+        marker we raise with an actionable message instead of letting the
+        failure surface as ``num_samples=0`` or a generic ``TypeError`` deep
+        inside torch's DataLoader.
+        """
+        if isinstance(self.source, _ConfluidFluid):
+            raise TypeError(_fluid_source_guidance(self.source))
+        return self.source
 
     @classmethod
     def from_source(cls, source: Any) -> "Flux":
@@ -116,18 +175,57 @@ class Flux(torch.utils.data.Dataset[Sample]):
         return cls(source=JointFlux(fluxes))
 
     def __len__(self) -> int:
-        """Return the length of the underlying source if available."""
+        """Return the length of the underlying source if available.
+
+        Surfaces a clear error when the source is still a deferred Confluid
+        marker so downstream callers (e.g. torch's DataLoader) don't end up
+        reporting the opaque ``num_samples=0``.
+        """
         from collections.abc import Sized
 
-        if isinstance(self.source, Sized):
-            return len(self.source)
+        source = self._guard_live_source()
+        if isinstance(source, Sized):
+            return len(source)
         return 0
 
     def __getitem__(self, index: int) -> Sample:
-        """Random access: get the i-th sample with ops applied."""
-        if self.source is None or not hasattr(self.source, "__getitem__"):
-            raise TypeError("Flux source does not support indexing")
-        raw = self.source[index]
+        """Random access: get the i-th sample with ops applied.
+
+        Supports three source shapes:
+
+        - **Indexable** (``__getitem__`` present) — delegates directly.
+        - **Iterable with ``__len__``** (map-style-but-stream, like
+          :class:`waivefront.regions_source.RegionsJsonSource`) — materializes
+          the full source into a list on first access, caches it on the Flux
+          instance, and indexes into the cache on every subsequent call.
+          The list is built once per Flux lifetime, not once per epoch.
+        - **Bare iterator** (no ``__len__``) — raises ``TypeError``. Caching
+          a one-shot iterator silently would consume the user's source; if
+          random access is genuinely needed, either give the source a
+          ``__len__`` or wrap with ``list(source)`` explicitly at the call
+          site.
+        """
+        source = self._guard_live_source()
+        if source is None:
+            raise TypeError("Flux source is None — cannot index. Pass a DataSource / iterable to Flux(source=...).")
+
+        if hasattr(source, "__getitem__"):
+            raw = source[index]
+        elif hasattr(source, "__len__"):
+            if self._indexable_cache is None:
+                logger.debug(
+                    f"Flux: materializing iterable-only source " f"{type(source).__name__} for map-style random access."
+                )
+                self._indexable_cache = list(source)
+            raw = self._indexable_cache[index]
+        else:
+            raise TypeError(
+                f"Flux source {type(source).__name__} does not support indexing and has no __len__ "
+                "(bare iterator). Map-style DataLoader random access is unsafe on a one-shot "
+                "iterator; give the source a __len__ (then Flux caches on first access) or wrap "
+                "it in ``list(...)`` before handing it to Flux."
+            )
+        _check_ops_materialized(self.ops)
         sample = Sample.from_any(raw)
         for op in self.ops:
             result = op(sample)
@@ -183,7 +281,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
 
     def __iter__(self) -> Iterator[Any]:
         """Execute the pipeline lazily (single or multi-process)."""
-        if not self.source:
+        if not self._guard_live_source():
             return
 
         it = self._iter_parallel() if self._workers > 1 else self._iter_sequential()
@@ -202,9 +300,11 @@ class Flux(torch.utils.data.Dataset[Sample]):
 
     def _iter_sequential(self) -> Iterator[Sample]:
         """Standard single-threaded execution."""
-        if self.source is None:
+        source = self._guard_live_source()
+        if source is None:
             return
-        for item in self.source:
+        _check_ops_materialized(self.ops)
+        for item in source:
             sample = Sample.from_any(item)
             result = _worker_task(sample, self.ops)
             if result is not None:
@@ -212,15 +312,17 @@ class Flux(torch.utils.data.Dataset[Sample]):
 
     def _iter_parallel(self) -> Iterator[Sample]:
         """Multiprocess execution engine."""
-        if self.source is None:
+        source = self._guard_live_source()
+        if source is None:
             return
+        _check_ops_materialized(self.ops)
 
         # We use 'spawn' to be consistent with LogFlow and prevent CI deadlocks
         ctx = multiprocessing.get_context("spawn")
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
             futures = []
-            for item in self.source:
+            for item in source:
                 sample = Sample.from_any(item)
                 futures.append(executor.submit(_worker_task, sample, self.ops))
 
