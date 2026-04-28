@@ -32,6 +32,9 @@ notebook = [
     "matplotlib",
     "datasets",
 ]
+vision = [
+    "scipy",
+]
 
 [build-system]
 requires = ["setuptools>=64", "wheel"]
