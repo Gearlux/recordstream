@@ -1,0 +1,34 @@
+description: "Hugging Face Datasets adapter — maps HF dataset features to DataFlux Sample triplets."
+use_case: "Standard adapter for any HF Hub dataset (e.g. kitofrank/RFUAV). Configure which feature column maps to Sample.input, which to Sample.target, and which (if any) to Sample.metadata."
+category: "HuggingFace"
+flux_type: "DataSource"
+class_path: "dataflux.sources.HuggingFaceSource"
+params:
+  path:
+    type: "str"
+    required: true
+    description: "HF dataset path — repo identifier (kitofrank/RFUAV) or local imagefolder path."
+  split:
+    type: "str"
+    default: "train"
+    description: "HF split name (train / validation / test / etc.)."
+  input_feature:
+    type: "str"
+    default: "image"
+    description: "Feature column to map to Sample.input."
+  target_feature:
+    type: "str"
+    default: "label"
+    description: "Feature column to map to Sample.target."
+  metadata_features:
+    type: "List[str] | null"
+    default: null
+    description: "Feature columns preserved on Sample.metadata."
+  count:
+    type: "int | null"
+    default: null
+    description: "Optional cap on the number of samples (useful for fast smoke runs)."
+  name:
+    type: "str | null"
+    default: null
+    description: "Optional HF subset name (e.g. for multi-config datasets)."

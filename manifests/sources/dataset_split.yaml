@@ -1,0 +1,27 @@
+description: "Select a reproducible subset view of an indexable source."
+use_case: "Three modes: (1) fraction-mode train/val split with shared seed (two DatasetSplits with same seed + val_fraction yield disjoint complementary views — wire via !ref to share the underlying source); (2) explicit indices for a fixed subset; (3) range selection. Heavily used in the rfuav templates to fold-test-into-train."
+category: "Generic"
+flux_type: "DataSource"
+class_path: "dataflux.sources.DatasetSplit"
+params:
+  source:
+    type: "Indexable source"
+    required: true
+    description: "Underlying source with __len__ and __getitem__ (e.g. a Flux wrapping a RegionsJsonSource)."
+  split:
+    type: "str"
+    default: "train"
+    choices: ["train", "val"]
+    description: "Which side of the partition this view returns. With shared seed across two DatasetSplits, 'train' and 'val' are guaranteed disjoint and complementary."
+  val_fraction:
+    type: "float"
+    default: 0.2
+    description: "Fraction of the source going to the 'val' branch (the rest goes to 'train')."
+  seed:
+    type: "int"
+    default: 42
+    description: "Random seed for the shuffle. Must match across paired splits to get a clean partition."
+  indices:
+    type: "List[int] | null"
+    default: null
+    description: "Explicit indices mode (mutually exclusive with split/val_fraction)."

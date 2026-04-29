@@ -1,0 +1,18 @@
+description: "DataFlux Flux — primary stream engine wrapping any iterable or indexed dataset with a functional op chain."
+use_case: "The fundamental DataFlux container. Wrap a Source (HuggingFaceSource / RegionsJsonSource / a list of Samples) and apply zero or more Ops lazily on __getitem__. Composable via JointFlux for source-mixing or DatasetSplit for train/val partitioning. Supports map-style (__getitem__) when the underlying source has __len__."
+category: "Generic"
+flux_type: "Dataset"
+class_path: "dataflux.core.Flux"
+params:
+  source:
+    type: "Iterable[Sample] | torch.utils.data.Dataset"
+    required: true
+    description: "Underlying data source — anything iterable yielding Samples, or a torch Dataset."
+  ops:
+    type: "List[dataflux.core.Op] | null"
+    default: null
+    description: "Ordered list of ops applied lazily on __getitem__ / iteration. Empty / null = pass-through."
+  chunk_size:
+    type: "int | null"
+    default: 0
+    description: "Optional chunking hint for streaming sources. 0 = no chunking."

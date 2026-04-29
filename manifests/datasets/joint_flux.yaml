@@ -1,0 +1,10 @@
+description: "Aggregate multiple Flux streams into a single joint sequential stream."
+use_case: "Use to mix sources during training (e.g. fold a small slice of the test set into train). Each sub-flux keeps its own op chain — JointFlux only sequences iteration. Pair with DatasetSplit when you want a reproducible disjoint train/val partition with shared random seed."
+category: "Generic"
+flux_type: "Dataset"
+class_path: "dataflux.core.JointFlux"
+params:
+  fluxes:
+    type: "List[dataflux.core.Flux]"
+    required: true
+    description: "Sub-fluxes whose iteration is concatenated end-to-end."
