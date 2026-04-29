@@ -47,29 +47,50 @@ class ToTensorOp:
 
 
 @configurable
-class NormalizeOp:
-    """
-    Scales tensor values from [min_value, max_value] to [0, 1].
+class RescaleOp:
+    """Affine rescale a torch.Tensor from ``[in_min, in_max]`` to ``[out_min, out_max]``.
 
-    Formula: output = (input - min_value) / (max_value - min_value)
+    The default ``out_min=0.0`` / ``out_max=1.0`` covers the common
+    ``[0, 255] -> [0, 1]`` image-normalization case. Integer dtypes are
+    promoted to ``float32`` (``float64`` is preserved).
+
+    Args:
+        in_min: Lower edge of the input range. Required.
+        in_max: Upper edge of the input range, must be ``> in_min``. Required.
+        out_min: Lower edge of the output range. Default ``0.0``.
+        out_max: Upper edge of the output range, must be ``> out_min``. Default ``1.0``.
+        clip: When True (default), clamp values outside ``[in_min, in_max]``
+            before rescaling. When False, extrapolate linearly.
     """
 
-    def __init__(self, min_value: float = 0.0, max_value: float = 255.0):
-        self.min_value = min_value
-        self.max_value = max_value
+    def __init__(
+        self,
+        in_min: float,
+        in_max: float,
+        out_min: float = 0.0,
+        out_max: float = 1.0,
+        clip: bool = True,
+    ) -> None:
+        if not (in_min < in_max):
+            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}")
+        if not (out_min < out_max):
+            raise ValueError(f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}")
+        self.in_min = float(in_min)
+        self.in_max = float(in_max)
+        self.out_min = float(out_min)
+        self.out_max = float(out_max)
+        self.clip = bool(clip)
 
     def __call__(self, sample: Sample) -> Sample:
         tensor = sample.input
-
         if not isinstance(tensor, torch.Tensor):
-            raise TypeError(f"NormalizeOp expects a torch.Tensor, got {type(tensor).__name__}")
-
+            raise TypeError(f"RescaleOp expects a torch.Tensor, got {type(tensor).__name__}")
         if tensor.dtype != torch.float32 and tensor.dtype != torch.float64:
             tensor = tensor.float()
-
-        tensor = (tensor - self.min_value) / (self.max_value - self.min_value)
-
-        return sample._replace(input=tensor)
+        src = tensor.clamp(self.in_min, self.in_max) if self.clip else tensor
+        scaled = (src - self.in_min) / (self.in_max - self.in_min)
+        out = scaled * (self.out_max - self.out_min) + self.out_min
+        return sample._replace(input=out)
 
 
 @configurable
