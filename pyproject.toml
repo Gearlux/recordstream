@@ -31,6 +31,7 @@ dev = [
 notebook = [
     "matplotlib",
     "datasets",
+    "python-dotenv",
 ]
 vision = [
     "scipy",
