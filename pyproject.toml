@@ -12,6 +12,7 @@ dependencies = [
     "torch",
     "typing-extensions",
     "datasets",
+    "albumentations"
 ]
 requires-python = ">=3.12"
 

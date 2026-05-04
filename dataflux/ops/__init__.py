@@ -6,6 +6,7 @@ Submodules:
       ReplaceNonFiniteOp, ThresholdOp, ConnectedComponentsOp (ndarray)
     - dataflux.ops.torch: RescaleOp, StandardizeOp, ToTensorOp (tensor)
     - dataflux.ops.tee: Tee (fan-out branching)
+    - dataflux.ops.parallel: Parallel (worker-pool sub-pipeline)
     - dataflux.ops.copy: CopySampleOp, CopyInputOp, CopyTargetOp, CopyMetadataOp
     - dataflux.ops.swap: SwapInputTargetOp
     - dataflux.ops.stash: StashInputOp, UnstashInputOp
@@ -15,6 +16,7 @@ swap / stash utilities are field-agnostic.
 """
 
 from dataflux.ops.copy import CopyInputOp, CopyMetadataOp, CopySampleOp, CopyTargetOp
+from dataflux.ops.parallel import Parallel
 from dataflux.ops.stash import StashInputOp, UnstashInputOp
 from dataflux.ops.swap import SwapInputTargetOp
 from dataflux.ops.tee import Tee
@@ -25,6 +27,7 @@ __all__ = [
     "CopyMetadataOp",
     "CopySampleOp",
     "CopyTargetOp",
+    "Parallel",
     "RescaleOp",
     "StandardizeOp",
     "StashInputOp",

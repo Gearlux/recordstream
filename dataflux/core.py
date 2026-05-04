@@ -280,11 +280,24 @@ class Flux(torch.utils.data.Dataset[Sample]):
         return self
 
     def __iter__(self) -> Iterator[Any]:
-        """Execute the pipeline lazily (single or multi-process)."""
+        """Execute the pipeline lazily.
+
+        Routing:
+          * Any op exposes a callable ``stream`` attribute (e.g.
+            :class:`dataflux.ops.parallel.Parallel`) → :meth:`_iter_streamed`,
+            which composes the upstream iterator through stream-level ops.
+          * Else ``self._workers > 1`` → legacy :meth:`_iter_parallel`.
+          * Else :meth:`_iter_sequential`.
+        """
         if not self._guard_live_source():
             return
 
-        it = self._iter_parallel() if self._workers > 1 else self._iter_sequential()
+        if any(hasattr(op, "stream") and callable(op.stream) for op in self.ops):
+            it = self._iter_streamed()
+        elif self._workers > 1:
+            it = self._iter_parallel()
+        else:
+            it = self._iter_sequential()
 
         if self._chunk_size > 0:
             batch = []
@@ -297,6 +310,41 @@ class Flux(torch.utils.data.Dataset[Sample]):
                 yield batch
         else:
             yield from it
+
+    def _iter_streamed(self) -> Iterator[Sample]:
+        """Mixed per-sample / stream-level op chain.
+
+        Per-sample ops are applied via ``op(sample)``. Ops that implement
+        ``.stream(sample_iter)`` (e.g.
+        :class:`dataflux.ops.parallel.Parallel`) are handed the upstream
+        generator and yield transformed samples themselves. ``None`` results
+        are filtered, matching :meth:`_iter_sequential`.
+        """
+        source = self._guard_live_source()
+        if source is None:
+            return
+        _check_ops_materialized(self.ops)
+
+        def to_samples() -> Iterator[Sample]:
+            for item in source:
+                yield Sample.from_any(item)
+
+        def per_sample(stream: Iterator[Optional[Sample]], op: Any) -> Iterator[Optional[Sample]]:
+            for s in stream:
+                if s is None:
+                    continue
+                yield op(s)
+
+        stream: Iterator[Optional[Sample]] = to_samples()
+        for op in self.ops:
+            if hasattr(op, "stream") and callable(op.stream):
+                stream = op.stream(stream)
+            else:
+                stream = per_sample(stream, op)
+
+        for s in stream:
+            if s is not None:
+                yield s
 
     def _iter_sequential(self) -> Iterator[Sample]:
         """Standard single-threaded execution."""
