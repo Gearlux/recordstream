@@ -2,8 +2,8 @@ from typing import Sequence, Union
 
 import numpy as np
 import torch
-
 from confluid import configurable
+
 from dataflux.sample import Sample
 
 
@@ -72,13 +72,9 @@ class RescaleOp:
         clip: bool = True,
     ) -> None:
         if not (in_min < in_max):
-            raise ValueError(
-                f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}"
-            )
+            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}")
         if not (out_min < out_max):
-            raise ValueError(
-                f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}"
-            )
+            raise ValueError(f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}")
         self.in_min = float(in_min)
         self.in_max = float(in_max)
         self.out_min = float(out_min)
@@ -88,9 +84,7 @@ class RescaleOp:
     def __call__(self, sample: Sample) -> Sample:
         tensor = sample.input
         if not isinstance(tensor, torch.Tensor):
-            raise TypeError(
-                f"RescaleOp expects a torch.Tensor, got {type(tensor).__name__}"
-            )
+            raise TypeError(f"RescaleOp expects a torch.Tensor, got {type(tensor).__name__}")
         if tensor.dtype != torch.float32 and tensor.dtype != torch.float64:
             tensor = tensor.float()
         src = tensor.clamp(self.in_min, self.in_max) if self.clip else tensor
@@ -110,9 +104,7 @@ class StandardizeOp:
     per-channel values that broadcasts over [C, H, W] format.
     """
 
-    def __init__(
-        self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]
-    ):
+    def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]):
         self.mean = mean
         self.std = std
 
@@ -120,9 +112,7 @@ class StandardizeOp:
         tensor = sample.input
 
         if not isinstance(tensor, torch.Tensor):
-            raise TypeError(
-                f"StandardizeOp expects a torch.Tensor, got {type(tensor).__name__}"
-            )
+            raise TypeError(f"StandardizeOp expects a torch.Tensor, got {type(tensor).__name__}")
 
         if tensor.dtype != torch.float32 and tensor.dtype != torch.float64:
             tensor = tensor.float()

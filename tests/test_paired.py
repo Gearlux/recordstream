@@ -2,9 +2,9 @@
 
 from typing import Any, Dict, Iterator, Optional
 
+import confluid  # type: ignore[import-not-found]
 import pytest
 
-import confluid  # type: ignore[import-not-found]
 from dataflux.discovery import get_callable_path
 from dataflux.paired import PairedSource
 from dataflux.sample import Sample
@@ -54,9 +54,7 @@ def sample_id_key(sample: Sample) -> str:
     return str(sample.metadata["id"])
 
 
-def identity_extract(
-    record: Dict[str, Any], sample: Sample
-) -> Optional[Dict[str, Any]]:
+def identity_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, Any]]:
     return record
 
 
@@ -64,9 +62,7 @@ def none_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, A
     return None
 
 
-def odd_only_extract(
-    record: Dict[str, Any], sample: Sample
-) -> Optional[Dict[str, Any]]:
+def odd_only_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, Any]]:
     """Return the record only for odd-id samples, None otherwise."""
     idx = int(str(sample.metadata["id"])[1:])
     if idx % 2 == 1:
@@ -124,9 +120,7 @@ def test_left_outer_preserves_original_metadata() -> None:
 def test_left_outer_prefix() -> None:
     primary = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x"}})
-    paired = PairedSource(
-        primary=primary, secondary=store, key_fn=sample_id_key, prefix="ann_"
-    )
+    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, prefix="ann_")
 
     sample = list(paired)[0]
     assert sample.metadata["ann_label"] == "x"
@@ -179,9 +173,7 @@ def test_left_outer_getitem_matched_and_unmatched() -> None:
 def test_inner_emits_only_matched() -> None:
     primary = PairedIndexedSource(size=4)
     store = DictStore({"s0": {"label": "a"}, "s3": {"label": "d"}})
-    paired = PairedSource(
-        primary=primary, secondary=store, key_fn=sample_id_key, policy="inner"
-    )
+    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, policy="inner")
 
     samples = list(paired)
 
@@ -193,9 +185,7 @@ def test_inner_emits_only_matched() -> None:
 def test_inner_len_is_cached_scan() -> None:
     primary = PairedIndexedSource(size=10)
     store = DictStore({f"s{i}": {"label": "x"} for i in (0, 2, 4, 6)})
-    paired = PairedSource(
-        primary=primary, secondary=store, key_fn=sample_id_key, policy="inner"
-    )
+    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, policy="inner")
 
     assert len(paired) == 4
     # Second call hits cache; should still be correct.
@@ -205,9 +195,7 @@ def test_inner_len_is_cached_scan() -> None:
 def test_inner_rejects_getitem() -> None:
     primary = PairedIndexedSource(size=2)
     store = DictStore({"s0": {"label": "a"}})
-    paired = PairedSource(
-        primary=primary, secondary=store, key_fn=sample_id_key, policy="inner"
-    )
+    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, policy="inner")
 
     with pytest.raises(TypeError, match="left_outer"):
         _ = paired[0]
@@ -236,9 +224,7 @@ def test_extract_fn_transforms_record() -> None:
 
 def test_extract_fn_returning_none_marks_unannotated() -> None:
     primary = PairedIndexedSource(size=3)
-    store = DictStore(
-        {"s0": {"label": "x"}, "s1": {"label": "y"}, "s2": {"label": "z"}}
-    )
+    store = DictStore({"s0": {"label": "x"}, "s1": {"label": "y"}, "s2": {"label": "z"}})
     paired = PairedSource(
         primary=primary,
         secondary=store,
@@ -329,9 +315,7 @@ def test_right_driven_iterates_annotation_keys() -> None:
 
 def test_right_driven_len_is_secondary_len() -> None:
     primary = PairedIndexedSource(size=100)
-    store = DictStore(
-        {"s1": {"label": "a"}, "s5": {"label": "b"}, "s9": {"label": "c"}}
-    )
+    store = DictStore({"s1": {"label": "a"}, "s5": {"label": "b"}, "s9": {"label": "c"}})
     paired = PairedSource(
         primary=primary,
         secondary=store,
@@ -470,9 +454,7 @@ def test_chained_paired_sources_compose() -> None:
     window_store = DictStore({"s1": {"event": "takeoff"}})
 
     pack_paired = PairedSource(primary=primary, secondary=pack_store, key_fn=pack_key)
-    full_paired = PairedSource(
-        primary=pack_paired, secondary=window_store, key_fn=sample_id_key
-    )
+    full_paired = PairedSource(primary=pack_paired, secondary=window_store, key_fn=sample_id_key)
 
     samples = list(full_paired)
 
@@ -501,12 +483,7 @@ def test_confluid_roundtrip_preserves_behavior() -> None:
     yaml_state = confluid.dump(paired)
     restored = confluid.load(yaml_state)
 
-    original_result = [
-        (s.input, s.metadata.get("ann_label"), s.metadata["annotated"]) for s in paired
-    ]
-    restored_result = [
-        (s.input, s.metadata.get("ann_label"), s.metadata["annotated"])
-        for s in restored
-    ]
+    original_result = [(s.input, s.metadata.get("ann_label"), s.metadata["annotated"]) for s in paired]
+    restored_result = [(s.input, s.metadata.get("ann_label"), s.metadata["annotated"]) for s in restored]
 
     assert original_result == restored_result

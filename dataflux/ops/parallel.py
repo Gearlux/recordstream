@@ -24,6 +24,7 @@ from typing import Any, Iterable, Iterator, List, Optional
 
 from confluid import configurable, flow
 from confluid.fluid import Fluid
+
 from dataflux.core import _worker_task
 from dataflux.sample import Sample
 
@@ -66,9 +67,7 @@ class Parallel:
         ctx = multiprocessing.get_context("spawn")
         limit = max(2 * self.workers, self.workers + 1)
 
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=self.workers, mp_context=ctx
-        ) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers, mp_context=ctx) as executor:
             pending: "deque[concurrent.futures.Future[Optional[Sample]]]" = deque()
             for s in samples:
                 if s is None:

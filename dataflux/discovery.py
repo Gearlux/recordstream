@@ -40,9 +40,7 @@ def resolve_callable(path: Union[str, Callable]) -> Callable:
         return path
 
     if not isinstance(path, str) or ":" not in path:
-        raise ValueError(
-            f"Invalid callable path format: {path}. Expected 'module:function'"
-        )
+        raise ValueError(f"Invalid callable path format: {path}. Expected 'module:function'")
 
     mod_name, func_name = path.split(":", 1)
 
@@ -90,16 +88,8 @@ def introspect_callable(func: Callable) -> Dict[str, Any]:
 
         param_info = {
             "name": name,
-            "type": (
-                str(param.annotation)
-                if param.annotation is not inspect.Parameter.empty
-                else "Any"
-            ),
-            "default": (
-                str(param.default)
-                if param.default is not inspect.Parameter.empty
-                else None
-            ),
+            "type": (str(param.annotation) if param.annotation is not inspect.Parameter.empty else "Any"),
+            "default": (str(param.default) if param.default is not inspect.Parameter.empty else None),
             "required": param.default is inspect.Parameter.empty,
         }
         params.append(param_info)
@@ -116,9 +106,7 @@ def scan_module(path_or_name: Union[str, Path]) -> List[Dict[str, Any]]:
     """
     Scan a module or script file and return schemas for locally callables.
     """
-    is_py = isinstance(path_or_name, Path) or (
-        isinstance(path_or_name, str) and path_or_name.endswith(".py")
-    )
+    is_py = isinstance(path_or_name, Path) or (isinstance(path_or_name, str) and path_or_name.endswith(".py"))
 
     if is_py:
         # Load as a file-based module

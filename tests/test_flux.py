@@ -257,11 +257,7 @@ def test_deferred_fluid_op_raises_actionable_error() -> None:
 
     source = [np.array([1]), np.array([2])]
     flux = Flux(source, ops=[Class(DummyOp, factor=2)])
-    with pytest.raises(
-        TypeError, match=r"Flux\.ops\[0\] is still a deferred Confluid marker"
-    ):
+    with pytest.raises(TypeError, match=r"Flux\.ops\[0\] is still a deferred Confluid marker"):
         flux[0]
-    with pytest.raises(
-        TypeError, match=r"Flux\.ops\[0\] is still a deferred Confluid marker"
-    ):
+    with pytest.raises(TypeError, match=r"Flux\.ops\[0\] is still a deferred Confluid marker"):
         list(flux)

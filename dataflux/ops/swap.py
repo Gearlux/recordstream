@@ -5,6 +5,7 @@ the target instead: swap, run the op, swap back.
 """
 
 from confluid import configurable
+
 from dataflux.sample import Sample
 
 

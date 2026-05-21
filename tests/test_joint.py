@@ -1,6 +1,7 @@
 from typing import Any, Iterator, List
 
 import confluid  # type: ignore[import-not-found]
+
 from dataflux.core import Flux
 from dataflux.sample import Sample
 

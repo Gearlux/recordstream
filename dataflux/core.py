@@ -4,11 +4,11 @@ from contextlib import nullcontext
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Union, cast
 
 import torch.utils.data
-
 from confluid import configurable
 from confluid.fluid import Fluid as _ConfluidFluid
-from dataflux.sample import Sample
 from logflow import get_logger
+
+from dataflux.sample import Sample
 
 logger = get_logger(__name__)
 
@@ -20,11 +20,7 @@ def _describe_deferred_source(source: Any) -> str:
     of just noting it isn't a live object.
     """
     target = getattr(source, "target", "<unknown>")
-    target_name = (
-        target
-        if isinstance(target, str)
-        else getattr(target, "__qualname__", str(target))
-    )
+    target_name = target if isinstance(target, str) else getattr(target, "__qualname__", str(target))
     return f"{type(source).__name__}(target={target_name!r})"
 
 
@@ -211,17 +207,14 @@ class Flux(torch.utils.data.Dataset[Sample]):
         """
         source = self._guard_live_source()
         if source is None:
-            raise TypeError(
-                "Flux source is None — cannot index. Pass a DataSource / iterable to Flux(source=...)."
-            )
+            raise TypeError("Flux source is None — cannot index. Pass a DataSource / iterable to Flux(source=...).")
 
         if hasattr(source, "__getitem__"):
             raw = source[index]
         elif hasattr(source, "__len__"):
             if self._indexable_cache is None:
                 logger.debug(
-                    f"Flux: materializing iterable-only source "
-                    f"{type(source).__name__} for map-style random access."
+                    f"Flux: materializing iterable-only source " f"{type(source).__name__} for map-style random access."
                 )
                 self._indexable_cache = list(source)
             raw = self._indexable_cache[index]
@@ -336,9 +329,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
             for item in source:
                 yield Sample.from_any(item)
 
-        def per_sample(
-            stream: Iterator[Optional[Sample]], op: Any
-        ) -> Iterator[Optional[Sample]]:
+        def per_sample(stream: Iterator[Optional[Sample]], op: Any) -> Iterator[Optional[Sample]]:
             for s in stream:
                 if s is None:
                     continue
@@ -377,9 +368,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
         # We use 'spawn' to be consistent with LogFlow and prevent CI deadlocks
         ctx = multiprocessing.get_context("spawn")
 
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=self._workers, mp_context=ctx
-        ) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
             futures = []
             for item in source:
                 sample = Sample.from_any(item)

@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import List, Optional, Union
 
+import confluid
 import zarr
 
-import confluid
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, Storage
 

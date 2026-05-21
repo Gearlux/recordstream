@@ -3,11 +3,11 @@ from typing import Any, Iterator, Optional, Union
 
 import h5py
 import torch
-
 from confluid import configurable
+from logflow import get_logger
+
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, DataSource, Storage
-from logflow import get_logger
 
 logger = get_logger("dataflux.storage.hdf5")
 
@@ -49,17 +49,11 @@ class HDF5Source(Storage, DataSource):
         if self._file is None:
             return
 
-        prefixes = sorted(
-            [k.split("_data")[0] for k in self._file.keys() if k.endswith("_data")]
-        )
+        prefixes = sorted([k.split("_data")[0] for k in self._file.keys() if k.endswith("_data")])
 
         for pref in prefixes:
             data = self._file[f"{pref}_data"][()]
-            target = (
-                self._file[f"{pref}_target"][()]
-                if f"{pref}_target" in self._file
-                else None
-            )
+            target = self._file[f"{pref}_target"][()] if f"{pref}_target" in self._file else None
             metadata = dict(self._file[f"{pref}_data"].attrs)
             # Source returns Tensors to match schema
             yield Sample(input=torch.from_numpy(data), target=target, metadata=metadata)
@@ -113,11 +107,7 @@ class HDF5Sink(Storage, DataSink):
 
         # 1. Write Data
         kwargs = {}
-        if (
-            self.compression
-            and hasattr(input_data, "shape")
-            and len(input_data.shape) > 0
-        ):
+        if self.compression and hasattr(input_data, "shape") and len(input_data.shape) > 0:
             kwargs["compression"] = self.compression
 
         ds = self._file.create_dataset(f"{prefix}_data", data=input_data, **kwargs)
@@ -132,11 +122,7 @@ class HDF5Sink(Storage, DataSink):
         # 3. Write Target
         if target_data is not None:
             t_kwargs = {}
-            if (
-                self.compression
-                and hasattr(target_data, "shape")
-                and len(target_data.shape) > 0
-            ):
+            if self.compression and hasattr(target_data, "shape") and len(target_data.shape) > 0:
                 t_kwargs["compression"] = self.compression
 
             self._file.create_dataset(f"{prefix}_target", data=target_data, **t_kwargs)

@@ -3,9 +3,10 @@
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 from confluid import configurable
+from logflow import get_logger
+
 from dataflux.discovery import get_callable_path, resolve_callable
 from dataflux.sample import Sample
-from logflow import get_logger
 
 logger = get_logger(__name__)
 
@@ -60,22 +61,16 @@ class PairedSource:
         secondary: Any,
         key_fn: Union[str, Callable[[Sample], str]],
         policy: str = "left_outer",
-        extract_fn: Optional[
-            Union[str, Callable[[Dict[str, Any], Sample], Optional[Dict[str, Any]]]]
-        ] = None,
+        extract_fn: Optional[Union[str, Callable[[Dict[str, Any], Sample], Optional[Dict[str, Any]]]]] = None,
         prefix: str = "",
         store_full_under: Optional[str] = None,
         primary_resolver: Optional[Union[str, Callable[[str, Any], Any]]] = None,
     ) -> None:
         if policy not in VALID_POLICIES:
-            raise ValueError(
-                f"Invalid policy {policy!r}; must be one of {VALID_POLICIES}"
-            )
+            raise ValueError(f"Invalid policy {policy!r}; must be one of {VALID_POLICIES}")
 
         if policy in ("left_outer", "inner"):
-            if not hasattr(secondary, "__contains__") or not hasattr(
-                secondary, "__getitem__"
-            ):
+            if not hasattr(secondary, "__contains__") or not hasattr(secondary, "__getitem__"):
                 raise TypeError(
                     f"policy={policy!r} requires secondary to support __contains__ and __getitem__; "
                     f"got {type(secondary).__name__}"
@@ -86,29 +81,20 @@ class PairedSource:
                 raise ValueError("policy='right_driven' requires primary_resolver")
             if not hasattr(secondary, "keys"):
                 raise TypeError(
-                    f"policy='right_driven' requires secondary to support keys(); "
-                    f"got {type(secondary).__name__}"
+                    f"policy='right_driven' requires secondary to support keys(); " f"got {type(secondary).__name__}"
                 )
 
         self.primary = primary
         self.secondary = secondary
         self.key_fn = get_callable_path(key_fn) if callable(key_fn) else key_fn
         self.policy = policy
-        self.extract_fn = (
-            get_callable_path(extract_fn) if callable(extract_fn) else extract_fn
-        )
+        self.extract_fn = get_callable_path(extract_fn) if callable(extract_fn) else extract_fn
         self.prefix = prefix
         self.store_full_under = store_full_under
-        self.primary_resolver = (
-            get_callable_path(primary_resolver)
-            if callable(primary_resolver)
-            else primary_resolver
-        )
+        self.primary_resolver = get_callable_path(primary_resolver) if callable(primary_resolver) else primary_resolver
 
         self._key_fn_cache: Optional[Callable[[Sample], str]] = None
-        self._extract_fn_cache: Optional[
-            Callable[[Dict[str, Any], Sample], Optional[Dict[str, Any]]]
-        ] = None
+        self._extract_fn_cache: Optional[Callable[[Dict[str, Any], Sample], Optional[Dict[str, Any]]]] = None
         self._primary_resolver_cache: Optional[Callable[[str, Any], Any]] = None
         self._inner_length: Optional[int] = None
 
@@ -136,9 +122,7 @@ class PairedSource:
             self._primary_resolver_cache = resolve_callable(self.primary_resolver)
         return self._primary_resolver_cache
 
-    def _attach(
-        self, sample: Sample, record: Optional[Dict[str, Any]], key: str
-    ) -> Sample:
+    def _attach(self, sample: Sample, record: Optional[Dict[str, Any]], key: str) -> Sample:
         metadata = dict(sample.metadata)
         metadata["annotation_key"] = key
         metadata["annotated"] = record is not None
@@ -205,13 +189,9 @@ class PairedSource:
 
     def __getitem__(self, index: int) -> Sample:
         if self.policy != "left_outer":
-            raise TypeError(
-                f"__getitem__ is only supported for policy='left_outer'; got {self.policy!r}"
-            )
+            raise TypeError(f"__getitem__ is only supported for policy='left_outer'; got {self.policy!r}")
         if not hasattr(self.primary, "__getitem__"):
-            raise TypeError(
-                "primary must support __getitem__ for PairedSource.__getitem__"
-            )
+            raise TypeError("primary must support __getitem__ for PairedSource.__getitem__")
         sample = Sample.from_any(self.primary[index])
         key, record = self._lookup(sample)
         return self._attach(sample, record, key)

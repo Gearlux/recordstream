@@ -69,11 +69,7 @@ def test_lru_eviction_respects_max_bytes(tmp_path: Path) -> None:
     # Adding a fourth must evict the oldest (a).
     time.sleep(0.01)
     cache.get_or_extract("d.bin", _write(b"d" * 100))
-    names = sorted(
-        p.name
-        for p in (tmp_path / "cache").iterdir()
-        if p.is_file() and not p.name.endswith(".lock")
-    )
+    names = sorted(p.name for p in (tmp_path / "cache").iterdir() if p.is_file() and not p.name.endswith(".lock"))
     assert names == ["b.bin", "c.bin", "d.bin"]
 
 
@@ -89,11 +85,7 @@ def test_touch_updates_lru_order(tmp_path: Path) -> None:
     cache.touch("a.bin")
     time.sleep(0.01)
     cache.get_or_extract("d.bin", _write(b"d" * 100))
-    names = sorted(
-        p.name
-        for p in (tmp_path / "cache").iterdir()
-        if p.is_file() and not p.name.endswith(".lock")
-    )
+    names = sorted(p.name for p in (tmp_path / "cache").iterdir() if p.is_file() and not p.name.endswith(".lock"))
     assert "a.bin" in names
     assert "b.bin" not in names  # b was the oldest after touch
 

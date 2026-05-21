@@ -96,9 +96,7 @@ class TestRescaleOp:
 
     def test_custom_output_range(self) -> None:
         tensor = torch.tensor([0.0, 0.5, 1.0])
-        result = RescaleOp(in_min=0.0, in_max=1.0, out_min=10.0, out_max=20.0)(
-            Sample(input=tensor)
-        )
+        result = RescaleOp(in_min=0.0, in_max=1.0, out_min=10.0, out_max=20.0)(Sample(input=tensor))
         assert abs(result.input[0] - 10.0) < 1e-6
         assert abs(result.input[1] - 15.0) < 1e-6
         assert abs(result.input[2] - 20.0) < 1e-6
@@ -128,9 +126,7 @@ class TestRescaleOp:
 
     def test_preserves_target_and_metadata(self) -> None:
         tensor = torch.tensor([128.0])
-        result = RescaleOp(in_min=0.0, in_max=255.0)(
-            Sample(input=tensor, target=7, metadata={"key": "val"})
-        )
+        result = RescaleOp(in_min=0.0, in_max=255.0)(Sample(input=tensor, target=7, metadata={"key": "val"}))
         assert result.target == 7
         assert result.metadata == {"key": "val"}
 
@@ -176,9 +172,7 @@ class TestStandardizeOp:
         tensor[0] *= 10.0
         tensor[1] *= 20.0
         tensor[2] *= 30.0
-        result = StandardizeOp(mean=[10.0, 20.0, 30.0], std=[1.0, 1.0, 1.0])(
-            Sample(input=tensor)
-        )
+        result = StandardizeOp(mean=[10.0, 20.0, 30.0], std=[1.0, 1.0, 1.0])(Sample(input=tensor))
         assert torch.allclose(result.input, torch.zeros(3, 2, 2))
 
     def test_uint8_converts_to_float(self) -> None:
@@ -195,9 +189,7 @@ class TestStandardizeOp:
 
     def test_preserves_target_and_metadata(self) -> None:
         tensor = torch.tensor([5.0])
-        result = StandardizeOp(mean=0.0, std=1.0)(
-            Sample(input=tensor, target=3, metadata={"a": 1})
-        )
+        result = StandardizeOp(mean=0.0, std=1.0)(Sample(input=tensor, target=3, metadata={"a": 1}))
         assert result.target == 3
         assert result.metadata == {"a": 1}
 
@@ -231,9 +223,7 @@ class TestNpStandardizeOp:
         arr[0] *= 10.0
         arr[1] *= 20.0
         arr[2] *= 30.0
-        result = np_ops.StandardizeOp(mean=[10.0, 20.0, 30.0], std=[1.0, 1.0, 1.0])(
-            Sample(input=arr)
-        )
+        result = np_ops.StandardizeOp(mean=[10.0, 20.0, 30.0], std=[1.0, 1.0, 1.0])(Sample(input=arr))
         assert np.allclose(result.input, np.zeros((3, 2, 2)))
 
     def test_uint8_converts_to_float32(self) -> None:
@@ -250,9 +240,7 @@ class TestNpStandardizeOp:
 
     def test_preserves_target_and_metadata(self) -> None:
         arr = np.array([5.0], dtype=np.float32)
-        result = np_ops.StandardizeOp(mean=0.0, std=1.0)(
-            Sample(input=arr, target=3, metadata={"a": 1})
-        )
+        result = np_ops.StandardizeOp(mean=0.0, std=1.0)(Sample(input=arr, target=3, metadata={"a": 1}))
         assert result.target == 3
         assert result.metadata == {"a": 1}
 
@@ -326,23 +314,17 @@ class TestNpRescaleOp:
 
     def test_custom_output_range(self) -> None:
         arr = np.array([[-80.0, -50.0, -20.0]])
-        out = np_ops.RescaleOp(in_min=-80.0, in_max=-20.0, out_min=10.0, out_max=20.0)(
-            Sample(input=arr)
-        ).input
+        out = np_ops.RescaleOp(in_min=-80.0, in_max=-20.0, out_min=10.0, out_max=20.0)(Sample(input=arr)).input
         np.testing.assert_allclose(out, [[10.0, 15.0, 20.0]])
 
     def test_clip_true_clamps(self) -> None:
         arr = np.array([[-100.0, -50.0, 0.0]])
-        out = np_ops.RescaleOp(in_min=-80.0, in_max=-20.0, clip=True)(
-            Sample(input=arr)
-        ).input
+        out = np_ops.RescaleOp(in_min=-80.0, in_max=-20.0, clip=True)(Sample(input=arr)).input
         np.testing.assert_allclose(out, [[0.0, 0.5, 1.0]])
 
     def test_clip_false_extrapolates(self) -> None:
         arr = np.array([[-100.0, -50.0, 0.0]])
-        out = np_ops.RescaleOp(in_min=-80.0, in_max=-20.0, clip=False)(
-            Sample(input=arr)
-        ).input
+        out = np_ops.RescaleOp(in_min=-80.0, in_max=-20.0, clip=False)(Sample(input=arr)).input
         assert out[0, 0] == pytest.approx(-1.0 / 3.0)
         assert out[0, 1] == pytest.approx(0.5)
         assert out[0, 2] == pytest.approx(4.0 / 3.0)
@@ -367,9 +349,7 @@ class TestNpRescaleOp:
 
     def test_preserves_target_and_metadata(self) -> None:
         arr = np.array([128.0], dtype=np.float32)
-        result = np_ops.RescaleOp(in_min=0.0, in_max=255.0)(
-            Sample(input=arr, target=7, metadata={"key": "val"})
-        )
+        result = np_ops.RescaleOp(in_min=0.0, in_max=255.0)(Sample(input=arr, target=7, metadata={"key": "val"}))
         assert result.target == 7
         assert result.metadata == {"key": "val"}
 
@@ -472,9 +452,7 @@ class TestTee:
 
             return op
 
-        Tee(branches=[[make("A1"), make("A2")], [make("B1"), make("B2")]])(
-            Sample(input=None)
-        )
+        Tee(branches=[[make("A1"), make("A2")], [make("B1"), make("B2")]])(Sample(input=None))
         assert order == ["A1", "A2", "B1", "B2"]
 
     def test_none_propagates(self) -> None:
@@ -689,18 +667,14 @@ class TestConnectedComponentsOp:
         mask = np.zeros((10, 10), dtype=bool)
         mask[1:3, 1:3] = True  # 2x2 blob at (1,1)
         mask[6:9, 6:9] = True  # 3x3 blob at (6,6)
-        out = np_ops.ConnectedComponentsOp(min_area_bins=1, connectivity=4)(
-            Sample(input=mask)
-        )
+        out = np_ops.ConnectedComponentsOp(min_area_bins=1, connectivity=4)(Sample(input=mask))
         assert sorted(out.input) == [(1, 2, 1, 2), (6, 8, 6, 8)]
 
     def test_min_area_drops_small_components(self) -> None:
         mask = np.zeros((10, 10), dtype=bool)
         mask[0, 0] = True  # area 1
         mask[5:7, 5:7] = True  # area 4
-        out = np_ops.ConnectedComponentsOp(min_area_bins=2, connectivity=4)(
-            Sample(input=mask)
-        )
+        out = np_ops.ConnectedComponentsOp(min_area_bins=2, connectivity=4)(Sample(input=mask))
         assert out.input == [(5, 6, 5, 6)]
 
     def test_connectivity_4_keeps_diagonals_separate(self) -> None:
@@ -708,9 +682,7 @@ class TestConnectedComponentsOp:
         mask[0, 0] = True
         mask[1, 1] = True
         mask[2, 2] = True
-        out = np_ops.ConnectedComponentsOp(min_area_bins=1, connectivity=4)(
-            Sample(input=mask)
-        )
+        out = np_ops.ConnectedComponentsOp(min_area_bins=1, connectivity=4)(Sample(input=mask))
         assert len(out.input) == 3
 
     def test_connectivity_8_merges_diagonals(self) -> None:
@@ -718,9 +690,7 @@ class TestConnectedComponentsOp:
         mask[0, 0] = True
         mask[1, 1] = True
         mask[2, 2] = True
-        out = np_ops.ConnectedComponentsOp(min_area_bins=1, connectivity=8)(
-            Sample(input=mask)
-        )
+        out = np_ops.ConnectedComponentsOp(min_area_bins=1, connectivity=8)(Sample(input=mask))
         assert len(out.input) == 1
         assert out.input[0] == (0, 2, 0, 2)
 
@@ -730,9 +700,7 @@ class TestConnectedComponentsOp:
         assert out.input == []
 
     def test_raises_on_non_ndarray(self) -> None:
-        with pytest.raises(
-            TypeError, match="ConnectedComponentsOp expects an np.ndarray"
-        ):
+        with pytest.raises(TypeError, match="ConnectedComponentsOp expects an np.ndarray"):
             np_ops.ConnectedComponentsOp()(Sample(input=[[True, False]]))
 
     def test_raises_on_non_2d(self) -> None:

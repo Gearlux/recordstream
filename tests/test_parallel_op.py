@@ -41,9 +41,7 @@ class _TrackingSource:
     def __iter__(self) -> Iterator[np.ndarray]:
         for i in range(self.n):
             self.pulled += 1
-            self.max_outstanding = max(
-                self.max_outstanding, self.pulled - self.consumed
-            )
+            self.max_outstanding = max(self.max_outstanding, self.pulled - self.consumed)
             if self.sleep_per_item:
                 time.sleep(self.sleep_per_item)
             yield np.array([i])

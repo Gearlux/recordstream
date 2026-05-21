@@ -15,6 +15,7 @@ second branch.
 import copy as _copy
 
 from confluid import configurable
+
 from dataflux.sample import Sample
 
 
@@ -35,9 +36,7 @@ class StashInputOp:
         self.copy = copy
 
     def __call__(self, sample: Sample) -> Sample:
-        sample.metadata[self.key] = (
-            _copy.deepcopy(sample.input) if self.copy else sample.input
-        )
+        sample.metadata[self.key] = _copy.deepcopy(sample.input) if self.copy else sample.input
         return sample
 
 

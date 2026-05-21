@@ -2,8 +2,9 @@ import random
 from typing import Any, Iterator, List, Optional
 
 from confluid import configurable
-from dataflux.sample import Sample
 from logflow import get_logger
+
+from dataflux.sample import Sample
 
 logger = get_logger(__name__)
 
@@ -152,8 +153,7 @@ class DatasetSplit:
     ) -> None:
         if not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
             raise TypeError(
-                "DatasetSplit requires a source supporting __len__ and __getitem__; "
-                f"got {type(source).__name__}"
+                "DatasetSplit requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"
             )
 
         fraction_args = val_fraction is not None or split is not None
@@ -187,17 +187,11 @@ class DatasetSplit:
             if self.val_fraction is None:
                 raise ValueError("DatasetSplit fraction mode requires `val_fraction`.")
             if self.seed is None:
-                raise ValueError(
-                    "DatasetSplit fraction mode requires `seed` so that sibling splits stay consistent."
-                )
+                raise ValueError("DatasetSplit fraction mode requires `seed` so that sibling splits stay consistent.")
             if not (0.0 < self.val_fraction < 1.0):
-                raise ValueError(
-                    f"val_fraction must be in (0, 1); got {self.val_fraction}"
-                )
+                raise ValueError(f"val_fraction must be in (0, 1); got {self.val_fraction}")
             if self.split not in ("train", "val"):
-                raise ValueError(
-                    f"split must be 'train' or 'val' in fraction mode; got {self.split!r}"
-                )
+                raise ValueError(f"split must be 'train' or 'val' in fraction mode; got {self.split!r}")
 
             rng = random.Random(self.seed)
             shuffled = list(range(n))
