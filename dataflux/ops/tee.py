@@ -13,7 +13,6 @@ from typing import Any, List, Optional
 
 from confluid import configurable, flow
 from confluid.fluid import Fluid
-
 from dataflux.sample import Sample
 
 

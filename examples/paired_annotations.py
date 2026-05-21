@@ -8,7 +8,6 @@ source and a dict-shaped annotation store.
 from typing import Any, Dict, Iterator, Optional
 
 import confluid  # type: ignore[import-not-found]
-
 from dataflux.paired import PairedSource
 from dataflux.sample import Sample
 

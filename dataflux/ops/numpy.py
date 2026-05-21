@@ -3,10 +3,10 @@ import re
 from typing import List, Sequence, Tuple, Union
 
 import numpy as np
-from confluid import configurable
-from logflow import get_logger
 
+from confluid import configurable
 from dataflux.sample import Sample
+from logflow import get_logger
 
 logger = get_logger(__name__)
 
@@ -42,7 +42,9 @@ def resolve_expression(value: str, sample: Sample) -> str:
             return str(sample.metadata[meta_key])
         assert env_name is not None
         if env_name not in os.environ:
-            raise KeyError(f"resolve_expression: environment variable {env_name!r} missing in {value!r}")
+            raise KeyError(
+                f"resolve_expression: environment variable {env_name!r} missing in {value!r}"
+            )
         return os.environ[env_name]
 
     return _EXPR_PATTERN.sub(_repl, value)
@@ -61,7 +63,9 @@ class StandardizeOp:
     Handles PIL images by converting to ndarray first.
     """
 
-    def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]):
+    def __init__(
+        self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]
+    ):
         self.mean = mean
         self.std = std
 
@@ -73,7 +77,9 @@ class StandardizeOp:
             arr = np.array(arr)
 
         if not isinstance(arr, np.ndarray):
-            raise TypeError(f"StandardizeOp expects an np.ndarray, got {type(arr).__name__}")
+            raise TypeError(
+                f"StandardizeOp expects an np.ndarray, got {type(arr).__name__}"
+            )
 
         if arr.dtype == np.float64:
             arr = arr.astype(np.float64)
@@ -102,7 +108,9 @@ class StandardizeOp:
 def _require_ndarray(sample: Sample, op_name: str) -> np.ndarray:
     arr = sample.input
     if not isinstance(arr, np.ndarray):
-        raise TypeError(f"{op_name} expects an np.ndarray on sample.input, got {type(arr).__name__}")
+        raise TypeError(
+            f"{op_name} expects an np.ndarray on sample.input, got {type(arr).__name__}"
+        )
     return arr
 
 
@@ -123,7 +131,9 @@ class ClipPercentilesOp:
 
     def __init__(self, low: float = 2.0, high: float = 98.0) -> None:
         if not (0.0 <= low < high <= 100.0):
-            raise ValueError(f"ClipPercentilesOp: require 0 <= low < high <= 100; got low={low}, high={high}")
+            raise ValueError(
+                f"ClipPercentilesOp: require 0 <= low < high <= 100; got low={low}, high={high}"
+            )
         self.low = float(low)
         self.high = float(high)
 
@@ -131,7 +141,9 @@ class ClipPercentilesOp:
         arr = _require_ndarray(sample, "ClipPercentilesOp")
         finite = np.isfinite(arr)
         if not finite.any():
-            logger.warning("ClipPercentilesOp: input is entirely non-finite; passing through")
+            logger.warning(
+                "ClipPercentilesOp: input is entirely non-finite; passing through"
+            )
             return sample
         lo = float(np.percentile(arr[finite], self.low))
         hi = float(np.percentile(arr[finite], self.high))
@@ -165,9 +177,13 @@ class RescaleOp:
         clip: bool = True,
     ) -> None:
         if not (in_min < in_max):
-            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}")
+            raise ValueError(
+                f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}"
+            )
         if not (out_min < out_max):
-            raise ValueError(f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}")
+            raise ValueError(
+                f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}"
+            )
         self.in_min = float(in_min)
         self.in_max = float(in_max)
         self.out_min = float(out_min)
@@ -179,7 +195,9 @@ class RescaleOp:
         if hasattr(arr, "convert"):
             arr = np.array(arr)
         if not isinstance(arr, np.ndarray):
-            raise TypeError(f"RescaleOp expects an np.ndarray, got {type(arr).__name__}")
+            raise TypeError(
+                f"RescaleOp expects an np.ndarray, got {type(arr).__name__}"
+            )
         arr = arr.astype(np.float64 if arr.dtype == np.float64 else np.float32)
         src = np.clip(arr, self.in_min, self.in_max) if self.clip else arr
         scaled = (src - self.in_min) / (self.in_max - self.in_min)
@@ -203,7 +221,9 @@ class ReplaceNonFiniteOp:
 
     def __init__(self, value: Union[float, int, str] = "min") -> None:
         if isinstance(value, str) and value not in ("min", "max"):
-            raise ValueError(f"ReplaceNonFiniteOp: value string must be 'min' or 'max'; got {value!r}")
+            raise ValueError(
+                f"ReplaceNonFiniteOp: value string must be 'min' or 'max'; got {value!r}"
+            )
         self.value = value
 
     def __call__(self, sample: Sample) -> Sample:
@@ -214,10 +234,14 @@ class ReplaceNonFiniteOp:
         if isinstance(self.value, str):
             finite = ~non_finite
             if not finite.any():
-                logger.warning("ReplaceNonFiniteOp: array is entirely non-finite; passing through")
+                logger.warning(
+                    "ReplaceNonFiniteOp: array is entirely non-finite; passing through"
+                )
                 return sample
             finite_values = arr[finite]
-            repl = float(finite_values.min() if self.value == "min" else finite_values.max())
+            repl = float(
+                finite_values.min() if self.value == "min" else finite_values.max()
+            )
         else:
             repl = float(self.value)
         return sample._replace(input=np.where(non_finite, repl, arr))
@@ -246,19 +270,24 @@ class ThresholdOp:
         if isinstance(self.value, (int, float)):
             return float(self.value)
         if not isinstance(self.value, str):
-            raise TypeError(f"ThresholdOp.value must be a number or expression string; got {type(self.value).__name__}")
+            raise TypeError(
+                f"ThresholdOp.value must be a number or expression string; got {type(self.value).__name__}"
+            )
         resolved = resolve_expression(self.value, sample)
         try:
             return float(resolved)
         except ValueError as exc:
             raise ValueError(
-                f"ThresholdOp: expression {self.value!r} resolved to {resolved!r}, " f"which is not a number"
+                f"ThresholdOp: expression {self.value!r} resolved to {resolved!r}, "
+                f"which is not a number"
             ) from exc
 
     def __call__(self, sample: Sample) -> Sample:
         arr = sample.input
         if not isinstance(arr, np.ndarray):
-            raise TypeError(f"ThresholdOp expects an np.ndarray on sample.input, got {type(arr).__name__}")
+            raise TypeError(
+                f"ThresholdOp expects an np.ndarray on sample.input, got {type(arr).__name__}"
+            )
         threshold = self._resolve(sample)
         sample.metadata["threshold"] = threshold
         return sample._replace(input=arr > threshold)
@@ -301,9 +330,13 @@ class ConnectedComponentsOp:
 
         mask = sample.input
         if not isinstance(mask, np.ndarray):
-            raise TypeError(f"ConnectedComponentsOp expects an np.ndarray on sample.input, got {type(mask).__name__}")
+            raise TypeError(
+                f"ConnectedComponentsOp expects an np.ndarray on sample.input, got {type(mask).__name__}"
+            )
         if mask.ndim != 2:
-            raise ValueError(f"ConnectedComponentsOp expects a 2-D mask; got shape {mask.shape}")
+            raise ValueError(
+                f"ConnectedComponentsOp expects a 2-D mask; got shape {mask.shape}"
+            )
 
         structure = generate_binary_structure(2, 1 if self.connectivity == 4 else 2)
         labels, n_components = label(mask, structure=structure)

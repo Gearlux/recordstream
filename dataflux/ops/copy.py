@@ -10,7 +10,6 @@ import copy
 from typing import Any
 
 from confluid import configurable
-
 from dataflux.sample import Sample
 
 

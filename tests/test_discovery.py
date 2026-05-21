@@ -4,7 +4,12 @@ from typing import Any
 
 import pytest
 
-from dataflux.discovery import get_callable_path, introspect_callable, resolve_callable, scan_module
+from dataflux.discovery import (
+    get_callable_path,
+    introspect_callable,
+    resolve_callable,
+    scan_module,
+)
 
 
 def sample_func(a: int, b: str = "default") -> str:

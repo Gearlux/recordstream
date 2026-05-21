@@ -69,7 +69,11 @@ def test_lru_eviction_respects_max_bytes(tmp_path: Path) -> None:
     # Adding a fourth must evict the oldest (a).
     time.sleep(0.01)
     cache.get_or_extract("d.bin", _write(b"d" * 100))
-    names = sorted(p.name for p in (tmp_path / "cache").iterdir() if p.is_file() and not p.name.endswith(".lock"))
+    names = sorted(
+        p.name
+        for p in (tmp_path / "cache").iterdir()
+        if p.is_file() and not p.name.endswith(".lock")
+    )
     assert names == ["b.bin", "c.bin", "d.bin"]
 
 
@@ -85,7 +89,11 @@ def test_touch_updates_lru_order(tmp_path: Path) -> None:
     cache.touch("a.bin")
     time.sleep(0.01)
     cache.get_or_extract("d.bin", _write(b"d" * 100))
-    names = sorted(p.name for p in (tmp_path / "cache").iterdir() if p.is_file() and not p.name.endswith(".lock"))
+    names = sorted(
+        p.name
+        for p in (tmp_path / "cache").iterdir()
+        if p.is_file() and not p.name.endswith(".lock")
+    )
     assert "a.bin" in names
     assert "b.bin" not in names  # b was the oldest after touch
 
@@ -164,7 +172,9 @@ def test_touch_on_missing_key_is_safe(tmp_path: Path) -> None:
     cache.touch("never_made.bin")  # must not raise
 
 
-def test_get_or_extract_returns_existing_file_without_calling_extract(tmp_path: Path) -> None:
+def test_get_or_extract_returns_existing_file_without_calling_extract(
+    tmp_path: Path,
+) -> None:
     cache = DiskCache(tmp_path / "cache", max_bytes=1024)
     target = tmp_path / "cache" / "preset.bin"
     target.write_bytes(b"already here")

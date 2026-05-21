@@ -1,6 +1,6 @@
-import confluid  # type: ignore[import-not-found]
 import numpy as np
 
+import confluid  # type: ignore[import-not-found]
 from dataflux.core import Flux
 
 

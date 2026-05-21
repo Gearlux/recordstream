@@ -13,17 +13,20 @@ The ``intake`` import is lazy so DataFlux's hard dependency surface is unchanged
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
 
-import confluid
 import numpy as np
 import torch
-from logflow import get_logger
 
+import confluid
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSource, Storage
+from logflow import get_logger
 
 logger = get_logger(__name__)
 
-_INTAKE_INSTALL_HINT = "IntakeSource requires the 'intake' package. " "Install it with: pip install 'intake>=2.0'"
+_INTAKE_INSTALL_HINT = (
+    "IntakeSource requires the 'intake' package. "
+    "Install it with: pip install 'intake>=2.0'"
+)
 
 
 @confluid.configurable
@@ -67,14 +70,20 @@ class IntakeSource(Storage, DataSource):
                 "or a pre-instantiated `source` object."
             )
         if source is not None and (catalog_path is not None or source_name is not None):
-            raise ValueError("IntakeSource: pass either (catalog_path, source_name) or `source`, not both.")
+            raise ValueError(
+                "IntakeSource: pass either (catalog_path, source_name) or `source`, not both."
+            )
 
         try:
             import intake  # noqa: F401
-        except ImportError as e:  # pragma: no cover - exercised via test_missing_intake_dep
+        except (
+            ImportError
+        ) as e:  # pragma: no cover - exercised via test_missing_intake_dep
             raise ImportError(_INTAKE_INSTALL_HINT) from e
 
-        self.catalog_path: Optional[str] = str(catalog_path) if catalog_path is not None else None
+        self.catalog_path: Optional[str] = (
+            str(catalog_path) if catalog_path is not None else None
+        )
         self.source_name = source_name
         self.target_attr = target_attr
         self._source = source
@@ -85,7 +94,9 @@ class IntakeSource(Storage, DataSource):
             return self._source
         import intake
 
-        logger.info(f"IntakeSource: opening catalog {self.catalog_path!r}, source {self.source_name!r}")
+        logger.info(
+            f"IntakeSource: opening catalog {self.catalog_path!r}, source {self.source_name!r}"
+        )
         self._catalog = intake.open_catalog(self.catalog_path)
         self._source = self._catalog[self.source_name]
         return self._source

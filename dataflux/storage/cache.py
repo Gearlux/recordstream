@@ -98,7 +98,9 @@ class DiskCache:
                     raise
 
                 if not partial.exists():
-                    raise RuntimeError(f"extract_fn for key {key!r} did not produce a file at {partial}")
+                    raise RuntimeError(
+                        f"extract_fn for key {key!r} did not produce a file at {partial}"
+                    )
 
                 size = partial.stat().st_size
                 if size > self.max_bytes:
@@ -123,7 +125,9 @@ class DiskCache:
         if target.exists():
             os.utime(target, None)
 
-    def evict_until(self, target_bytes: int, exclude: "set[Path] | None" = None) -> None:
+    def evict_until(
+        self, target_bytes: int, exclude: "set[Path] | None" = None
+    ) -> None:
         """Evict least-recently-used entries until total bytes <= ``target_bytes``."""
         target_bytes = max(0, target_bytes)
         exclude = exclude or set()

@@ -2,9 +2,9 @@
 
 from typing import Any, Iterator, List
 
-import confluid  # type: ignore[import-not-found]
 import pytest
 
+import confluid  # type: ignore[import-not-found]
 from dataflux.core import Flux
 from dataflux.sample import Sample
 from dataflux.sources import DatasetSplit
@@ -61,8 +61,14 @@ def test_fraction_mode_is_deterministic_across_instances() -> None:
 
 def test_fraction_mode_different_seeds_differ() -> None:
     source = IndexedSource(size=50)
-    a = {s.input for s in DatasetSplit(source=source, split="val", val_fraction=0.2, seed=1)}
-    b = {s.input for s in DatasetSplit(source=source, split="val", val_fraction=0.2, seed=2)}
+    a = {
+        s.input
+        for s in DatasetSplit(source=source, split="val", val_fraction=0.2, seed=1)
+    }
+    b = {
+        s.input
+        for s in DatasetSplit(source=source, split="val", val_fraction=0.2, seed=2)
+    }
     # Overwhelmingly likely to differ on 50 elements
     assert a != b
 
@@ -79,7 +85,9 @@ def test_fraction_mode_requires_val_fraction() -> None:
 
 def test_fraction_mode_rejects_invalid_split() -> None:
     with pytest.raises(ValueError, match="split"):
-        DatasetSplit(source=IndexedSource(size=10), split="test", val_fraction=0.1, seed=0)
+        DatasetSplit(
+            source=IndexedSource(size=10), split="test", val_fraction=0.1, seed=0
+        )
 
 
 def test_fraction_mode_rejects_out_of_range_fraction() -> None:
@@ -124,7 +132,9 @@ def test_passthrough_returns_full_source() -> None:
 def test_mixed_modes_rejected() -> None:
     source = IndexedSource(size=10)
     with pytest.raises(ValueError, match="not both"):
-        DatasetSplit(source=source, split="train", val_fraction=0.1, seed=0, start=0, end=5)
+        DatasetSplit(
+            source=source, split="train", val_fraction=0.1, seed=0, start=0, end=5
+        )
 
 
 def test_invalid_source_type() -> None:

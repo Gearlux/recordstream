@@ -1,8 +1,8 @@
 from pathlib import Path
 
-import confluid  # type: ignore[import-not-found]
 import numpy as np
 
+import confluid  # type: ignore[import-not-found]
 from dataflux.core import Flux
 from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
 

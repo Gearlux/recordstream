@@ -3,7 +3,6 @@
 from pathlib import Path
 from typing import Any
 
-import confluid
 import intake
 import intake.source.base
 import numpy as np
@@ -11,6 +10,7 @@ import pytest
 import torch
 import xarray as xr
 
+import confluid
 from dataflux.sample import Sample
 from dataflux.storage.intake import IntakeSource
 
@@ -26,7 +26,9 @@ class _XArrayPartitionedSource(intake.source.base.DataSource):
     version = "0.1"
     partition_access = True
 
-    def __init__(self, n_partitions: int = 3, label: str = "alpha", metadata: Any = None) -> None:
+    def __init__(
+        self, n_partitions: int = 3, label: str = "alpha", metadata: Any = None
+    ) -> None:
         super().__init__(metadata=metadata or {})
         self._n = n_partitions
         self._label = label
@@ -97,7 +99,11 @@ def test_intake_source_handles_numpy_partition() -> None:
 
         def _get_schema(self) -> Any:
             return intake.source.base.Schema(
-                datashape=None, dtype=str(np.dtype(np.float64)), shape=(3,), npartitions=2, extra_metadata={}
+                datashape=None,
+                dtype=str(np.dtype(np.float64)),
+                shape=(3,),
+                npartitions=2,
+                extra_metadata={},
             )
 
         def _get_partition(self, i: int) -> np.ndarray:
@@ -133,7 +139,9 @@ def test_intake_source_partial_pair_raises() -> None:
 
 
 def test_intake_source_configurable_yaml_roundtrip() -> None:
-    df_src = IntakeSource(catalog_path="cat.yml", source_name="entry", target_attr="label")
+    df_src = IntakeSource(
+        catalog_path="cat.yml", source_name="entry", target_attr="label"
+    )
     state = confluid.dump(df_src)
     restored = confluid.load(state)
     assert isinstance(restored, IntakeSource)

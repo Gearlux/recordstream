@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import Union
 
-import confluid
 import numpy as np
 
+import confluid
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, Storage
 
@@ -15,7 +15,9 @@ class DirectorySink(Storage, DataSink):
     Perfect for irregular data lengths and massive parallel writing.
     """
 
-    def __init__(self, path: Union[str, Path], overwrite: bool = False, use_npz: bool = True) -> None:
+    def __init__(
+        self, path: Union[str, Path], overwrite: bool = False, use_npz: bool = True
+    ) -> None:
         self.path = Path(path)
         self.overwrite = overwrite
         self.use_npz = use_npz

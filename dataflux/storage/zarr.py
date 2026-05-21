@@ -1,9 +1,9 @@
 from pathlib import Path
 from typing import List, Optional, Union
 
-import confluid
 import zarr
 
+import confluid
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, Storage
 
@@ -41,12 +41,22 @@ class ZarrGroupSink(Storage, DataSink):
         # Use require_dataset or delete if exists
         if "data" in grp:
             del grp["data"]
-        grp.create_dataset("data", data=sample.input, shape=sample.input.shape, dtype=sample.input.dtype)
+        grp.create_dataset(
+            "data",
+            data=sample.input,
+            shape=sample.input.shape,
+            dtype=sample.input.dtype,
+        )
 
         if sample.target is not None:
             if "target" in grp:
                 del grp["target"]
-            grp.create_dataset("target", data=sample.target, shape=sample.target.shape, dtype=sample.target.dtype)
+            grp.create_dataset(
+                "target",
+                data=sample.target,
+                shape=sample.target.shape,
+                dtype=sample.target.dtype,
+            )
 
         # 2. Save metadata as Zarr attributes (.zattrs)
         if sample.metadata:

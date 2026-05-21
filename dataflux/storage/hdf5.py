@@ -3,11 +3,11 @@ from typing import Any, Iterator, Optional, Union
 
 import h5py
 import torch
-from confluid import configurable
-from logflow import get_logger
 
+from confluid import configurable
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, DataSource, Storage
+from logflow import get_logger
 
 logger = get_logger("dataflux.storage.hdf5")
 
@@ -23,7 +23,12 @@ def to_numpy(data: Any) -> Any:
 class HDF5Source(Storage, DataSource):
     """Clean, high-performance HDF5 data source."""
 
-    def __init__(self, path: Union[str, Path], sample_key: str = "data", target_key: Optional[str] = "target") -> None:
+    def __init__(
+        self,
+        path: Union[str, Path],
+        sample_key: str = "data",
+        target_key: Optional[str] = "target",
+    ) -> None:
         self.path = Path(path)
         self.sample_key = sample_key
         self.target_key = target_key
@@ -44,11 +49,17 @@ class HDF5Source(Storage, DataSource):
         if self._file is None:
             return
 
-        prefixes = sorted([k.split("_data")[0] for k in self._file.keys() if k.endswith("_data")])
+        prefixes = sorted(
+            [k.split("_data")[0] for k in self._file.keys() if k.endswith("_data")]
+        )
 
         for pref in prefixes:
             data = self._file[f"{pref}_data"][()]
-            target = self._file[f"{pref}_target"][()] if f"{pref}_target" in self._file else None
+            target = (
+                self._file[f"{pref}_target"][()]
+                if f"{pref}_target" in self._file
+                else None
+            )
             metadata = dict(self._file[f"{pref}_data"].attrs)
             # Source returns Tensors to match schema
             yield Sample(input=torch.from_numpy(data), target=target, metadata=metadata)
@@ -64,7 +75,12 @@ class HDF5Source(Storage, DataSource):
 class HDF5Sink(Storage, DataSink):
     """High-performance HDF5 data sink focused on Sample triplets."""
 
-    def __init__(self, path: Union[str, Path], compression: Optional[str] = "gzip", overwrite: bool = False) -> None:
+    def __init__(
+        self,
+        path: Union[str, Path],
+        compression: Optional[str] = "gzip",
+        overwrite: bool = False,
+    ) -> None:
         self.path = Path(path)
         self.compression = compression
         self.overwrite = overwrite
@@ -97,7 +113,11 @@ class HDF5Sink(Storage, DataSink):
 
         # 1. Write Data
         kwargs = {}
-        if self.compression and hasattr(input_data, "shape") and len(input_data.shape) > 0:
+        if (
+            self.compression
+            and hasattr(input_data, "shape")
+            and len(input_data.shape) > 0
+        ):
             kwargs["compression"] = self.compression
 
         ds = self._file.create_dataset(f"{prefix}_data", data=input_data, **kwargs)
@@ -112,7 +132,11 @@ class HDF5Sink(Storage, DataSink):
         # 3. Write Target
         if target_data is not None:
             t_kwargs = {}
-            if self.compression and hasattr(target_data, "shape") and len(target_data.shape) > 0:
+            if (
+                self.compression
+                and hasattr(target_data, "shape")
+                and len(target_data.shape) > 0
+            ):
                 t_kwargs["compression"] = self.compression
 
             self._file.create_dataset(f"{prefix}_target", data=target_data, **t_kwargs)
