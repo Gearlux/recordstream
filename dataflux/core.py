@@ -135,6 +135,20 @@ class Flux(torch.utils.data.Dataset[Sample]):
     """
     The primary stream engine for DataFlux.
     Wraps any iterable or indexed dataset and provides a functional API.
+
+    Annotation design (kept intentionally ``Any``):
+        Per the DataFlux mandate "Functional Purity: Transforms are plain
+        Python callables. Never introduce base classes or complex inheritance
+        for data operations.", ``source`` is duck-typed (any iterable; the
+        Indexable protocol if ``__getitem__``/``__len__`` are present) and
+        ``ops`` is a list of bare callables ``Sample -> Optional[Sample]``.
+        No ``Source`` or ``Op`` ABC is introduced.
+
+        Downstream auto-gen pydantic mirrors (``confluid.to_pydantic``)
+        coerce abstract iterable types to ``Any`` so identity-tracked
+        serialization (e.g. shared-source dataset-split patterns in
+        navigaitor) works correctly — see
+        ``confluid/pydantic_export.py:_ITER_TYPES_AS_ANY``.
     """
 
     def __init__(
