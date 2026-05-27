@@ -653,7 +653,14 @@ class TestThresholdOp:
             np_ops.ThresholdOp(value="{drone}")(sample)
 
     def test_raises_on_bad_value_type(self) -> None:
-        with pytest.raises(TypeError, match="must be a number or expression string"):
+        # Confluid's ``@configurable`` validates kwargs against the
+        # auto-generated pydantic schema before the body runs. ``value`` is
+        # typed as ``float | int | str``, so a list is rejected at the
+        # validation layer first; the body's hand-rolled ``TypeError``
+        # remains as a safety net.
+        from pydantic import ValidationError
+
+        with pytest.raises((TypeError, ValidationError)):
             np_ops.ThresholdOp(value=[1, 2])(Sample(input=np.array([0.0])))  # type: ignore[arg-type]
 
 

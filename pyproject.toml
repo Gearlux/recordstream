@@ -42,6 +42,19 @@ vision = [
 requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# CONFLUID-CONFIGURABLE DISCOVERY
+# Sources / ops live in separate submodules that `dataflux/__init__.py`
+# does not eagerly import. Listing them here makes navigaitor discover
+# every ``@configurable`` on bootstrap without hardcoding the list.
+[project.entry-points."confluid.configurables"]
+dataflux = "dataflux"
+dataflux-core = "dataflux.core"
+dataflux-sources = "dataflux.sources"
+dataflux-ops-parallel = "dataflux.ops.parallel"
+dataflux-ops-tee = "dataflux.ops.tee"
+dataflux-ops-stash = "dataflux.ops.stash"
+dataflux-ops-numpy = "dataflux.ops.numpy"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dataflux*"]
