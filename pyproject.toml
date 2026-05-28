@@ -12,7 +12,10 @@ dependencies = [
     "torch",
     "typing-extensions",
     "datasets",
-    "albumentations"
+    "albumentations",
+    "orjson",
+    "fsspec",
+    "cloudpathlib"
 ]
 requires-python = ">=3.12"
 
