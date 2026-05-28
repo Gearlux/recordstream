@@ -1,10 +1,10 @@
 """Hugging Face Datasets based implementation of DataFlux core."""
 
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Union, cast
 
+import datasets
 import numpy as np
 import torch
-import datasets
 from confluid import configurable
 from logflow import get_logger
 
@@ -19,10 +19,11 @@ def _encode_complex(val: Any) -> Any:
     if np.iscomplexobj(val) or (isinstance(val, torch.Tensor) and val.is_complex()):
         kind = "numpy" if not isinstance(val, torch.Tensor) else "torch"
         if np.isscalar(val):
+            scalar = cast(complex, val)
             return {
                 "_complex_": True,
-                "real": float(val.real),
-                "imag": float(val.imag),
+                "real": float(scalar.real),
+                "imag": float(scalar.imag),
                 "dtype": str(getattr(val, "dtype", "complex128")),
                 "kind": "scalar",
             }
@@ -115,13 +116,15 @@ def _dict_to_sample(d: Dict[str, Any]) -> Sample:
 
 def wrap_op(op: Callable) -> Callable[[Dict[str, Any]], Dict[str, Any]]:
     """Wrap a legacy Sample-based op so it can be used with HF datasets.map()."""
+
     def wrapper(row: Dict[str, Any]) -> Dict[str, Any]:
         sample = _dict_to_sample(row)
         result = op(sample)
         if result is None:
             # For HF filter ops or flat maps
-            return row # Filtering is separate in HF
+            return row  # Filtering is separate in HF
         return _sample_to_dict(result)
+
     return wrapper
 
 
@@ -141,16 +144,30 @@ class HFFlux:
 
     @classmethod
     def from_source(cls, source: Any) -> "HFFlux":
-        """Create an HFFlux from any iterable source."""
+        """Create an HFFlux from any iterable source.
+
+        An in-memory sequence (``list``/``tuple``) is already fully
+        materialized, so we build a map-style ``datasets.Dataset`` for it —
+        this enables ``len()`` and integer indexing without writing any cache
+        files. This does NOT violate the lazy-evaluation mandate: the data is
+        already in memory, so there is no lazy iterator left to consume eagerly.
+
+        Any other source (generator, streaming DataFlux source) is treated as
+        lazy and backed by an ``IterableDataset`` to avoid materializing it and
+        to avoid large cache files / permission issues on external drives
+        (like /Volumes/Store).
+        """
         if hasattr(source, "_dataset") and isinstance(source._dataset, (datasets.Dataset, datasets.IterableDataset)):
             return cls(source._dataset)
+
+        if isinstance(source, (list, tuple)):
+            rows = [_sample_to_dict(Sample.from_any(item)) for item in source]
+            return cls(datasets.Dataset.from_list(rows))
 
         def gen() -> Iterator[Dict[str, Any]]:
             for item in source:
                 yield _sample_to_dict(Sample.from_any(item))
 
-        # Use IterableDataset by default to avoid large cache files and permission issues
-        # on external drives (like /Volumes/Store).
         ds = datasets.IterableDataset.from_generator(gen)
         return cls(ds)
 
