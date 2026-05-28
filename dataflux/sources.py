@@ -73,9 +73,12 @@ class HuggingFaceSource:
         )
 
     def __len__(self) -> int:
-        if self.count is not None:
-            return self.count
-        return len(self._dataset)
+        # A ``count`` of 0 (or None) means "all samples", matching __iter__'s
+        # ``limit = self.count or len(...)``. Returning a bare ``self.count`` here
+        # would report 0 for the common "0 == unlimited" case, making the source
+        # look empty (e.g. a downstream len()-based stepper raising ``len == 0``)
+        # even though iteration yields every sample.
+        return self.count or len(self._dataset)
 
 
 @configurable

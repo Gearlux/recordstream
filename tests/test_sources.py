@@ -218,3 +218,33 @@ val_set: !class:DatasetSplit()
     val_idx = {s.input for s in val}
     assert train_idx.isdisjoint(val_idx)
     assert train_idx | val_idx == set(range(50))
+
+
+# ---------------------------------------------------------------------------
+# HuggingFaceSource.__len__ / count semantics (no network — __init__ bypassed)
+# ---------------------------------------------------------------------------
+
+
+def _hf_source_with_count(count: Any, dataset_len: int = 13) -> Any:
+    """Build a HuggingFaceSource without the network (skip __init__'s load_dataset)."""
+    from dataflux.sources import HuggingFaceSource
+
+    src: Any = HuggingFaceSource.__new__(HuggingFaceSource)
+    src.count = count
+    src._dataset = list(range(dataset_len))
+    return src
+
+
+def test_hf_source_len_count_zero_means_all() -> None:
+    # Regression: count=0 must report the full length (matching __iter__'s ``count or len``),
+    # not 0 — otherwise a len()-based stepper (e.g. FluxStudio's WalkDataset) sees an empty
+    # source even though iteration yields every sample.
+    assert len(_hf_source_with_count(0)) == 13
+
+
+def test_hf_source_len_count_none_means_all() -> None:
+    assert len(_hf_source_with_count(None)) == 13
+
+
+def test_hf_source_len_positive_count_caps() -> None:
+    assert len(_hf_source_with_count(5)) == 5
