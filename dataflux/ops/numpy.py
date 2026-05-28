@@ -7,6 +7,11 @@ from confluid import configurable
 from logflow import get_logger
 
 from dataflux.sample import Sample
+from dataflux.typespec import ArrayType, PythonType, SampleType, UnionType
+
+# Common shorthands for the numpy ops' declared types.
+_NDARRAY = ArrayType(frameworks={"numpy"})
+_NUMERIC_OR_PIL = UnionType((ArrayType(dtype="numeric", frameworks={"numpy"}), PythonType("PIL.Image.Image")))
 
 logger = get_logger(__name__)
 
@@ -60,6 +65,9 @@ class StandardizeOp:
 
     Handles PIL images by converting to ndarray first.
     """
+
+    ACCEPTS = SampleType(input=_NUMERIC_OR_PIL)
+    PRODUCES = SampleType(input=ArrayType(dtype="floating", frameworks={"numpy"}))
 
     def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]):
         self.mean = mean
@@ -121,6 +129,9 @@ class ClipPercentilesOp:
         high: Upper percentile in ``(0, 100]``, must be ``> low``. Default ``98.0``.
     """
 
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
     def __init__(self, low: float = 2.0, high: float = 98.0) -> None:
         if not (0.0 <= low < high <= 100.0):
             raise ValueError(f"ClipPercentilesOp: require 0 <= low < high <= 100; got low={low}, high={high}")
@@ -155,6 +166,9 @@ class RescaleOp:
         clip: When True (default), clamp values outside ``[in_min, in_max]``
             before rescaling. When False, extrapolate linearly.
     """
+
+    ACCEPTS = SampleType(input=_NUMERIC_OR_PIL)
+    PRODUCES = SampleType(input=ArrayType(dtype="floating", frameworks={"numpy"}))
 
     def __init__(
         self,
@@ -201,6 +215,9 @@ class ReplaceNonFiniteOp:
             Default ``"min"``.
     """
 
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
     def __init__(self, value: Union[float, int, str] = "min") -> None:
         if isinstance(value, str) and value not in ("min", "max"):
             raise ValueError(f"ReplaceNonFiniteOp: value string must be 'min' or 'max'; got {value!r}")
@@ -238,6 +255,9 @@ class ThresholdOp:
 
     Records the resolved threshold under ``metadata["threshold"]`` for traceability.
     """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=ArrayType(dtype="bool", frameworks={"numpy"}))
 
     def __init__(self, value: Union[float, int, str] = 0.0) -> None:
         self.value = value
@@ -281,6 +301,9 @@ class ConnectedComponentsOp:
 
     Requires ``scipy`` (install via ``pip install data-flux[vision]``).
     """
+
+    ACCEPTS = SampleType(input=ArrayType(ndim=2, dtype="bool", frameworks={"numpy"}))
+    PRODUCES = SampleType(input=PythonType("list"))
 
     def __init__(self, min_area_bins: int = 1, connectivity: int = 4) -> None:
         if min_area_bins < 1:

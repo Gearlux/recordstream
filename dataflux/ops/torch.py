@@ -5,6 +5,10 @@ import torch
 from confluid import configurable
 
 from dataflux.sample import Sample
+from dataflux.typespec import ArrayType, PythonType, SampleType, UnionType
+
+_TORCH = ArrayType(frameworks={"torch"})
+_TORCH_FLOAT = ArrayType(dtype="floating", frameworks={"torch"})
 
 
 @configurable
@@ -12,6 +16,9 @@ class ToTensorOp:
     """
     Converts input (PIL Image, NumPy array, etc.) to a Torch Tensor.
     """
+
+    ACCEPTS = SampleType(input=UnionType((PythonType("PIL.Image.Image"), ArrayType(frameworks={"numpy"}))))
+    PRODUCES = SampleType(input=_TORCH)
 
     def __init__(self, normalize: bool = True):
         self.normalize = normalize
@@ -63,6 +70,9 @@ class RescaleOp:
             before rescaling. When False, extrapolate linearly.
     """
 
+    ACCEPTS = SampleType(input=_TORCH)
+    PRODUCES = SampleType(input=_TORCH_FLOAT)
+
     def __init__(
         self,
         in_min: float,
@@ -103,6 +113,9 @@ class StandardizeOp:
     mean/std can be a single float (applied uniformly) or a sequence of
     per-channel values that broadcasts over [C, H, W] format.
     """
+
+    ACCEPTS = SampleType(input=_TORCH)
+    PRODUCES = SampleType(input=_TORCH_FLOAT)
 
     def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]):
         self.mean = mean

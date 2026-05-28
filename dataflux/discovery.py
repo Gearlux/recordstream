@@ -4,7 +4,7 @@ import inspect
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 
 def get_callable_path(func: Callable) -> str:
@@ -99,7 +99,16 @@ def introspect_callable(func: Callable) -> Dict[str, Any]:
         "name": getattr(func, "__name__", str(func)),
         "doc": func.__doc__.strip() if func.__doc__ else "",
         "parameters": params,
+        "accepts": _spec_dict(getattr(func, "ACCEPTS", None)),
+        "produces": _spec_dict(getattr(func, "PRODUCES", None)),
     }
+
+
+def _spec_dict(spec: Any) -> Optional[Dict[str, Any]]:
+    """JSON-serialize a declared ``ACCEPTS`` / ``PRODUCES`` (a :class:`~dataflux.typespec.SampleType`),
+    or ``None`` when undeclared. Duck-typed so ``discovery`` needn't import ``typespec``."""
+    to_dict = getattr(spec, "to_dict", None)
+    return cast(Dict[str, Any], to_dict()) if callable(to_dict) else None
 
 
 def scan_module(path_or_name: Union[str, Path]) -> List[Dict[str, Any]]:

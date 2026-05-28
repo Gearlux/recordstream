@@ -1,16 +1,55 @@
 import concurrent.futures
+import json
 import multiprocessing
 from contextlib import nullcontext
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Union, cast
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
 
 import torch.utils.data
 from confluid import configurable
 from confluid.fluid import Fluid as _ConfluidFluid
 from logflow import get_logger
 
-from dataflux.sample import Sample
+from dataflux.sample import FEATURES_KEY, SPEC_KEY, TYPE_KEYS, Sample
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from dataflux.typespec import SampleType
 
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=None)
+def _serialized_type_keys(produces: "SampleType") -> Tuple[str, str]:
+    """Serialize an op's ``PRODUCES`` to the two stored-type JSON strings, memoized per spec so the
+    ``datasets.Features`` build happens once per distinct spec rather than once per sample."""
+    features, extras = produces.to_hf_features()
+    return json.dumps(features.to_dict()), json.dumps(extras)
+
+
+def _refresh_type(sample: Sample, op: Any) -> Sample:
+    """Keep a sample's stored type honest after an op — only when the sample already carries one.
+
+    Default (untracked) pipelines never stamp a type, so this is a no-op and metadata is byte-identical
+    to before. When a stored type IS present (set via :meth:`Sample.with_type` or loaded from a typed
+    dataset), an op that declares ``PRODUCES`` refreshes it; an op that declares none drops it so
+    :meth:`Sample.describe` falls back to inference rather than reporting a stale type.
+    """
+    if not any(key in sample.metadata for key in TYPE_KEYS):
+        return sample
+    produces = getattr(op, "PRODUCES", None)
+    if produces is not None:
+        features_key, spec_key = _serialized_type_keys(produces)
+        return sample._replace(metadata={**sample.metadata, FEATURES_KEY: features_key, SPEC_KEY: spec_key})
+    return sample._replace(metadata={k: v for k, v in sample.metadata.items() if k not in TYPE_KEYS})
+
+
+def _apply_op(sample: Sample, op: Any) -> Optional[Sample]:
+    """Apply one op and refresh the stored type. The single op-application chokepoint shared by the
+    sequential, parallel (via :func:`_worker_task`), streamed, and random-access (``__getitem__``) paths."""
+    result = op(sample)
+    if result is None:
+        return None
+    return _refresh_type(result, op)
 
 
 def _describe_deferred_source(source: Any) -> str:
@@ -52,7 +91,7 @@ def _check_ops_materialized(ops: List[Any]) -> None:
             raise TypeError(_fluid_op_guidance(op, i))
 
 
-@configurable
+@configurable(category="op")
 class FilterOp:
     """Configurable filter operation."""
 
@@ -63,7 +102,7 @@ class FilterOp:
         return s if self.p(s) else None
 
 
-@configurable
+@configurable(category="op")
 class WrappedOp:
     """Configurable transformation wrapper with smart mapping."""
 
@@ -106,11 +145,11 @@ def _worker_task(sample: Sample, ops: List[Any]) -> Optional[Sample]:
     for op in ops:
         if current_sample is None:
             return None
-        current_sample = op(current_sample)
+        current_sample = _apply_op(current_sample, op)
     return current_sample
 
 
-@configurable
+@configurable(category="dataset")
 class JointFlux:
     """
     Aggregates multiple Flux streams into a single joint stream.
@@ -130,7 +169,7 @@ class JointFlux:
         return sum(len(f) for f in self.fluxes)
 
 
-@configurable
+@configurable(category="dataset")
 class Flux(torch.utils.data.Dataset[Sample]):
     """
     The primary stream engine for DataFlux.
@@ -242,7 +281,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
         _check_ops_materialized(self.ops)
         sample = Sample.from_any(raw)
         for op in self.ops:
-            result = op(sample)
+            result = _apply_op(sample, op)
             if result is None:
                 raise IndexError(f"Sample {index} filtered out by {op}")
             sample = result
@@ -347,7 +386,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
             for s in stream:
                 if s is None:
                     continue
-                yield op(s)
+                yield _apply_op(s, op)
 
         stream: Iterator[Optional[Sample]] = to_samples()
         for op in self.ops:
