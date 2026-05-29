@@ -80,6 +80,30 @@ class StandardizeOp:
 
 Matching is asymmetric: `consumer.accepts(producer)` is strict (used at runtime against a concrete inferred type); `compatible(consumer, producer)` is permissive (used at edit time — `Any`/unknown on either side passes). A `Sample`'s own type comes from `sample.describe()` — it returns a type stored in the reserved metadata keys `__features__` (a `datasets.Features` dict) + `__spec__` (sidecar refinements), or infers one from the live data; attach a stored type with `sample.with_type(SampleType(...))`.
 
+## 🔎 Field Projection & Class Counting
+
+Walking a source for a single field (the classic case: counting classes from
+*targets*) shouldn't pay to build the fields you don't need. `dataflux.projection`
+adds an opt-in protocol plus lazy helpers:
+
+```python
+from dataflux import project, iter_targets, num_classes
+
+# A source MAY implement SupportsProjection (`project(fields)`) to skip building
+# unrequested fields — e.g. an image dataset reads only the label column for a
+# target-only walk, never decoding an image.
+for sample in project(my_source, ("target",)):
+    ...                       # sample.input is None; sample.target populated
+
+labels = list(iter_targets(my_source))     # lazy
+n = num_classes(my_source)                 # max(class_id) + 1 — always walks
+```
+
+Sources that don't implement `SupportsProjection` still work via a correct
+full-iteration fallback (just without the skip-decode speedup). `num_classes` is
+a free function, not a `Flux` method: integer class-id semantics are
+classification-specific, so the task-agnostic engine doesn't advertise it.
+
 ## 📦 Storage Integration
 
 DataFlux makes it easy to move data between different formats:
@@ -142,6 +166,19 @@ Flux.from_source(HDF5Source("input.h5")) \
     ```
 
 > **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared by both splits. Use `!clone:` when you want an independent deep copy instead.
+
+## 🔁 Reattach an ops-only YAML (`Flux.from_ops_yaml`)
+
+A `{ops: [!class:…()]}` document — e.g. one exported from a FluxStudio canvas (`fluxstudio export …`) — can be attached to any source:
+
+```python
+from dataflux import Flux
+from dataflux.sources import HuggingFaceSource
+
+flux = Flux.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="mnist"))
+```
+
+The helper **materializes** the deferred `!class:` markers before attaching (via `confluid.materialize`) — necessary because `confluid.load` leaves markers nested under a mapping key deferred, and a `Flux` rejects deferred markers at iteration by design. The manual equivalent is `Flux(source=src, ops=confluid.materialize(confluid.load("ops.yaml")["ops"]))`.
 
 ## 🔗 Paired Join (Binary ↔ Annotations)
 

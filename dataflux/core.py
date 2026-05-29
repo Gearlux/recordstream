@@ -20,6 +20,8 @@ from typing import (
 
 import torch.utils.data
 from confluid import configurable
+from confluid import load as _confluid_load
+from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
 from logflow import get_logger
 
@@ -172,7 +174,7 @@ def _worker_task(sample: Sample, ops: List[Any]) -> Optional[Sample]:
     return current_sample
 
 
-@configurable(category="dataset")
+@configurable(category="engine")
 class JointFlux:
     """
     Aggregates multiple Flux streams into a single joint stream.
@@ -195,7 +197,7 @@ class JointFlux:
         return sum(len(f) for f in self.fluxes)
 
 
-@configurable(category="dataset")
+@configurable(category="engine")
 class Flux(torch.utils.data.Dataset[Sample]):
     """
     The primary stream engine for DataFlux.
@@ -257,6 +259,27 @@ class Flux(torch.utils.data.Dataset[Sample]):
     def joint(cls, fluxes: List["Flux"]) -> "Flux":
         """Create a new Flux that aggregates multiple other Flux streams."""
         return cls(source=JointFlux(fluxes))
+
+    @classmethod
+    def from_ops_yaml(cls, path: str, source: Optional[Iterable[Any]] = None) -> "Flux":
+        """Attach an ops-only Confluid YAML (e.g. exported from FluxStudio) to ``source``.
+
+        ``path`` is the ``{ops: [!class:...()]}`` document produced by
+        :func:`fluxstudio.export.export_ops_yaml` (the ``fluxstudio export`` CLI or the
+        canvas Export button). It also accepts an inline YAML string (``confluid.load``
+        handles both).
+
+        The op markers are **materialized to live callables** before being attached:
+        ``confluid.load`` leaves ``!class:`` markers nested under a mapping key deferred
+        (its final flow pass doesn't descend dict→list), so a plain ``load(path)["ops"]``
+        would hand :class:`Flux` deferred ``Instance`` markers — which iteration rejects by
+        design (see :meth:`_guard_live_source` / ``_check_ops_materialized``). Routing through
+        :func:`confluid.materialize` flows the top-level list of markers into live ops.
+        """
+        loaded = _confluid_load(path)
+        raw_ops = loaded.get("ops", []) if isinstance(loaded, dict) else []
+        ops = list(_confluid_materialize(raw_ops))
+        return cls(source=source, ops=ops)
 
     def __len__(self) -> int:
         """Return the length of the underlying source if available.

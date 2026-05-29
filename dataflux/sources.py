@@ -9,7 +9,7 @@ from dataflux.sample import Sample
 logger = get_logger(__name__)
 
 
-@configurable
+@configurable(category="source")
 class HuggingFaceSource:
     """
     DataFlux Source for Hugging Face Datasets.
@@ -90,7 +90,7 @@ class HuggingFaceSource:
         return self.count or len(self._dataset)
 
 
-@configurable
+@configurable(category="engine")
 class DatasetSplit:
     """
     Selects a subset view of an indexable source (e.g. ``HuggingFaceSource``).

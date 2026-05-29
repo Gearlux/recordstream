@@ -10,12 +10,21 @@ pinned here as a regression gate.
 from confluid.registry import get_registry
 
 from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from dataflux.sources import DatasetSplit, HuggingFaceSource
 
 
-def test_dataset_classes_tagged() -> None:
-    """``Flux`` / ``JointFlux`` are the generic (task-agnostic) dataset engines."""
-    assert Flux.__confluid_category__ == "dataset"
-    assert JointFlux.__confluid_category__ == "dataset"
+def test_engine_classes_tagged() -> None:
+    """``Flux`` / ``JointFlux`` / ``DatasetSplit`` are the generic, task-agnostic *engines*
+    (containers that compose sources + ops), NOT datasets. They are excluded from FluxStudio's
+    node palette (you wire Source -> Op instead) and are not offered in navigaitor dataset slots."""
+    assert Flux.__confluid_category__ == "engine"
+    assert JointFlux.__confluid_category__ == "engine"
+    assert DatasetSplit.__confluid_category__ == "engine"
+
+
+def test_source_classes_tagged() -> None:
+    """``HuggingFaceSource`` is a concrete data *source* (it loads a dataset)."""
+    assert HuggingFaceSource.__confluid_category__ == "source"
 
 
 def test_op_classes_tagged() -> None:
@@ -31,5 +40,6 @@ def test_categories_enumerable_via_registry() -> None:
     not just the class attribute — has to carry the tag.
     """
     registry = get_registry()
-    assert {"Flux", "JointFlux"} <= registry.list_classes(category="dataset")
+    assert {"Flux", "JointFlux", "DatasetSplit"} <= registry.list_classes(category="engine")
+    assert {"HuggingFaceSource"} <= registry.list_classes(category="source")
     assert {"FilterOp", "WrappedOp"} <= registry.list_classes(category="op")
