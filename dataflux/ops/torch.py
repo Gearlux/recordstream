@@ -15,6 +15,9 @@ _TORCH_FLOAT = ArrayType(dtype="floating", frameworks={"torch"})
 class ToTensorOp:
     """
     Converts input (PIL Image, NumPy array, etc.) to a Torch Tensor.
+
+    Args:
+        normalize: When ``True``, scale integer pixel inputs into the ``[0, 1]`` float range during conversion.
     """
 
     ACCEPTS = SampleType(input=UnionType((PythonType("PIL.Image.Image"), ArrayType(frameworks={"numpy"}))))
@@ -112,6 +115,10 @@ class StandardizeOp:
 
     mean/std can be a single float (applied uniformly) or a sequence of
     per-channel values that broadcasts over [C, H, W] format.
+
+    Args:
+        mean: Mean to subtract — a single float (uniform) or a per-channel sequence broadcasting over [C, H, W].
+        std: Standard deviation to divide by — a single float (uniform) or a per-channel sequence.
     """
 
     ACCEPTS = SampleType(input=_TORCH)

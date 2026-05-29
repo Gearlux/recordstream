@@ -19,7 +19,12 @@ from dataflux.sample import Sample
 
 @configurable
 class Tee:
-    """Run N op-list branches sequentially on the same sample / metadata."""
+    """Run N op-list branches sequentially on the same sample / metadata.
+
+    Args:
+        branches: A list of op-lists; each inner list is a chain of callables
+            ``Sample -> Optional[Sample]`` run in order.
+    """
 
     def __init__(self, branches: List[List[Any]]) -> None:
         self.branches = [list(b) for b in branches]

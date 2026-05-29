@@ -3,7 +3,20 @@ import json
 import multiprocessing
 from contextlib import nullcontext
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Collection,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import torch.utils.data
 from confluid import configurable
@@ -93,7 +106,11 @@ def _check_ops_materialized(ops: List[Any]) -> None:
 
 @configurable(category="op")
 class FilterOp:
-    """Configurable filter operation."""
+    """Configurable filter operation.
+
+    Args:
+        p: Predicate ``Sample -> bool``; the sample passes through when it returns ``True``, else is dropped.
+    """
 
     def __init__(self, p: Callable[[Sample], bool]):
         self.p = p
@@ -104,7 +121,13 @@ class FilterOp:
 
 @configurable(category="op")
 class WrappedOp:
-    """Configurable transformation wrapper with smart mapping."""
+    """Configurable transformation wrapper with smart mapping.
+
+    Args:
+        f: The wrapped callable, or its importable ``module:function`` path (stored as a string for serialization).
+        s: Which Sample slot to transform — ``"input"``, ``"target"``, or ``"all"`` (the whole Sample).
+        kw: Extra keyword arguments forwarded to the wrapped callable on every call.
+    """
 
     def __init__(self, f: Union[str, Callable], s: str, kw: Dict[str, Any]):
         from dataflux.discovery import get_callable_path
@@ -154,6 +177,9 @@ class JointFlux:
     """
     Aggregates multiple Flux streams into a single joint stream.
     Each sub-flux maintains its own unique transformation chain.
+
+    Args:
+        fluxes: The Flux streams to concatenate; iteration walks them in order and length is their sum.
     """
 
     def __init__(self, fluxes: List["Flux"]) -> None:
@@ -188,6 +214,11 @@ class Flux(torch.utils.data.Dataset[Sample]):
         serialization (e.g. shared-source dataset-split patterns in
         navigaitor) works correctly — see
         ``confluid/pydantic_export.py:_ITER_TYPES_AS_ANY``.
+
+    Args:
+        source: Any iterable or indexable dataset (duck-typed) to wrap; ``None`` yields an empty stream.
+        ops: Ordered callables ``Sample -> Optional[Sample]`` applied lazily on access (``None`` = no ops).
+        chunk_size: Parallel-processing chunk size; ``0`` (the default) processes sequentially.
     """
 
     def __init__(
@@ -435,3 +466,21 @@ class Flux(torch.utils.data.Dataset[Sample]):
     def collect(self) -> List[Sample]:
         """Materialize the full flux into a list."""
         return list(self)
+
+    def project(self, fields: Collection[str]) -> Iterator[Sample]:
+        """Yield pipeline-output Samples carrying only ``fields`` (the projection primitive).
+
+        Implements :class:`dataflux.projection.SupportsProjection`. Flux must run
+        its op chain to produce each Sample (an op may consume the input), so this
+        is the generic "iterate, then drop unrequested fields" form — it cannot
+        skip input construction the way a leaf source (e.g. an image dataset that
+        reads only the label column) can. Lazy: a generator. ``fields`` is a
+        subset of ``{"input", "target", "metadata"}``.
+        """
+        want = frozenset(fields)
+        for sample in self:
+            yield Sample(
+                input=sample.input if "input" in want else None,
+                target=sample.target if "target" in want else None,
+                metadata=sample.metadata if "metadata" in want else {},
+            )

@@ -14,6 +14,15 @@ class HuggingFaceSource:
     """
     DataFlux Source for Hugging Face Datasets.
     Configurable mapping of dataset features to DataFlux Sample triplets.
+
+    Args:
+        path: HF dataset identifier — a Hub repo id (e.g. ``kitofrank/RFUAV``) or a local imagefolder path.
+        split: HF split name (``train`` / ``validation`` / ``test`` / etc.).
+        input_feature: Dataset feature column to map onto ``Sample.input``.
+        target_feature: Dataset feature column to map onto ``Sample.target``.
+        metadata_features: Feature columns to preserve on ``Sample.metadata`` (``None`` = none).
+        count: Optional cap on the number of samples yielded (useful for fast smoke runs).
+        name: Optional HF subset/config name (e.g. for multi-config datasets).
     """
 
     def __init__(

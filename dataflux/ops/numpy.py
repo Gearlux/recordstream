@@ -25,6 +25,11 @@ def resolve_expression(value: str, sample: Sample) -> str:
     Returns the substituted string verbatim — the caller is responsible for
     any further casting (e.g. ``float(...)`` for a numeric expression).
 
+    Args:
+        value: Expression string with ``{meta_key}`` and/or ``$ENV_VAR`` placeholders
+            (a plain literal returns unchanged).
+        sample: The Sample whose ``metadata`` supplies the ``{key}`` substitutions.
+
     Examples:
         ``"5.5"``                → ``"5.5"`` (no substitution)
         ``"{reference_snr_level}"`` → ``str(metadata["reference_snr_level"])``
@@ -64,6 +69,10 @@ class StandardizeOp:
     per-channel values that broadcasts over [C, H, W] format.
 
     Handles PIL images by converting to ndarray first.
+
+    Args:
+        mean: Mean to subtract — a single float (uniform) or a per-channel sequence broadcasting over [C, H, W].
+        std: Standard deviation to divide by — a single float (uniform) or a per-channel sequence.
     """
 
     ACCEPTS = SampleType(input=_NUMERIC_OR_PIL)
@@ -254,6 +263,10 @@ class ThresholdOp:
     * ``"$REF_SNR"`` / ``"-$REF_SNR"``    — environment-variable lookup
 
     Records the resolved threshold under ``metadata["threshold"]`` for traceability.
+
+    Args:
+        value: Threshold as a numeric literal or a string expression resolved against
+            ``sample.metadata`` / ``os.environ``.
     """
 
     ACCEPTS = SampleType(input=_NDARRAY)
@@ -300,6 +313,10 @@ class ConnectedComponentsOp:
       components merge.
 
     Requires ``scipy`` (install via ``pip install data-flux[vision]``).
+
+    Args:
+        min_area_bins: Minimum component area in bins; smaller connected regions are dropped (``>= 1``).
+        connectivity: Pixel neighborhood — ``4`` (orthogonal only) or ``8`` (orthogonal + diagonal).
     """
 
     ACCEPTS = SampleType(input=ArrayType(ndim=2, dtype="bool", frameworks={"numpy"}))
