@@ -58,7 +58,7 @@ def resolve_expression(value: str, sample: Sample) -> str:
     return _EXPR_PATTERN.sub(_repl, value)
 
 
-@configurable
+@configurable(category="op")
 class StandardizeOp:
     """
     Standardizes ndarray values with given mean and standard deviation.
@@ -123,7 +123,7 @@ def _require_ndarray(sample: Sample, op_name: str) -> np.ndarray:
     return arr
 
 
-@configurable
+@configurable(category="op")
 class ClipPercentilesOp:
     """Clip ``sample.input`` to ``[p_low, p_high]`` percentiles of finite values.
 
@@ -158,7 +158,7 @@ class ClipPercentilesOp:
         return sample._replace(input=np.clip(arr, lo, hi))
 
 
-@configurable
+@configurable(category="op")
 class RescaleOp:
     """Affine rescale ``sample.input`` from ``[in_min, in_max]`` to ``[out_min, out_max]``.
 
@@ -210,7 +210,7 @@ class RescaleOp:
         return sample._replace(input=out)
 
 
-@configurable
+@configurable(category="op")
 class ReplaceNonFiniteOp:
     """Replace ``inf`` / ``-inf`` / ``nan`` entries in ``sample.input``.
 
@@ -249,7 +249,7 @@ class ReplaceNonFiniteOp:
         return sample._replace(input=np.where(non_finite, repl, arr))
 
 
-@configurable
+@configurable(category="op")
 class ThresholdOp:
     """Threshold ``sample.input`` (ndarray) into a boolean mask: ``input > value``.
 
@@ -297,7 +297,7 @@ class ThresholdOp:
         return sample._replace(input=arr > threshold)
 
 
-@configurable
+@configurable(category="op")
 class ConnectedComponentsOp:
     """Label connected ``True`` regions of a boolean mask into bin-bbox tuples.
 

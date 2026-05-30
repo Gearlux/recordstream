@@ -10,16 +10,22 @@ pinned here as a regression gate.
 from confluid.registry import get_registry
 
 from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from dataflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
+from dataflux.ops.tee import Tee
 from dataflux.sources import DatasetSplit, HuggingFaceSource
 
 
 def test_engine_classes_tagged() -> None:
-    """``Flux`` / ``JointFlux`` / ``DatasetSplit`` are the generic, task-agnostic *engines*
-    (containers that compose sources + ops), NOT datasets. They are excluded from FluxStudio's
-    node palette (you wire Source -> Op instead) and are not offered in navigaitor dataset slots."""
+    """The generic, task-agnostic *engines* / composition primitives — NOT GUI-buildable nodes.
+
+    ``Flux`` / ``JointFlux`` / ``DatasetSplit`` compose sources + ops; ``FilterOp`` / ``WrappedOp``
+    wrap a raw Python callable. All carry ``category="engine"`` so FluxStudio's positive
+    op/source/dataset allowlist excludes them (you wire Source → Op instead)."""
     assert Flux.__confluid_category__ == "engine"
     assert JointFlux.__confluid_category__ == "engine"
     assert DatasetSplit.__confluid_category__ == "engine"
+    assert FilterOp.__confluid_category__ == "engine"
+    assert WrappedOp.__confluid_category__ == "engine"
 
 
 def test_source_classes_tagged() -> None:
@@ -28,9 +34,11 @@ def test_source_classes_tagged() -> None:
 
 
 def test_op_classes_tagged() -> None:
-    """``FilterOp`` / ``WrappedOp`` are pipeline ops."""
-    assert FilterOp.__confluid_category__ == "op"
-    assert WrappedOp.__confluid_category__ == "op"
+    """Concrete ``Sample → Sample`` ops carry ``category="op"`` (the FluxStudio op-node allowlist)."""
+    assert RescaleOp.__confluid_category__ == "op"
+    assert StandardizeOp.__confluid_category__ == "op"
+    assert ThresholdOp.__confluid_category__ == "op"
+    assert Tee.__confluid_category__ == "op"
 
 
 def test_categories_enumerable_via_registry() -> None:
@@ -40,6 +48,6 @@ def test_categories_enumerable_via_registry() -> None:
     not just the class attribute — has to carry the tag.
     """
     registry = get_registry()
-    assert {"Flux", "JointFlux", "DatasetSplit"} <= registry.list_classes(category="engine")
+    assert {"Flux", "JointFlux", "DatasetSplit", "FilterOp", "WrappedOp"} <= registry.list_classes(category="engine")
     assert {"HuggingFaceSource"} <= registry.list_classes(category="source")
-    assert {"FilterOp", "WrappedOp"} <= registry.list_classes(category="op")
+    assert {"RescaleOp", "StandardizeOp", "ThresholdOp", "Tee"} <= registry.list_classes(category="op")

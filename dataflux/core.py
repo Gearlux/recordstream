@@ -106,7 +106,7 @@ def _check_ops_materialized(ops: List[Any]) -> None:
             raise TypeError(_fluid_op_guidance(op, i))
 
 
-@configurable(category="op")
+@configurable(category="engine")
 class FilterOp:
     """Configurable filter operation.
 
@@ -121,7 +121,7 @@ class FilterOp:
         return s if self.p(s) else None
 
 
-@configurable(category="op")
+@configurable(category="engine")
 class WrappedOp:
     """Configurable transformation wrapper with smart mapping.
 

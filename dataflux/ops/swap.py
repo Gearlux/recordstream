@@ -9,7 +9,7 @@ from confluid import configurable
 from dataflux.sample import Sample
 
 
-@configurable
+@configurable(category="op")
 class SwapInputTargetOp:
     """Exchange ``sample.input`` ↔ ``sample.target``. Metadata unchanged."""
 
