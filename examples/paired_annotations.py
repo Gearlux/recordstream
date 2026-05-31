@@ -1,7 +1,7 @@
-"""PairedSource walkthrough: binary-first, annotation-first, broadcast, slicing.
+"""AnnotationJoinSource walkthrough: binary-first, annotation-first, broadcast, slicing.
 
 Runs standalone with no external data. Demonstrates the four scenarios the
-``PairedSource`` primitive is designed for, using a tiny in-memory primary
+``AnnotationJoinSource`` primitive is designed for, using a tiny in-memory data
 source and a dict-shaped annotation store.
 """
 
@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterator, Optional
 
 import confluid  # type: ignore[import-not-found]
 
-from dataflux.paired import PairedSource
+from dataflux.paired import AnnotationJoinSource
 from dataflux.sample import Sample
 
 
@@ -44,7 +44,7 @@ class WindowedSource:
 
 @confluid.configurable
 class DictStore:
-    """Mapping-shaped secondary for demos."""
+    """Mapping-shaped annotations for demos."""
 
     def __init__(self, records: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
         self.records = records or {}
@@ -69,8 +69,8 @@ def pack_key(sample: Sample) -> str:
     return str(sample.metadata["pack_id"])
 
 
-def resolve_by_window_key(key: str, primary: WindowedSource) -> Sample:
-    for item in primary:
+def resolve_by_window_key(key: str, data: WindowedSource) -> Sample:
+    for item in data:
         if window_key(item) == key:
             return item
     raise KeyError(key)
@@ -96,10 +96,10 @@ def slice_intervals(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str
 def scenario_a_binary_first() -> None:
     """Scenario A: iterate all samples; attach annotation when available."""
     print("\n=== Scenario A: binary-first, annotations optional ===")
-    primary = WindowedSource(n_windows=4)
+    data = WindowedSource(n_windows=4)
     store = DictStore({"demo:pack1:win00000100": {"label": "dji_mavic", "score": 0.92}})
 
-    paired = PairedSource(primary=primary, secondary=store, key_fn=window_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=window_key)
 
     for s in paired:
         flag = "ANNOTATED" if s.metadata["annotated"] else "        -"
@@ -110,7 +110,7 @@ def scenario_a_binary_first() -> None:
 def scenario_b_annotation_first() -> None:
     """Scenario B: only emit samples that have an annotation."""
     print("\n=== Scenario B: annotation-first, curated labeled subset ===")
-    primary = WindowedSource(n_windows=6)
+    data = WindowedSource(n_windows=6)
     store = DictStore(
         {
             "demo:pack1:win00000000": {"label": "wifi"},
@@ -118,20 +118,20 @@ def scenario_b_annotation_first() -> None:
         }
     )
 
-    paired = PairedSource(primary=primary, secondary=store, key_fn=window_key, policy="inner")
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=window_key, policy="inner")
 
     for s in paired:
         print(f"  key={s.metadata['annotation_key']:<30}  label={s.metadata['label']!r}")
-    print(f"  -> {len(list(paired))} samples (out of {len(primary)} in primary)")
+    print(f"  -> {len(list(paired))} samples (out of {len(data)} in data)")
 
 
 def scenario_c1_broadcast() -> None:
     """Scenario C1: one annotation per pack, broadcast to every window."""
     print("\n=== Scenario C1: pack-level broadcast ===")
-    primary = WindowedSource(n_windows=4)
+    data = WindowedSource(n_windows=4)
     store = DictStore({"demo:pack1": {"drone": "DJI Mavic 3 Pro", "operator": "alice"}})
 
-    paired = PairedSource(primary=primary, secondary=store, key_fn=pack_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=pack_key)
 
     for s in paired:
         print(
@@ -143,7 +143,7 @@ def scenario_c1_broadcast() -> None:
 def scenario_c2_slicing() -> None:
     """Scenario C2: pack-level time-ranged annotation, sliced per window."""
     print("\n=== Scenario C2: pack-level time intervals, sliced per window ===")
-    primary = WindowedSource(n_windows=6, samples_per_window=100)
+    data = WindowedSource(n_windows=6, samples_per_window=100)
     # Samplerate is 1 MHz and windows are 100 samples = 100 us each, so:
     # win0 = [0, 100us], win1 = [100us, 200us], ..., win5 = [500us, 600us].
     # An interval at [150us, 470us] overlaps windows 1, 2, 3, 4.
@@ -156,9 +156,9 @@ def scenario_c2_slicing() -> None:
         }
     )
 
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=pack_key,
         extract_fn=slice_intervals,
     )
@@ -176,9 +176,9 @@ def scenario_c2_slicing() -> None:
 
 
 def scenario_d_right_driven() -> None:
-    """Scenario D: iterate the annotation store, resolve primary on demand."""
-    print("\n=== Scenario D: right-driven (sparse labels, large primary) ===")
-    primary = WindowedSource(n_windows=1000)  # pretend this is huge
+    """Scenario D: iterate the annotation store, resolve data on demand."""
+    print("\n=== Scenario D: right-driven (sparse labels, large data) ===")
+    data = WindowedSource(n_windows=1000)  # pretend this is huge
     store = DictStore(
         {
             "demo:pack1:win00000000": {"label": "wifi"},
@@ -187,12 +187,12 @@ def scenario_d_right_driven() -> None:
         }
     )
 
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=window_key,
         policy="right_driven",
-        primary_resolver=resolve_by_window_key,
+        data_resolver=resolve_by_window_key,
     )
 
     for s in paired:
@@ -202,9 +202,9 @@ def scenario_d_right_driven() -> None:
 def scenario_e_confluid_roundtrip() -> None:
     """Show that the pipeline survives YAML serialization via Confluid."""
     print("\n=== Scenario E: Confluid YAML round-trip ===")
-    primary = WindowedSource(n_windows=3)
+    data = WindowedSource(n_windows=3)
     store = DictStore({"demo:pack1:win00000000": {"label": "wifi"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=window_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=window_key)
 
     yaml_state = confluid.dump(paired)
     print(yaml_state)

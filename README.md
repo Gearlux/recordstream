@@ -29,7 +29,7 @@ Part of the **Modular Quartet**: `LogFlow`, `Confluid`, `Liquify`, and `DataFlux
 
 ### Metadata & Discovery
 - **Passive Introspection:** Automatically discover available tools and ops for serialized manifests.
-- **Discovery Categories:** `@configurable` classes are tagged with a confluid `category` (`Flux`/`JointFlux` → `dataset`, `FilterOp`/`WrappedOp` → `op`) so tools like navigaitor's `list_configurable_classes(category=...)` enumerate them by kind.
+- **Discovery Categories:** `@configurable` classes are tagged with a confluid `category` (sources `HuggingFaceSource`/`DatasetSplit` → `source`, engines `Flux`/`JointFlux` → `engine`, concrete `Sample→Sample` ops → `op`; `FilterOp`/`WrappedOp` are deliberately UNcategorised) so tools like navigaitor's `list_configurable_classes(category=...)` enumerate them by kind.
 - **Serialization Symmetry:** Ensure full-pipeline states are serializable and reconstructible via Confluid.
 
 ## 🛠 Quick Start
@@ -68,6 +68,13 @@ ArrayType.parse("3 h w", dtype="float32", framework="torch")  # jaxtyping-style 
 ArrayType.image("CHW", channels=3, dtype="float32", framework="torch")  # an image convenience
 ```
 
+`dtype`, `framework`/`frameworks`, and the image `layout` are **closed `Literal`s**, not bare strings — a typo is a type error and a UI / connection-validator enumerates the choices via `typing.get_args(...)`:
+
+- `Dtype` — concrete names (`"float32"`, `"int64"`, …); `DtypeFamily` — relaxed families (`"floating"`, `"numeric"`, …); `DtypeSpec = Dtype | DtypeFamily` is the `dtype` field type.
+- `Framework = Literal["numpy", "torch", "tensorflow"]`, `ImageLayout = Literal["CHW", "HWC"]`.
+
+Authored dtypes must be canonical names; aliases / casing (`"double"`, `"FLOAT32"`) and exotic platform dtypes (`float128`) are runtime-only conveniences normalized by `canonical_dtype` — the single boundary where arbitrary input crosses into the typed domain.
+
 **Declare an op's contract** with the class attributes `ACCEPTS` / `PRODUCES` (each a `SampleType`; both default to `Any`, so annotating is optional and backward-compatible). No base class — transforms stay plain callables:
 
 ```python
@@ -88,6 +95,7 @@ adds an opt-in protocol plus lazy helpers:
 
 ```python
 from dataflux import project, iter_targets, num_classes
+from dataflux import ProjectionField  # Literal["input", "target", "metadata"]
 
 # A source MAY implement SupportsProjection (`project(fields)`) to skip building
 # unrequested fields — e.g. an image dataset reads only the label column for a
@@ -99,10 +107,45 @@ labels = list(iter_targets(my_source))     # lazy
 n = num_classes(my_source)                 # max(class_id) + 1 — always walks
 ```
 
+The field set is a **closed `Literal`**, `ProjectionField`, not a bare `str` —
+so a typo is a type error, and a UI / form-spec / MCP schema enumerates the
+choices straight from the annotation instead of hard-coding a parallel list:
+
+```python
+from typing import get_args
+get_args(ProjectionField)        # ('input', 'target', 'metadata')
+```
+
 Sources that don't implement `SupportsProjection` still work via a correct
 full-iteration fallback (just without the skip-decode speedup). `num_classes` is
 a free function, not a `Flux` method: integer class-id semantics are
 classification-specific, so the task-agnostic engine doesn't advertise it.
+
+## 🖼 Image Conversion (`dataflux.ops.image`)
+
+The single, modality-agnostic "any value → image" layer — generic so every
+project (waivefront spectrograms, any dataset preview, FluxStudio) reuses one
+implementation. Domain-specific rendering (overlays, signal plots) stays in the
+consuming package.
+
+```python
+from dataflux.ops.image import ConvertToImageOp, value_to_image
+
+# Op: sample.input (2-D map / CHW tensor / PIL / bool mask) -> PIL image.
+op = ConvertToImageOp(
+    colormap="viridis",   # closed `Colormap` Literal -> dropdown in FluxStudio, enum in navigaitor
+    width=1024, height=512,  # exact resize when both > 0; else bound longest side by max_size
+    flip_vertical=True,      # e.g. a spectrogram stores row 0 = f_min but display wants f_max on top
+)
+sample = op(sample)          # also publishes image_width_px / image_height_px to metadata
+
+# Library function for ad-hoc previews (PIL / tensor / ndarray / mask -> (H, W, 3) uint8):
+rgb = value_to_image(some_value, colormap="magma", max_size=512)
+```
+
+`Colormap` / `COLORMAPS` / `value_to_image` / `sample_to_image` are re-exported
+from `waivefront.visualizers` for backward compatibility. Pillow is a runtime
+dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
 
 ## 📦 Storage Integration
 
@@ -119,53 +162,110 @@ Flux.from_source(HDF5Source("input.h5")) \
     .to_sink(ZarrGroupSink("output.zarr"))
 ```
 
-## ✂️ Train / Val Splitting
+### Sinks and their matching sources
 
-`DatasetSplit` carves a subset view out of any indexable source (implementing `__len__` and `__getitem__`). It supports three modes:
+Every sink has a source that reads its layout back into `Sample` triplets:
 
-1. **Fraction mode** — pick a reproducible train/val split from a single source:
+| Backend | Sink | Source | Round-trips |
+|---|---|---|---|
+| HDF5 (sequential) | `HDF5Sink` | `HDF5Source` | input + target + metadata |
+| Zarr group (one group / sample) | `ZarrGroupSink` | `ZarrGroupSource` | input + target + metadata |
+| Zarr batch (one stacked array) | `ZarrBatchSink` | `ZarrBatchSource` | input only (uniform shape) |
+| Directory (one dir / sample) | `DirectorySink` | — | — |
+
+```python
+from dataflux.storage.zarr import ZarrGroupSink, ZarrGroupSource
+
+Flux(samples).to_sink(ZarrGroupSink("ds.zarr", overwrite=True))
+for sample in ZarrGroupSource("ds.zarr"):   # input/target as before, metadata from .zattrs
+    ...
+```
+
+### Array-valued metadata (e.g. segmentation masks)
+
+`HDF5Sink` stores scalar/string metadata as HDF5 **attributes**, but HDF5 caps
+attribute size — a large array (a segmentation mask, a per-sample weight map) put
+in `Sample.metadata` would overflow that limit. So **array-valued metadata
+(`np.ndarray` / `torch.Tensor`) is written as its own dataset** under a per-sample
+group `{prefix}_meta/<key>`, and `HDF5Source` merges it back into `Sample.metadata`
+on read. This is fully backward-compatible: files written before this layout (no
+`{prefix}_meta` group) read exactly as before.
+
+```python
+sample = Sample(input=iq, target=label, metadata={"mask": mask_2d, "snr": 12.0})
+Flux([sample]).to_sink(HDF5Sink("ds.h5", overwrite=True))
+loaded = next(iter(HDF5Source("ds.h5")))
+loaded.metadata["mask"]   # the full array, byte-exact (not a truncated repr)
+loaded.metadata["snr"]    # scalar, via attributes as before
+```
+
+## ✂️ Train / Val / Test Splitting
+
+`DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields `Sample`s and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.
+
+**Property API (preferred).** Configure **one** `DatasetSplit` with a `seed` and the held-out fraction(s), then read the three cached views off it — `split.train` / `split.val` / `split.test`:
+
+```python
+from dataflux import DatasetSplit
+split = DatasetSplit(source=src, val_fraction=0.1, test_fraction=0.1, seed=42)
+split.train   # ≈80% — the remainder      split.val   # ≈10%      split.test  # ≈10%
+```
+
+The views are disjoint and complementary, computed once over a single deterministic shuffle (cached), so the underlying source is consumed once. In Confluid YAML they're reachable by **attribute reference** — `!ref:my_split.train` / `.val` / `.test`. All three refs resolve to the *same* `DatasetSplit` instance, so the upstream source is loaded **exactly once**:
+
+```yaml
+hf_train: !class:dataflux.sources.HuggingFaceSource()
+  path: mnist
+  split: train
+
+my_split: !class:dataflux.sources.DatasetSplit()
+  source: !ref:hf_train
+  val_fraction: 0.1
+  test_fraction: 0.1
+  seed: 42
+
+train_set: !class:dataflux.core.Flux() { source: !ref:my_split.train }
+val_set:   !class:dataflux.core.Flux() { source: !ref:my_split.val }
+test_set:  !class:dataflux.core.Flux() { source: !ref:my_split.test }
+```
+
+Omit `test_fraction` for a plain two-way train/val split; omit both fractions and `train` is the whole source (`val`/`test` empty).
+
+**Select-one API.** Passing `split` makes the `DatasetSplit` *itself* iterate that one view (`split=None` ⇒ `train`), so it's directly usable as a single `source:`. `split` is the closed `Literal["train", "val", "test"]`, exported as `dataflux.SplitName`.
+
+```yaml
+val_set: !class:dataflux.sources.DatasetSplit()
+  source: !ref:hf_train
+  split: val
+  val_fraction: 0.1
+  seed: 42
+```
+
+### Range & concatenation sources
+
+- **`RangeSource(source, start, end)`** — a contiguous index slice `[start:end)` over a source (negatives count from the end; clamped). The plain-slice counterpart to `DatasetSplit`.
 
     ```yaml
-    hf_train: !class:dataflux.sources.HuggingFaceSource()
-      path: mnist
-      split: train
-
-    train_set: !class:dataflux.sources.DatasetSplit()
-      source: !ref:hf_train
-      split: train
-      val_fraction: 0.1
-      seed: 42
-
-    val_set: !class:dataflux.sources.DatasetSplit()
-      source: !ref:hf_train
-      split: val
-      val_fraction: 0.1
-      seed: 42
-    ```
-
-    Same seed + same source length ⇒ deterministic, disjoint, complementary views.
-
-2. **Range mode** — explicit slice:
-
-    ```yaml
-    first_half: !class:dataflux.sources.DatasetSplit()
+    first_half: !class:dataflux.sources.RangeSource()
       source: !ref:hf_train
       start: 0
       end: 5000
     ```
 
-3. **HuggingFace native slicing** (alternative, no `DatasetSplit` needed):
+- **`ConcatSource(sources)`** — joins multiple indexable sources into one longer indexable source (the indexable counterpart to `JointFlux`, which is iteration-only). Because it's indexable, a `ConcatSource` can itself be wrapped by `DatasetSplit` / `RangeSource`.
 
     ```yaml
-    train_src: !class:dataflux.sources.HuggingFaceSource()
-      path: mnist
-      split: "train[:90%]"
-    val_src: !class:dataflux.sources.HuggingFaceSource()
-      path: mnist
-      split: "train[90%:]"
+    combined: !class:dataflux.sources.ConcatSource()
+      sources:
+        - !ref:train_main
+        - !ref:extra_shard
     ```
 
-> **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared by both splits. Use `!clone:` when you want an independent deep copy instead.
+**HuggingFace native slicing** (alternative, no DataFlux split needed): `split: "train[:90%]"` / `"train[90%:]"` on two `HuggingFaceSource`s.
+
+> **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key (including attribute refs like `!ref:my_split.train`), so a single `HuggingFaceSource` is loaded once and shared. Use `!clone:` when you want an independent deep copy instead.
+
+> **Lazy & zero-arg construction** — `HuggingFaceSource` follows the workspace lazy-init convention: the constructor does no work (no network), so `HuggingFaceSource()` is valid and building one is free. The dataset is downloaded only on first access to the read-only `.dataset` property (cached thereafter; reset `_dataset` to reload), and `.resolved_metadata_features` (the `"*"` expansion) is derived lazily from the loaded columns. `path` is therefore optional at construction and validated lazily — accessing `.dataset` with an empty `path` raises a clear `ValueError`.
 
 ## 🔁 Reattach an ops-only YAML (`Flux.from_ops_yaml`)
 
@@ -182,43 +282,43 @@ The helper **materializes** the deferred `!class:` markers before attaching (via
 
 ## 🔗 Paired Join (Binary ↔ Annotations)
 
-`PairedSource` joins a primary `DataSource` (e.g. raw binary samples) with a secondary mapping-shaped annotation store via a key function. It generalises the common "I have data, and I have a sidecar file of annotations that covers some of it" pattern. Three join policies cover the scenarios we actually see in ML research:
+`AnnotationJoinSource` joins a data `DataSource` (e.g. raw binary samples) with a sidecar mapping-shaped annotation store via a key function. It generalises the common "I have data, and I have a sidecar file of annotations that covers some of it" pattern — typically re-attaching a LabelStudio export back onto the raw samples for training. Three join policies cover the scenarios we actually see in ML research:
 
 | Policy | Iterates | Use case |
 |---|---|---|
-| `left_outer` (default) | Every primary sample; attaches annotation when the key matches | Process everything, use labels where available |
-| `inner` | Only primary samples whose key is in the store | Train/evaluate on the labeled subset |
-| `right_driven` | Every key in the annotation store; resolves the primary sample via `primary_resolver(key, primary)` | Very sparse labels where full-primary enumeration is costly |
+| `left_outer` (default) | Every data sample; attaches annotation when the key matches | Process everything, use labels where available |
+| `inner` | Only data samples whose key is in the store | Train/evaluate on the labeled subset |
+| `right_driven` | Every key in the annotation store; resolves the data sample via `data_resolver(key, data)` | Very sparse labels where full-data enumeration is costly |
 
 ```yaml
-primary: !class:waivefront.rfuav.data.source.RFUAVSource()
+data: !class:waivefront.rfuav.data.source.RFUAVSource()
   root: /Volumes/Data/RFUAV
   window_samples: 1000000
 
 labels: !class:annotaide.store.JSONFileAnnotationStore()
   path: /Volumes/Data/RFUAV-labels
 
-paired: !class:dataflux.paired.PairedSource()
-  primary: !ref:primary
-  secondary: !ref:labels
+paired: !class:dataflux.paired.AnnotationJoinSource()
+  data: !ref:data
+  annotations: !ref:labels
   key_fn: "waivefront.rfuav.keys:sample_window_key"
   policy: left_outer
 ```
 
-Annotation records are **flattened into `Sample.metadata`**, so a detection record `{bboxes, labels, scores}` shows up as three independent metadata keys. Two `metadata` keys are always populated: `annotated: bool` and `annotation_key: str`. Optional `prefix` and `store_full_under` parameters shape the layout.
+Annotation records are **flattened into `Sample.metadata`**, so a detection record `{bboxes, labels, scores}` shows up as three independent metadata keys. Two `metadata` keys are always populated: `annotated: bool` and `annotation_key: str`. Optional `prefix` and `store_full_under` parameters shape the layout. The parameters are typed, not `Any`: `data` is an `Iterable[Any]` (any source), `annotations` is an `AnnotationStore` (a read-mapping `key → record` — a `dict` or annotaide's `JSONFileAnnotationStore` both qualify), and `policy` is a fixed `Literal["left_outer", "inner", "right_driven"]`. Both the store shape and the policy are validated at construction.
 
 ### Coarser-granularity keys (broadcast and slicing)
 
-`key_fn` is free to return a coarser key than the sample granularity. When multiple primary samples map to the same key, they all look up the same record:
+`key_fn` is free to return a coarser key than the sample granularity. When multiple data samples map to the same key, they all look up the same record:
 
 - **Without `extract_fn`** — the record is broadcast identically into every matching sample's metadata (e.g. a scalar pack-level class label inherited by every window of that pack).
 - **With `extract_fn`** — the record is projected per sample. The callable is invoked as `extract_fn(record, sample) -> dict | None`; returning `None` marks the sample unannotated (and filters it under `policy="inner"`). Use this when a pack-level annotation carries time-ranged content that must be trimmed to each window's bounds.
 
-Multi-granularity joins (e.g. pack-level + window-level annotations merged together) compose by chaining `PairedSource` instances — the output of one is itself a `DataSource` that the next can consume.
+Multi-granularity joins (e.g. pack-level + window-level annotations merged together) compose by chaining `AnnotationJoinSource` instances — the output of one is itself a `DataSource` that the next can consume.
 
 ### Callable resolution
 
-`key_fn`, `extract_fn`, and `primary_resolver` all accept either a callable **or** a `"module:function"` string path resolved through `dataflux.discovery.resolve_callable`. The string form is what survives YAML round-trip via Confluid.
+`key_fn`, `extract_fn`, and `data_resolver` all accept either a callable **or** a `"module:function"` string path resolved through `dataflux.discovery.resolve_callable`. The string form is what survives YAML round-trip via Confluid.
 
 See [`examples/paired_annotations.py`](examples/paired_annotations.py) for a runnable end-to-end walkthrough of all four scenarios.
 
@@ -226,13 +326,18 @@ See [`examples/paired_annotations.py`](examples/paired_annotations.py) for a run
 
 DataFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines.
 
-### Intake (Data Discovery & Catalogs)
--   **Use Intake for:** Data discovery, remote storage abstraction (S3/GCS), and sharing "canned" datasets via YAML catalogs.
--   **Integration:** Wrap an Intake driver in a DataFlux `DataSource` to gain functional `.map()`, `.filter()`, and `.parallel()` capabilities on cataloged data.
-
 ### Hugging Face (Community & Standardized Datasets)
 -   **Use Hugging Face for:** Accessing community datasets and leveraging the `datasets` library for efficient Arrow/Parquet loading.
 -   **Integration:** Use DataFlux to transform `datasets.Dataset` objects into standardized `Sample` triplets, ensuring metadata traceability that often goes missing in simple dictionary-based records.
+-   **`metadata_features` (which columns ride along on `Sample.metadata`):** `None` / `[]` keep none (the default); an explicit list keeps exactly those columns; and the sentinel **`"*"`** (or `["*"]`) keeps **every column except `input_feature` / `target_feature`** — the full-traceability option, resolved against the dataset's real columns at load. It stays opt-in so existing configs are unchanged.
+
+```yaml
+hf_train: !class:dataflux.sources.HuggingFaceSource()
+  path: mnist
+  input_feature: image
+  target_feature: label
+  metadata_features: ["*"]   # keep every other column as metadata (here: none extra beyond hf_path/hf_split)
+```
 
 ### DataFlux (The Functional Engine)
 -   **Use DataFlux for:** The "inner loop" of your experiment. When you need high-performance multiprocess streaming, per-sample metadata preservation, and 100% reproducible pipelines via **Confluid** serialization.

@@ -612,56 +612,125 @@ class TestResolveExpression:
 
 
 class TestThresholdOp:
-    def test_numeric_value(self) -> None:
+    def test_numeric_low_level(self) -> None:
         arr = np.array([0.0, 1.0, 2.0, 3.0])
-        out = np_ops.ThresholdOp(value=1.5)(Sample(input=arr))
+        out = np_ops.ThresholdOp(low_level=1.5)(Sample(input=arr, metadata={}))
         np.testing.assert_array_equal(out.input, [False, False, True, True])
-        assert out.metadata["threshold"] == 1.5
+        assert out.metadata["threshold_low"] == 1.5
+        assert "threshold_high" not in out.metadata
+
+    def test_numeric_high_level(self) -> None:
+        arr = np.array([0.0, 1.0, 2.0, 3.0])
+        out = np_ops.ThresholdOp(high_level=1.5)(Sample(input=arr, metadata={}))
+        np.testing.assert_array_equal(out.input, [True, True, False, False])
+        assert out.metadata["threshold_high"] == 1.5
+        assert "threshold_low" not in out.metadata
+
+    def test_band_low_and_high(self) -> None:
+        arr = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        out = np_ops.ThresholdOp(low_level=1.0, high_level=3.0)(Sample(input=arr, metadata={}))
+        # strictly between 1.0 and 3.0 (default open interval: > and <)
+        np.testing.assert_array_equal(out.input, [False, False, True, False, False])
+        assert out.metadata["threshold_low"] == 1.0
+        assert out.metadata["threshold_high"] == 3.0
+
+    def test_low_level_inclusive(self) -> None:
+        arr = np.array([0.0, 1.0, 2.0])
+        # ">" excludes the boundary; ">=" includes it.
+        strict = np_ops.ThresholdOp(low_level=1.0)(Sample(input=arr, metadata={}))
+        np.testing.assert_array_equal(strict.input, [False, False, True])
+        inclusive = np_ops.ThresholdOp(low_level=1.0, low_op=">=")(Sample(input=arr, metadata={}))
+        np.testing.assert_array_equal(inclusive.input, [False, True, True])
+
+    def test_high_level_inclusive(self) -> None:
+        arr = np.array([1.0, 2.0, 3.0])
+        # "<" excludes the boundary; "<=" includes it.
+        strict = np_ops.ThresholdOp(high_level=2.0)(Sample(input=arr, metadata={}))
+        np.testing.assert_array_equal(strict.input, [True, False, False])
+        inclusive = np_ops.ThresholdOp(high_level=2.0, high_op="<=")(Sample(input=arr, metadata={}))
+        np.testing.assert_array_equal(inclusive.input, [True, True, False])
+
+    def test_closed_band(self) -> None:
+        arr = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+        out = np_ops.ThresholdOp(low_level=1.0, high_level=3.0, low_op=">=", high_op="<=")(
+            Sample(input=arr, metadata={})
+        )
+        # closed interval [1.0, 3.0]: both boundaries kept
+        np.testing.assert_array_equal(out.input, [False, True, True, True, False])
+
+    def test_invalid_operator_rejected(self) -> None:
+        # ``low_op`` is a closed ``Literal[">", ">="]`` — confluid's pydantic
+        # validation rejects anything else before the body runs.
+        from pydantic import ValidationError
+
+        with pytest.raises((ValueError, ValidationError)):
+            np_ops.ThresholdOp(low_level=1.0, low_op=">>")  # type: ignore[arg-type]
 
     def test_string_numeric(self) -> None:
         arr = np.array([0.0, 1.0, 2.0])
-        out = np_ops.ThresholdOp(value="1.5")(Sample(input=arr))
+        out = np_ops.ThresholdOp(low_level="1.5")(Sample(input=arr))
         np.testing.assert_array_equal(out.input, [False, False, True])
 
     def test_metadata_lookup(self) -> None:
         arr = np.array([-50.0, -30.0, -10.0])
         sample = Sample(input=arr, target=None, metadata={"reference_snr_level": -25.0})
-        out = np_ops.ThresholdOp(value="{reference_snr_level}")(sample)
+        out = np_ops.ThresholdOp(low_level="{reference_snr_level}")(sample)
         np.testing.assert_array_equal(out.input, [False, False, True])
-        assert out.metadata["threshold"] == -25.0
+        assert out.metadata["threshold_low"] == -25.0
 
     def test_metadata_lookup_with_negation(self) -> None:
         arr = np.array([-50.0, -30.0, -10.0])
         sample = Sample(input=arr, target=None, metadata={"reference_snr_level": 30.0})
-        out = np_ops.ThresholdOp(value="-{reference_snr_level}")(sample)
+        out = np_ops.ThresholdOp(low_level="-{reference_snr_level}")(sample)
         np.testing.assert_array_equal(out.input, [False, False, True])
-        assert out.metadata["threshold"] == -30.0
+        assert out.metadata["threshold_low"] == -30.0
 
     def test_env_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATAFLUX_TEST_THRESHOLD", "1.0")
         arr = np.array([0.0, 1.0, 2.0])
-        out = np_ops.ThresholdOp(value="$DATAFLUX_TEST_THRESHOLD")(Sample(input=arr))
+        out = np_ops.ThresholdOp(low_level="$DATAFLUX_TEST_THRESHOLD")(Sample(input=arr))
         np.testing.assert_array_equal(out.input, [False, False, True])
+
+    def test_high_level_expression(self) -> None:
+        arr = np.array([-50.0, -30.0, -10.0])
+        sample = Sample(input=arr, target=None, metadata={"ceiling": -20.0})
+        out = np_ops.ThresholdOp(high_level="{ceiling}")(sample)
+        np.testing.assert_array_equal(out.input, [True, True, False])
+        assert out.metadata["threshold_high"] == -20.0
+
+    def test_raises_when_no_bounds(self) -> None:
+        with pytest.raises(ValueError, match="at least one of 'low_level' / 'high_level'"):
+            np_ops.ThresholdOp()
 
     def test_raises_on_non_ndarray(self) -> None:
         with pytest.raises(TypeError, match="ThresholdOp expects an np.ndarray"):
-            np_ops.ThresholdOp(value=0.0)(Sample(input=[1.0, 2.0]))
+            np_ops.ThresholdOp(low_level=0.0)(Sample(input=[1.0, 2.0]))
 
     def test_raises_on_non_numeric_resolution(self) -> None:
         sample = Sample(input=np.array([0.0]), target=None, metadata={"drone": "yz"})
         with pytest.raises(ValueError, match="not a number"):
-            np_ops.ThresholdOp(value="{drone}")(sample)
+            np_ops.ThresholdOp(low_level="{drone}")(sample)
 
     def test_raises_on_bad_value_type(self) -> None:
         # Confluid's ``@configurable`` validates kwargs against the
-        # auto-generated pydantic schema before the body runs. ``value`` is
-        # typed as ``float | int | str``, so a list is rejected at the
+        # auto-generated pydantic schema before the body runs. ``low_level`` is
+        # typed as ``float | int | str | None``, so a list is rejected at the
         # validation layer first; the body's hand-rolled ``TypeError``
         # remains as a safety net.
         from pydantic import ValidationError
 
         with pytest.raises((TypeError, ValidationError)):
-            np_ops.ThresholdOp(value=[1, 2])(Sample(input=np.array([0.0])))  # type: ignore[arg-type]
+            np_ops.ThresholdOp(low_level=[1, 2])(Sample(input=np.array([0.0])))  # type: ignore[arg-type]
+
+
+def test_threshold_comparison_maps_match_literals() -> None:
+    # The operator-dispatch dicts must stay in lockstep with their closed
+    # Literals (one source of truth) — a new operator added to the Literal but
+    # not the map (or vice versa) is a bug this pins.
+    from typing import get_args
+
+    assert set(np_ops._LOW_COMPARISONS) == set(get_args(np_ops.LowComparison))
+    assert set(np_ops._HIGH_COMPARISONS) == set(get_args(np_ops.HighComparison))
 
 
 # ---------------------------------------------------------------------------

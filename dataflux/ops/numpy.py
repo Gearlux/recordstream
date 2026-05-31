@@ -1,6 +1,7 @@
+import operator
 import os
 import re
-from typing import List, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from confluid import configurable
@@ -58,7 +59,7 @@ def resolve_expression(value: str, sample: Sample) -> str:
     return _EXPR_PATTERN.sub(_repl, value)
 
 
-@configurable(category="op")
+@configurable(category="op", group="numpy")
 class StandardizeOp:
     """
     Standardizes ndarray values with given mean and standard deviation.
@@ -123,7 +124,7 @@ def _require_ndarray(sample: Sample, op_name: str) -> np.ndarray:
     return arr
 
 
-@configurable(category="op")
+@configurable(category="op", group="numpy")
 class ClipPercentilesOp:
     """Clip ``sample.input`` to ``[p_low, p_high]`` percentiles of finite values.
 
@@ -158,7 +159,7 @@ class ClipPercentilesOp:
         return sample._replace(input=np.clip(arr, lo, hi))
 
 
-@configurable(category="op")
+@configurable(category="op", group="numpy")
 class RescaleOp:
     """Affine rescale ``sample.input`` from ``[in_min, in_max]`` to ``[out_min, out_max]``.
 
@@ -210,7 +211,7 @@ class RescaleOp:
         return sample._replace(input=out)
 
 
-@configurable(category="op")
+@configurable(category="op", group="numpy")
 class ReplaceNonFiniteOp:
     """Replace ``inf`` / ``-inf`` / ``nan`` entries in ``sample.input``.
 
@@ -249,55 +250,110 @@ class ReplaceNonFiniteOp:
         return sample._replace(input=np.where(non_finite, repl, arr))
 
 
-@configurable(category="op")
-class ThresholdOp:
-    """Threshold ``sample.input`` (ndarray) into a boolean mask: ``input > value``.
+# ThresholdOp comparison selectors. Closed ``Literal``s (workspace "prefer closed
+# Literals over bare strings" mandate) so FluxStudio / navigaitor render the choice
+# as a dropdown and the allowed operators stay machine-introspectable via
+# ``typing.get_args(...)``. Two distinct types because the lower bound only sensibly
+# uses ``>`` / ``>=`` and the upper bound only ``<`` / ``<=``.
+LowComparison = Literal[">", ">="]
+HighComparison = Literal["<", "<="]
 
-    ``value`` is either a numeric literal or a string expression resolved via
+# Operator dispatch. The dict keys are the single runtime source of truth's
+# consumers — ``tests/test_ops.py`` pins ``set(_LOW_COMPARISONS) == get_args(LowComparison)``
+# (and likewise for high) so the map can never drift from the Literal.
+_LOW_COMPARISONS: Dict[str, Callable[[Any, float], Any]] = {">": operator.gt, ">=": operator.ge}
+_HIGH_COMPARISONS: Dict[str, Callable[[Any, float], Any]] = {"<": operator.lt, "<=": operator.le}
+
+
+@configurable(category="op", group="numpy")
+class ThresholdOp:
+    """Threshold ``sample.input`` (ndarray) into a boolean mask using one or both bounds.
+
+    Which mask is produced depends on *which* bounds are set (presence-driven), and the
+    comparison applied for each is selected by ``low_op`` / ``high_op``:
+
+    * only ``low_level``  → ``input <low_op> low_level``    (values above the floor)
+    * only ``high_level`` → ``input <high_op> high_level``  (values below the ceiling)
+    * both                → both conditions AND-ed together (band-pass)
+
+    ``low_op`` is ``">"`` (strict, the default) or ``">="`` (inclusive); ``high_op`` is
+    ``"<"`` (strict, the default) or ``"<="`` (inclusive). So the defaults yield the OPEN
+    interval ``low_level < input < high_level``, while ``low_op=">="`` + ``high_op="<="``
+    yield the CLOSED interval ``low_level <= input <= high_level``.
+
+    At least one of ``low_level`` / ``high_level`` MUST be provided; passing
+    neither raises ``ValueError`` at construction.
+
+    Each bound is either a numeric literal or a string expression resolved via
     :func:`resolve_expression` against ``sample.metadata`` and ``os.environ``:
 
-    * ``5.5`` or ``"5.5"``                — fixed threshold
+    * ``5.5`` or ``"5.5"``                — fixed bound
     * ``"{reference_snr_level}"``         — looks up ``metadata["reference_snr_level"]``
     * ``"-{reference_snr_level}"``        — negated lookup (the leading ``-`` is
                                              carried through ``float(...)`` after substitution)
     * ``"$REF_SNR"`` / ``"-$REF_SNR"``    — environment-variable lookup
 
-    Records the resolved threshold under ``metadata["threshold"]`` for traceability.
+    Records each resolved bound that was applied under ``metadata["threshold_low"]``
+    / ``metadata["threshold_high"]`` for traceability.
 
     Args:
-        value: Threshold as a numeric literal or a string expression resolved against
-            ``sample.metadata`` / ``os.environ``.
+        low_level: Lower bound (numeric literal or expression) compared with ``low_op`` when set;
+            ``None`` disables the lower bound.
+        high_level: Upper bound (numeric literal or expression) compared with ``high_op`` when set;
+            ``None`` disables the upper bound.
+        low_op: Lower-bound comparison — ``">"`` (strict, default) or ``">="`` (inclusive).
+        high_op: Upper-bound comparison — ``"<"`` (strict, default) or ``"<="`` (inclusive).
     """
 
     ACCEPTS = SampleType(input=_NDARRAY)
     PRODUCES = SampleType(input=ArrayType(dtype="bool", frameworks={"numpy"}))
 
-    def __init__(self, value: Union[float, int, str] = 0.0) -> None:
-        self.value = value
+    def __init__(
+        self,
+        low_level: Optional[Union[float, int, str]] = None,
+        high_level: Optional[Union[float, int, str]] = None,
+        low_op: LowComparison = ">",
+        high_op: HighComparison = "<",
+    ) -> None:
+        if low_level is None and high_level is None:
+            raise ValueError("ThresholdOp requires at least one of 'low_level' / 'high_level'")
+        self.low_level = low_level
+        self.high_level = high_level
+        self.low_op = low_op
+        self.high_op = high_op
 
-    def _resolve(self, sample: Sample) -> float:
-        if isinstance(self.value, (int, float)):
-            return float(self.value)
-        if not isinstance(self.value, str):
-            raise TypeError(f"ThresholdOp.value must be a number or expression string; got {type(self.value).__name__}")
-        resolved = resolve_expression(self.value, sample)
+    def _resolve(self, bound: Union[float, int, str], sample: Sample) -> float:
+        if isinstance(bound, (int, float)):
+            return float(bound)
+        if not isinstance(bound, str):
+            raise TypeError(f"ThresholdOp bounds must be a number or expression string; got {type(bound).__name__}")
+        resolved = resolve_expression(bound, sample)
         try:
             return float(resolved)
         except ValueError as exc:
             raise ValueError(
-                f"ThresholdOp: expression {self.value!r} resolved to {resolved!r}, " f"which is not a number"
+                f"ThresholdOp: expression {bound!r} resolved to {resolved!r}, " f"which is not a number"
             ) from exc
 
     def __call__(self, sample: Sample) -> Sample:
         arr = sample.input
         if not isinstance(arr, np.ndarray):
             raise TypeError(f"ThresholdOp expects an np.ndarray on sample.input, got {type(arr).__name__}")
-        threshold = self._resolve(sample)
-        sample.metadata["threshold"] = threshold
-        return sample._replace(input=arr > threshold)
+        mask: Optional[np.ndarray] = None
+        if self.low_level is not None:
+            low = self._resolve(self.low_level, sample)
+            sample.metadata["threshold_low"] = low
+            mask = _LOW_COMPARISONS[self.low_op](arr, low)
+        if self.high_level is not None:
+            high = self._resolve(self.high_level, sample)
+            sample.metadata["threshold_high"] = high
+            below = _HIGH_COMPARISONS[self.high_op](arr, high)
+            mask = below if mask is None else (mask & below)
+        assert mask is not None  # guaranteed by the __init__ presence check
+        return sample._replace(input=mask)
 
 
-@configurable(category="op")
+@configurable(category="op", group="numpy")
 class ConnectedComponentsOp:
     """Label connected ``True`` regions of a boolean mask into bin-bbox tuples.
 

@@ -1,6 +1,19 @@
 from typing import Any, Iterator, Protocol, runtime_checkable
 
+import torch
+
 from dataflux.sample import Sample
+
+
+def to_numpy(data: Any) -> Any:
+    """Convert a torch tensor to a numpy array for array-storage backends (HDF5 / Zarr).
+
+    Detaches and moves to CPU first so tensors carrying grad or living on a GPU
+    convert cleanly. Non-tensor values pass through unchanged.
+    """
+    if isinstance(data, torch.Tensor):
+        return data.detach().cpu().numpy()
+    return data
 
 
 @runtime_checkable

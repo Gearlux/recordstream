@@ -10,15 +10,17 @@ Submodules:
     - dataflux.ops.copy: CopySampleOp, CopyInputOp, CopyTargetOp, CopyMetadataOp
     - dataflux.ops.swap: SwapInputTargetOp
     - dataflux.ops.stash: StashInputOp, UnstashInputOp
+    - dataflux.ops.target: MetadataToTargetOp, EncodeTargetOp, DecodeTargetOp (target field)
 
 Flat imports default to torch variants for the data ops; flow / copy /
-swap / stash utilities are field-agnostic.
+swap / stash / target utilities are field-agnostic.
 """
 
 from dataflux.ops.copy import CopyInputOp, CopyMetadataOp, CopySampleOp, CopyTargetOp
 from dataflux.ops.parallel import Parallel
 from dataflux.ops.stash import StashInputOp, UnstashInputOp
 from dataflux.ops.swap import SwapInputTargetOp
+from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import RescaleOp, StandardizeOp, ToTensorOp
 
@@ -27,6 +29,9 @@ __all__ = [
     "CopyMetadataOp",
     "CopySampleOp",
     "CopyTargetOp",
+    "DecodeTargetOp",
+    "EncodeTargetOp",
+    "MetadataToTargetOp",
     "Parallel",
     "RescaleOp",
     "StandardizeOp",

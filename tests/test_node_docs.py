@@ -14,6 +14,7 @@ from confluid import parse_param_docs  # type: ignore[import-not-found]
 
 from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
 from dataflux.ops.numpy import ConnectedComponentsOp, StandardizeOp, ThresholdOp
+from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import StandardizeOp as TorchStandardizeOp
 from dataflux.ops.torch import ToTensorOp
@@ -31,6 +32,9 @@ _NODE_CLASSES = [
     ConnectedComponentsOp,
     ToTensorOp,
     TorchStandardizeOp,
+    MetadataToTargetOp,
+    EncodeTargetOp,
+    DecodeTargetOp,
 ]
 
 

@@ -1,4 +1,4 @@
-"""Tests for dataflux.paired.PairedSource."""
+"""Tests for dataflux.paired.AnnotationJoinSource."""
 
 from typing import Any, Dict, Iterator, Optional
 
@@ -6,7 +6,7 @@ import confluid  # type: ignore[import-not-found]
 import pytest
 
 from dataflux.discovery import get_callable_path
-from dataflux.paired import PairedSource
+from dataflux.paired import AnnotationJoinSource
 from dataflux.sample import Sample
 
 # ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ from dataflux.sample import Sample
 
 @confluid.configurable
 class PairedIndexedSource:
-    """Indexable primary source producing Samples keyed by integer id."""
+    """Indexable data source producing Samples keyed by integer id."""
 
     def __init__(self, size: int = 4) -> None:
         self.size = size
@@ -34,7 +34,7 @@ class PairedIndexedSource:
 
 @confluid.configurable
 class DictStore:
-    """Minimal mapping-shaped secondary for tests."""
+    """Minimal mapping-shaped annotations for tests."""
 
     def __init__(self, records: Optional[Dict[str, Dict[str, Any]]] = None) -> None:
         self.records: Dict[str, Dict[str, Any]] = records or {}
@@ -70,10 +70,10 @@ def odd_only_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[st
     return None
 
 
-def resolve_by_id(key: str, primary: PairedIndexedSource) -> Sample:
-    """Reverse-lookup: key 's<N>' -> primary[N]."""
+def resolve_by_id(key: str, data: PairedIndexedSource) -> Sample:
+    """Reverse-lookup: key 's<N>' -> data[N]."""
     idx = int(key[1:])
-    return primary[idx]
+    return data[idx]
 
 
 # ---------------------------------------------------------------------------
@@ -81,10 +81,10 @@ def resolve_by_id(key: str, primary: PairedIndexedSource) -> Sample:
 # ---------------------------------------------------------------------------
 
 
-def test_left_outer_emits_all_primary() -> None:
-    primary = PairedIndexedSource(size=4)
+def test_left_outer_emits_all_data() -> None:
+    data = PairedIndexedSource(size=4)
     store = DictStore({"s0": {"label": "a"}, "s2": {"label": "c"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     samples = list(paired)
 
@@ -94,9 +94,9 @@ def test_left_outer_emits_all_primary() -> None:
 
 
 def test_left_outer_flattens_record_into_metadata() -> None:
-    primary = PairedIndexedSource(size=2)
+    data = PairedIndexedSource(size=2)
     store = DictStore({"s0": {"label": "dog", "confidence": 0.9}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     samples = list(paired)
 
@@ -108,19 +108,19 @@ def test_left_outer_flattens_record_into_metadata() -> None:
 
 
 def test_left_outer_preserves_original_metadata() -> None:
-    primary = PairedIndexedSource(size=1)
+    data = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     sample = list(paired)[0]
-    assert sample.metadata["id"] == "s0"  # primary metadata survived
+    assert sample.metadata["id"] == "s0"  # data metadata survived
     assert sample.metadata["label"] == "x"
 
 
 def test_left_outer_prefix() -> None:
-    primary = PairedIndexedSource(size=1)
+    data = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, prefix="ann_")
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key, prefix="ann_")
 
     sample = list(paired)[0]
     assert sample.metadata["ann_label"] == "x"
@@ -128,11 +128,11 @@ def test_left_outer_prefix() -> None:
 
 
 def test_left_outer_store_full_under() -> None:
-    primary = PairedIndexedSource(size=1)
+    data = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x", "score": 0.5}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         store_full_under="raw_annotation",
     )
@@ -143,18 +143,18 @@ def test_left_outer_store_full_under() -> None:
     assert sample.metadata["label"] == "x"
 
 
-def test_left_outer_len_delegates_to_primary() -> None:
-    primary = PairedIndexedSource(size=7)
+def test_left_outer_len_delegates_to_data() -> None:
+    data = PairedIndexedSource(size=7)
     store = DictStore({"s0": {"label": "a"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     assert len(paired) == 7
 
 
 def test_left_outer_getitem_matched_and_unmatched() -> None:
-    primary = PairedIndexedSource(size=3)
+    data = PairedIndexedSource(size=3)
     store = DictStore({"s1": {"label": "y"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     matched = paired[1]
     assert matched.metadata["annotated"] is True
@@ -171,9 +171,9 @@ def test_left_outer_getitem_matched_and_unmatched() -> None:
 
 
 def test_inner_emits_only_matched() -> None:
-    primary = PairedIndexedSource(size=4)
+    data = PairedIndexedSource(size=4)
     store = DictStore({"s0": {"label": "a"}, "s3": {"label": "d"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, policy="inner")
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key, policy="inner")
 
     samples = list(paired)
 
@@ -183,9 +183,9 @@ def test_inner_emits_only_matched() -> None:
 
 
 def test_inner_len_is_cached_scan() -> None:
-    primary = PairedIndexedSource(size=10)
+    data = PairedIndexedSource(size=10)
     store = DictStore({f"s{i}": {"label": "x"} for i in (0, 2, 4, 6)})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, policy="inner")
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key, policy="inner")
 
     assert len(paired) == 4
     # Second call hits cache; should still be correct.
@@ -193,9 +193,9 @@ def test_inner_len_is_cached_scan() -> None:
 
 
 def test_inner_rejects_getitem() -> None:
-    primary = PairedIndexedSource(size=2)
+    data = PairedIndexedSource(size=2)
     store = DictStore({"s0": {"label": "a"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=sample_id_key, policy="inner")
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key, policy="inner")
 
     with pytest.raises(TypeError, match="left_outer"):
         _ = paired[0]
@@ -207,11 +207,11 @@ def test_inner_rejects_getitem() -> None:
 
 
 def test_extract_fn_transforms_record() -> None:
-    primary = PairedIndexedSource(size=2)
+    data = PairedIndexedSource(size=2)
     store = DictStore({"s0": {"label": "a"}, "s1": {"label": "b"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         extract_fn=identity_extract,
     )
@@ -223,11 +223,11 @@ def test_extract_fn_transforms_record() -> None:
 
 
 def test_extract_fn_returning_none_marks_unannotated() -> None:
-    primary = PairedIndexedSource(size=3)
+    data = PairedIndexedSource(size=3)
     store = DictStore({"s0": {"label": "x"}, "s1": {"label": "y"}, "s2": {"label": "z"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         extract_fn=odd_only_extract,
     )
@@ -239,11 +239,11 @@ def test_extract_fn_returning_none_marks_unannotated() -> None:
 
 
 def test_extract_fn_with_inner_policy_filters() -> None:
-    primary = PairedIndexedSource(size=4)
+    data = PairedIndexedSource(size=4)
     store = DictStore({f"s{i}": {"label": "x"} for i in range(4)})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         extract_fn=odd_only_extract,
         policy="inner",
@@ -255,11 +255,11 @@ def test_extract_fn_with_inner_policy_filters() -> None:
 
 
 def test_extract_fn_none_suppresses_flattening() -> None:
-    primary = PairedIndexedSource(size=1)
+    data = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         extract_fn=none_extract,
     )
@@ -280,9 +280,9 @@ def pack_key(sample: Sample) -> str:
 
 
 def test_coarser_key_broadcasts_to_all_matching_samples() -> None:
-    primary = PairedIndexedSource(size=3)
+    data = PairedIndexedSource(size=3)
     store = DictStore({"pack": {"drone": "dji_mavic"}})
-    paired = PairedSource(primary=primary, secondary=store, key_fn=pack_key)
+    paired = AnnotationJoinSource(data=data, annotations=store, key_fn=pack_key)
 
     samples = list(paired)
 
@@ -296,14 +296,14 @@ def test_coarser_key_broadcasts_to_all_matching_samples() -> None:
 
 
 def test_right_driven_iterates_annotation_keys() -> None:
-    primary = PairedIndexedSource(size=10)
+    data = PairedIndexedSource(size=10)
     store = DictStore({"s0": {"label": "a"}, "s3": {"label": "d"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         policy="right_driven",
-        primary_resolver=resolve_by_id,
+        data_resolver=resolve_by_id,
     )
 
     samples = list(paired)
@@ -313,29 +313,29 @@ def test_right_driven_iterates_annotation_keys() -> None:
     assert [s.input for s in samples] == [0, 30]
 
 
-def test_right_driven_len_is_secondary_len() -> None:
-    primary = PairedIndexedSource(size=100)
+def test_right_driven_len_is_annotations_len() -> None:
+    data = PairedIndexedSource(size=100)
     store = DictStore({"s1": {"label": "a"}, "s5": {"label": "b"}, "s9": {"label": "c"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         policy="right_driven",
-        primary_resolver=resolve_by_id,
+        data_resolver=resolve_by_id,
     )
 
     assert len(paired) == 3
 
 
 def test_right_driven_skips_when_extract_fn_returns_none() -> None:
-    primary = PairedIndexedSource(size=4)
+    data = PairedIndexedSource(size=4)
     store = DictStore({f"s{i}": {"label": "x"} for i in range(4)})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         policy="right_driven",
-        primary_resolver=resolve_by_id,
+        data_resolver=resolve_by_id,
         extract_fn=odd_only_extract,
     )
 
@@ -350,26 +350,28 @@ def test_right_driven_skips_when_extract_fn_returns_none() -> None:
 
 
 def test_invalid_policy_raises() -> None:
-    with pytest.raises(ValueError, match="Invalid policy"):
-        PairedSource(
-            primary=PairedIndexedSource(),
-            secondary=DictStore(),
+    # policy is a Literal: Confluid's @configurable validates it via pydantic at
+    # construction (pydantic's ValidationError is a ValueError subclass).
+    with pytest.raises(ValueError, match="policy"):
+        AnnotationJoinSource(
+            data=PairedIndexedSource(),
+            annotations=DictStore(),
             key_fn=sample_id_key,
-            policy="outer_join",
+            policy="outer_join",  # type: ignore[arg-type]
         )
 
 
-def test_right_driven_requires_primary_resolver() -> None:
-    with pytest.raises(ValueError, match="primary_resolver"):
-        PairedSource(
-            primary=PairedIndexedSource(),
-            secondary=DictStore(),
+def test_right_driven_requires_data_resolver() -> None:
+    with pytest.raises(ValueError, match="data_resolver"):
+        AnnotationJoinSource(
+            data=PairedIndexedSource(),
+            annotations=DictStore(),
             key_fn=sample_id_key,
             policy="right_driven",
         )
 
 
-def test_right_driven_requires_secondary_keys_method() -> None:
+def test_right_driven_requires_annotations_keys_method() -> None:
     class NoKeys:
         def __contains__(self, k: str) -> bool:  # pragma: no cover - defensive
             return False
@@ -377,13 +379,16 @@ def test_right_driven_requires_secondary_keys_method() -> None:
         def __getitem__(self, k: str) -> Any:  # pragma: no cover - defensive
             raise KeyError(k)
 
-    with pytest.raises(TypeError, match="keys"):
-        PairedSource(
-            primary=PairedIndexedSource(),
-            secondary=NoKeys(),
+    # A store missing keys() doesn't satisfy the AnnotationStore Protocol;
+    # Confluid validates the param via pydantic at construction (ValidationError
+    # is a ValueError subclass).
+    with pytest.raises(ValueError, match="AnnotationStore"):
+        AnnotationJoinSource(
+            data=PairedIndexedSource(),
+            annotations=NoKeys(),  # type: ignore[arg-type]  # intentionally missing keys()
             key_fn=sample_id_key,
             policy="right_driven",
-            primary_resolver=resolve_by_id,
+            data_resolver=resolve_by_id,
         )
 
 
@@ -391,10 +396,11 @@ def test_left_outer_requires_mapping_interface() -> None:
     class NoContains:
         pass
 
-    with pytest.raises(TypeError, match="__contains__"):
-        PairedSource(
-            primary=PairedIndexedSource(),
-            secondary=NoContains(),
+    # Not mapping-shaped → fails the AnnotationStore Protocol at construction.
+    with pytest.raises(ValueError, match="AnnotationStore"):
+        AnnotationJoinSource(
+            data=PairedIndexedSource(),
+            annotations=NoContains(),  # type: ignore[arg-type]  # intentionally not mapping-shaped
             key_fn=sample_id_key,
         )
 
@@ -405,11 +411,11 @@ def test_left_outer_requires_mapping_interface() -> None:
 
 
 def test_key_fn_accepts_string_path() -> None:
-    primary = PairedIndexedSource(size=1)
+    data = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=get_callable_path(sample_id_key),
     )
 
@@ -418,11 +424,11 @@ def test_key_fn_accepts_string_path() -> None:
 
 
 def test_extract_fn_accepts_string_path() -> None:
-    primary = PairedIndexedSource(size=1)
+    data = PairedIndexedSource(size=1)
     store = DictStore({"s0": {"label": "x"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         extract_fn=get_callable_path(identity_extract),
     )
@@ -432,9 +438,9 @@ def test_extract_fn_accepts_string_path() -> None:
 
 
 def test_callable_is_stored_as_string() -> None:
-    paired = PairedSource(
-        primary=PairedIndexedSource(),
-        secondary=DictStore(),
+    paired = AnnotationJoinSource(
+        data=PairedIndexedSource(),
+        annotations=DictStore(),
         key_fn=sample_id_key,
     )
 
@@ -448,13 +454,13 @@ def test_callable_is_stored_as_string() -> None:
 
 
 def test_chained_paired_sources_compose() -> None:
-    """Pack-level + window-level annotations merged via two PairedSources."""
-    primary = PairedIndexedSource(size=3)
+    """Pack-level + window-level annotations merged via two AnnotationJoinSources."""
+    data = PairedIndexedSource(size=3)
     pack_store = DictStore({"pack": {"drone": "mavic"}})
     window_store = DictStore({"s1": {"event": "takeoff"}})
 
-    pack_paired = PairedSource(primary=primary, secondary=pack_store, key_fn=pack_key)
-    full_paired = PairedSource(primary=pack_paired, secondary=window_store, key_fn=sample_id_key)
+    pack_paired = AnnotationJoinSource(data=data, annotations=pack_store, key_fn=pack_key)
+    full_paired = AnnotationJoinSource(data=pack_paired, annotations=window_store, key_fn=sample_id_key)
 
     samples = list(full_paired)
 
@@ -470,11 +476,11 @@ def test_chained_paired_sources_compose() -> None:
 
 
 def test_confluid_roundtrip_preserves_behavior() -> None:
-    primary = PairedIndexedSource(size=3)
+    data = PairedIndexedSource(size=3)
     store = DictStore({"s0": {"label": "a"}, "s2": {"label": "c"}})
-    paired = PairedSource(
-        primary=primary,
-        secondary=store,
+    paired = AnnotationJoinSource(
+        data=data,
+        annotations=store,
         key_fn=sample_id_key,
         policy="left_outer",
         prefix="ann_",

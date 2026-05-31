@@ -10,7 +10,7 @@ from dataflux.sample import Sample
 from dataflux.storage.base import Storage
 from dataflux.storage.directory import DirectorySink
 from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
-from dataflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
+from dataflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
 
 
 def test_storage_base_close() -> None:
@@ -154,3 +154,36 @@ def test_zarr_batch_chunks(tmp_path: Path) -> None:
     p = tmp_path / "chunks.zarr"
     sink = ZarrBatchSink(p, shape=[10], chunks=[1, 10], overwrite=True)
     sink.write(Sample(input=np.zeros(10)))
+
+
+def test_zarr_group_source_none_root() -> None:
+    # hits the unopened-root guard branches in ZarrGroupSource
+    source = ZarrGroupSource("nonexistent.zarr")
+    source.open = lambda: source  # type: ignore
+    assert list(source) == []
+    assert len(source) == 0
+
+
+def test_zarr_batch_source_none_array() -> None:
+    # hits the unopened-array guard branches in ZarrBatchSource
+    source = ZarrBatchSource("nonexistent.zarr")
+    source.open = lambda: source  # type: ignore
+    assert list(source) == []
+    assert len(source) == 0
+
+
+def test_zarr_sources_close(tmp_path: Path) -> None:
+    # hits ZarrGroupSource.close / ZarrBatchSource.close
+    g = tmp_path / "g.zarr"
+    ZarrGroupSink(g, overwrite=True).write(Sample(input=np.zeros(3)))
+    gsrc = ZarrGroupSource(g)
+    gsrc.open()
+    gsrc.close()
+    assert gsrc._root is None
+
+    b = tmp_path / "b.zarr"
+    ZarrBatchSink(b, shape=[3], overwrite=True).write(Sample(input=np.zeros(3)))
+    bsrc = ZarrBatchSource(b)
+    bsrc.open()
+    bsrc.close()
+    assert bsrc._data_arr is None

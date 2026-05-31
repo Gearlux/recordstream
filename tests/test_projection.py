@@ -1,15 +1,43 @@
 """Tests for the field-projection primitive and the num_classes helper."""
 
 import itertools
-from typing import Collection, Iterator, List
+from typing import Collection, Iterator, List, get_args
 
 import numpy as np
 import pytest
 import torch
 
 from dataflux.core import Flux
-from dataflux.projection import SupportsProjection, _to_int, iter_inputs, iter_targets, num_classes, project
+from dataflux.projection import (
+    _FIELDS,
+    INPUT,
+    TARGET,
+    ProjectionField,
+    SupportsProjection,
+    _to_int,
+    iter_inputs,
+    iter_targets,
+    num_classes,
+    project,
+)
 from dataflux.sample import Sample
+
+# --------------------------------------------------------------------------- #
+# ProjectionField is a closed Literal a UI / form-spec can enumerate
+# --------------------------------------------------------------------------- #
+
+
+def test_projection_field_literal_enumerates_the_field_set() -> None:
+    # The whole point of the Literal (vs a bare ``str``): callers — UIs, MCP
+    # schemas, form-spec builders — read the allowed values from the annotation.
+    assert get_args(ProjectionField) == ("input", "target", "metadata")
+
+
+def test_fields_constant_is_derived_from_the_literal() -> None:
+    # Single source of truth: the runtime-validation tuple comes FROM the Literal,
+    # so the two can never drift.
+    assert _FIELDS == get_args(ProjectionField)
+
 
 # --------------------------------------------------------------------------- #
 # Fallback path (sources that do NOT implement SupportsProjection)
@@ -24,21 +52,23 @@ def _plain_source() -> List[Sample]:
 
 
 def test_project_fallback_nulls_unrequested_fields() -> None:
-    out = list(project(_plain_source(), ("target",)))
+    out = list(project(_plain_source(), (TARGET,)))
     assert [s.target for s in out] == [0, 2]
     assert all(s.input is None for s in out)
     assert all(s.metadata == {} for s in out)
 
 
 def test_project_fallback_input_only() -> None:
-    out = list(project(_plain_source(), ("input",)))
+    out = list(project(_plain_source(), (INPUT,)))
     assert all(s.target is None for s in out)
     assert np.array_equal(out[0].input, np.array([1, 2]))
 
 
 def test_project_rejects_unknown_field() -> None:
+    # An off-type value reaches the runtime guard (the Literal is a static hint,
+    # not a runtime gate). mypy rightly objects — ignore it; that's the point.
     with pytest.raises(ValueError, match="Unknown projection field"):
-        list(project(_plain_source(), ("bogus",)))
+        list(project(_plain_source(), ("bogus",)))  # type: ignore[arg-type]
 
 
 def test_iter_helpers() -> None:
@@ -75,7 +105,7 @@ class _ProjectableSource:
         for i, t in enumerate(self.targets):
             yield Sample(input=self._build_input(i), target=t, metadata={})
 
-    def project(self, fields: Collection[str]) -> Iterator[Sample]:
+    def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]:
         want = frozenset(fields)
         for i, t in enumerate(self.targets):
             yield Sample(
@@ -176,7 +206,7 @@ def test_project_is_lazy() -> None:
 def test_flux_project_runs_pipeline_then_drops_fields() -> None:
     flux = Flux([Sample(input=np.array([1]), target=7, metadata={"k": "v"})])
     assert isinstance(flux, SupportsProjection)
-    out = list(flux.project(("target",)))
+    out = list(flux.project((TARGET,)))
     assert out[0].target == 7
     assert out[0].input is None
     # routed through the module-level project() too

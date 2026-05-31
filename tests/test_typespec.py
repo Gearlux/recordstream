@@ -1,6 +1,6 @@
 """Exhaustive tests for the dataflux type-spec system (matching, inference, JSON, HF bridge)."""
 
-from typing import Any, List, Tuple, cast
+from typing import Any, List, Tuple, cast, get_args
 
 import numpy as np
 import pytest
@@ -8,9 +8,14 @@ import pytest
 from dataflux.core import Flux
 from dataflux.sample import FEATURES_KEY, SPEC_KEY, Sample
 from dataflux.typespec import (
+    _DTYPE_FAMILIES,
     AnyType,
     ArrayType,
     Dim,
+    Dtype,
+    DtypeFamily,
+    Framework,
+    ImageLayout,
     ListType,
     MappingType,
     PythonType,
@@ -29,6 +34,30 @@ from dataflux.typespec import (
 
 class _Widget:
     """Module-level class so its ``__qualname__`` is the bare name (used by infer_type fallback test)."""
+
+
+# --------------------------------------------------------------------------------------------------
+# Closed Literals (Framework / ImageLayout) a UI / connection-validator can enumerate
+# --------------------------------------------------------------------------------------------------
+
+
+def test_framework_literal_enumerates_supported_frameworks() -> None:
+    # The point of the Literal over a bare str: choices are readable from the annotation.
+    assert get_args(Framework) == ("numpy", "torch", "tensorflow")
+
+
+def test_image_layout_literal_enumerates_layouts() -> None:
+    assert get_args(ImageLayout) == ("CHW", "HWC")
+
+
+def test_dtype_family_literal_matches_family_map() -> None:
+    # Single source of truth: the DtypeFamily Literal can't drift from the runtime family map.
+    assert set(get_args(DtypeFamily)) == set(_DTYPE_FAMILIES)
+
+
+def test_dtype_literal_is_exactly_the_family_members() -> None:
+    # The concrete Dtype Literal is exactly the union of every family's members (no drift).
+    assert set(get_args(Dtype)) == set().union(*_DTYPE_FAMILIES.values())
 
 
 # --------------------------------------------------------------------------------------------------
@@ -129,7 +158,9 @@ def test_array_post_init() -> None:
     a = ArrayType(shape=(Dim.exact(3), Dim.any()))
     assert a.ndim == 2  # derived from shape
     assert isinstance(ArrayType(frameworks={"numpy"}).frameworks, frozenset)  # set coerced to frozenset
-    assert ArrayType(dtype="FLOAT32").dtype == "float32"  # normalized
+    # Off-Literal alias/casing is a *runtime-only* convenience normalized by canonical_dtype; mypy
+    # rightly flags the non-canonical literal at the call site — that's the point of the Dtype Literal.
+    assert ArrayType(dtype="FLOAT32").dtype == "float32"  # type: ignore[arg-type]  # normalized
     with pytest.raises(ValueError):
         ArrayType(ndim=3, shape=(Dim.any(),))
 
@@ -141,7 +172,9 @@ def test_array_image_constructor() -> None:
     hwc = ArrayType.image("HWC", channels=(1, 4))
     assert hwc.shape is not None and hwc.shape[2] == Dim(1, 4, "C")
     with pytest.raises(ValueError):
-        ArrayType.image("XYZ")
+        # Deliberately off-type: the ImageLayout Literal is a static hint, the
+        # runtime still guards. mypy rightly objects — that's the point.
+        ArrayType.image("XYZ")  # type: ignore[arg-type]
 
 
 def test_array_parse() -> None:
@@ -494,7 +527,7 @@ def test_dataflux_op_spec_conformance() -> None:
         (N.RescaleOp(in_min=0, in_max=255), Sample(input=rgb.copy())),
         (N.ClipPercentilesOp(), Sample(input=rgb.copy())),
         (N.ReplaceNonFiniteOp(), Sample(input=rgb.copy())),
-        (N.ThresholdOp(value=0.5), Sample(input=rgb.copy())),
+        (N.ThresholdOp(low_level=0.5), Sample(input=rgb.copy())),
         (N.ConnectedComponentsOp(), Sample(input=(np.random.rand(8, 8) > 0.5))),
         (T.RescaleOp(in_min=0, in_max=255), Sample(input=__import__("torch").rand(3, 8, 8) * 255)),
         (T.StandardizeOp(mean=0.5, std=0.5), Sample(input=__import__("torch").rand(3, 8, 8))),

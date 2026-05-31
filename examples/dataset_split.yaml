@@ -1,9 +1,8 @@
-# DataFlux DatasetSplit Example
+# DataFlux DatasetSplit / RangeSource / ConcatSource Example
 #
-# Shows how to use DatasetSplit to carve a single HuggingFace source
-# into disjoint train/val views sharing the same seed.
-#
-# Reload with `confluid.load(...)` and iterate the Fluxes.
+# DatasetSplit is a `category="source"` that partitions an indexable source into
+# reproducible train/val/test views. `split` is the closed Literal["train","val","test"]
+# (dataflux.SplitName). Reload with `confluid.load(...)` and iterate the Fluxes.
 
 hf_train: !class:dataflux.sources.HuggingFaceSource()
   path: mnist
@@ -11,27 +10,45 @@ hf_train: !class:dataflux.sources.HuggingFaceSource()
   input_feature: image
   target_feature: label
 
+# === Property API (preferred): ONE DatasetSplit exposes .train / .val / .test ===
+# Configure the split once (80/10/10 here) and reference its cached views by
+# attribute. All three `!ref:my_split.<view>` resolve to the SAME materialized
+# DatasetSplit, so `hf_train` is loaded exactly once and the partition is shared.
+my_split: !class:dataflux.sources.DatasetSplit()
+  source: !ref:hf_train
+  val_fraction: 0.1
+  test_fraction: 0.1
+  seed: 42
+
+train_set: !class:dataflux.core.Flux()
+  source: !ref:my_split.train
+
+val_set: !class:dataflux.core.Flux()
+  source: !ref:my_split.val
+
+test_set: !class:dataflux.core.Flux()
+  source: !ref:my_split.test
+
+# === RangeSource: a contiguous [start:end) slice over any indexable source ===
+first_1000: !class:dataflux.core.Flux()
+  source: !class:dataflux.sources.RangeSource()
+    source: !ref:hf_train
+    start: 0
+    end: 1000
+
+# === ConcatSource: join several indexable sources into one (then optionally split) ===
 hf_test: !class:dataflux.sources.HuggingFaceSource()
   path: mnist
   split: test
   input_feature: image
   target_feature: label
 
-# 90/10 train/val split, deterministic via seed=42
-train_set: !class:dataflux.core.Flux()
-  source: !class:dataflux.sources.DatasetSplit()
-    source: !ref:hf_train
-    split: train
-    val_fraction: 0.1
-    seed: 42
+# Concatenate train + test into one source; ConcatSource is indexable, so it can
+# itself feed a DatasetSplit (e.g. to re-partition the combined pool).
+combined: !class:dataflux.sources.ConcatSource()
+  sources:
+    - !ref:hf_train
+    - !ref:hf_test
 
-val_set: !class:dataflux.core.Flux()
-  source: !class:dataflux.sources.DatasetSplit()
-    source: !ref:hf_train
-    split: val
-    val_fraction: 0.1
-    seed: 42
-
-# Test set stays untouched until final evaluation.
-test_set: !class:dataflux.core.Flux()
-  source: !ref:hf_test
+combined_pool: !class:dataflux.core.Flux()
+  source: !ref:combined

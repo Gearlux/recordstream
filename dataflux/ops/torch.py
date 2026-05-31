@@ -11,7 +11,7 @@ _TORCH = ArrayType(frameworks={"torch"})
 _TORCH_FLOAT = ArrayType(dtype="floating", frameworks={"torch"})
 
 
-@configurable(category="op")
+@configurable(category="op", group="torch")
 class ToTensorOp:
     """
     Converts input (PIL Image, NumPy array, etc.) to a Torch Tensor.
@@ -56,7 +56,7 @@ class ToTensorOp:
         return sample._replace(input=tensor)
 
 
-@configurable(category="op")
+@configurable(category="op", group="torch")
 class RescaleOp:
     """Affine rescale a torch.Tensor from ``[in_min, in_max]`` to ``[out_min, out_max]``.
 
@@ -106,7 +106,7 @@ class RescaleOp:
         return sample._replace(input=out)
 
 
-@configurable(category="op")
+@configurable(category="op", group="torch")
 class StandardizeOp:
     """
     Standardizes tensor values with given mean and standard deviation.

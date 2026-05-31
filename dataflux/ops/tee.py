@@ -17,7 +17,7 @@ from confluid.fluid import Fluid
 from dataflux.sample import Sample
 
 
-@configurable(category="op")
+@configurable(category="op", group="compose")
 class Tee:
     """Run N op-list branches sequentially on the same sample / metadata.
 

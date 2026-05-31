@@ -14,7 +14,7 @@ from confluid import configurable
 from dataflux.sample import Sample
 
 
-@configurable(category="op")
+@configurable(category="op", group="structure")
 class CopySampleOp:
     """Deepcopy of input, target, and metadata."""
 
@@ -26,7 +26,7 @@ class CopySampleOp:
         )
 
 
-@configurable(category="op")
+@configurable(category="op", group="structure")
 class CopyInputOp:
     """Deepcopy ``sample.input``."""
 
@@ -34,7 +34,7 @@ class CopyInputOp:
         return sample._replace(input=copy.deepcopy(sample.input))
 
 
-@configurable(category="op")
+@configurable(category="op", group="structure")
 class CopyTargetOp:
     """Deepcopy ``sample.target``."""
 
@@ -42,7 +42,7 @@ class CopyTargetOp:
         return sample._replace(target=copy.deepcopy(sample.target))
 
 
-@configurable(category="op")
+@configurable(category="op", group="structure")
 class CopyMetadataOp:
     """Deepcopy ``sample.metadata``.
 

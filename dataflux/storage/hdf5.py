@@ -1,22 +1,16 @@
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Iterator, Optional, Union
 
 import h5py
+import numpy as np
 import torch
 from confluid import configurable
 from logflow import get_logger
 
 from dataflux.sample import Sample
-from dataflux.storage.base import DataSink, DataSource, Storage
+from dataflux.storage.base import DataSink, DataSource, Storage, to_numpy
 
 logger = get_logger("dataflux.storage.hdf5")
-
-
-def to_numpy(data: Any) -> Any:
-    """Utility to convert torch tensors to numpy arrays for HDF5 storage."""
-    if isinstance(data, torch.Tensor):
-        return data.detach().cpu().numpy()
-    return data
 
 
 @configurable
@@ -55,6 +49,12 @@ class HDF5Source(Storage, DataSource):
             data = self._file[f"{pref}_data"][()]
             target = self._file[f"{pref}_target"][()] if f"{pref}_target" in self._file else None
             metadata = dict(self._file[f"{pref}_data"].attrs)
+            # Merge array-valued metadata written as datasets under the per-sample meta group
+            # (see HDF5Sink.write). Absent on files written before this layout — old files read unchanged.
+            meta_grp = self._file.get(f"{pref}_meta")
+            if isinstance(meta_grp, h5py.Group):
+                for key, dset in meta_grp.items():
+                    metadata[key] = dset[()]
             # Source returns Tensors to match schema
             yield Sample(input=torch.from_numpy(data), target=target, metadata=metadata)
 
@@ -112,12 +112,24 @@ class HDF5Sink(Storage, DataSink):
 
         ds = self._file.create_dataset(f"{prefix}_data", data=input_data, **kwargs)
 
-        # 2. Write Attributes (Metadata)
+        # 2. Write Metadata. Scalars/strings go on the data dataset's HDF5 attributes (compact,
+        # round-trips for the common case). Array-valued metadata (e.g. a segmentation mask) CANNOT
+        # be stored as an attribute — HDF5 caps attribute size ("object header message is too large")
+        # and the str() fallback would silently truncate the array — so it is written as its own
+        # dataset under a per-sample group ``{prefix}_meta/<key>`` (the "/" makes h5py auto-create the
+        # group; arbitrary metadata keys are safe as dataset names). HDF5Source merges both back.
         for k, v in sample.metadata.items():
-            try:
-                ds.attrs[k] = v
-            except Exception:
-                ds.attrs[k] = str(v)
+            if isinstance(v, (np.ndarray, torch.Tensor)):
+                arr = to_numpy(v)
+                m_kwargs = {}
+                if self.compression and getattr(arr, "ndim", 0) > 0:
+                    m_kwargs["compression"] = self.compression
+                self._file.create_dataset(f"{prefix}_meta/{k}", data=arr, **m_kwargs)
+            else:
+                try:
+                    ds.attrs[k] = v
+                except Exception:
+                    ds.attrs[k] = str(v)
 
         # 3. Write Target
         if target_data is not None:

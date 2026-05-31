@@ -19,7 +19,7 @@ from confluid import configurable
 from dataflux.sample import Sample
 
 
-@configurable(category="op")
+@configurable(category="op", group="structure")
 class StashInputOp:
     """Copy ``sample.input`` into ``metadata[key]``; ``sample.input`` unchanged.
 
@@ -40,7 +40,7 @@ class StashInputOp:
         return sample
 
 
-@configurable(category="op")
+@configurable(category="op", group="structure")
 class UnstashInputOp:
     """Set ``sample.input := metadata[key]``.
 

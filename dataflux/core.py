@@ -25,6 +25,7 @@ from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
 from logflow import get_logger
 
+from dataflux.projection import ProjectionField
 from dataflux.sample import FEATURES_KEY, SPEC_KEY, TYPE_KEYS, Sample
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -106,7 +107,7 @@ def _check_ops_materialized(ops: List[Any]) -> None:
             raise TypeError(_fluid_op_guidance(op, i))
 
 
-@configurable(category="engine")
+@configurable
 class FilterOp:
     """Configurable filter operation.
 
@@ -121,7 +122,7 @@ class FilterOp:
         return s if self.p(s) else None
 
 
-@configurable(category="engine")
+@configurable
 class WrappedOp:
     """Configurable transformation wrapper with smart mapping.
 
@@ -490,7 +491,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
         """Materialize the full flux into a list."""
         return list(self)
 
-    def project(self, fields: Collection[str]) -> Iterator[Sample]:
+    def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]:
         """Yield pipeline-output Samples carrying only ``fields`` (the projection primitive).
 
         Implements :class:`dataflux.projection.SupportsProjection`. Flux must run

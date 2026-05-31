@@ -41,7 +41,21 @@ so specs ride the discovery manifest and can be re-implemented by FluxStudio's J
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, AbstractSet, Any, Callable, Dict, FrozenSet, List, Optional, Tuple, TypeVar, Union
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import numpy as np
 
@@ -51,6 +65,16 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # A single-slot type spec. Defined as a forward-ref union so leaf classes can annotate it before the
 # alias is bound at runtime (annotations are strings under ``from __future__ import annotations``).
 TypeSpec = Union["AnyType", "ArrayType", "PythonType", "UnionType", "MappingType", "ListType"]
+
+# Closed enumerations for the small, fixed string sets the type system uses — declared as ``Literal``
+# rather than bare ``str`` so authors get a typo-checked value and UIs / the FluxStudio connection-
+# validator enumerate the choices straight from the annotation (``typing.get_args(...)``); the
+# workspace "prefer closed ``Literal``s over bare strings" mandate. Both are *deliberately closed* —
+# extend the Literal when adding real support (e.g. a ``"jax"`` framework), don't widen to ``str``.
+# (The dtype enumerations — ``Dtype`` / ``DtypeFamily`` / ``DtypeSpec`` — are defined next to
+# ``_DTYPE_FAMILIES`` below, since they share that block's set membership as their source of truth.)
+Framework = Literal["numpy", "torch", "tensorflow"]
+ImageLayout = Literal["CHW", "HWC"]
 
 C = TypeVar("C")
 
@@ -64,6 +88,11 @@ __all__ = [
     "ListType",
     "SampleType",
     "TypeSpec",
+    "Framework",
+    "ImageLayout",
+    "Dtype",
+    "DtypeFamily",
+    "DtypeSpec",
     "typed",
     "accepts",
     "compatible",
@@ -101,29 +130,66 @@ _DTYPE_FAMILIES: Dict[str, FrozenSet[str]] = {
     "numeric": frozenset(_FLOATING | _INTEGER | _UNSIGNED),
 }
 
+#: A concrete dtype name — a closed ``Literal`` (not bare ``str``) so an authored ``ACCEPTS`` /
+#: ``PRODUCES`` dtype is typo-checked and UIs / the FluxStudio connection-validator enumerate the
+#: choices via ``typing.get_args(Dtype)``. These ARE the union of the family members above (pinned
+#: equal in ``tests/test_typespec.py`` so the two can't drift). Authoring uses canonical lowercase
+#: names; aliases / casing (``"double"``, ``"FLOAT32"``) and genuinely exotic, platform-dependent
+#: dtypes (``float128``, ``complex256``) are *runtime-only* — they reach the field via
+#: :func:`canonical_dtype`, the single boundary that normalizes arbitrary input into this domain, and
+#: an unmodeled one keeps its own name and simply matches no family.
+Dtype = Literal[
+    "bool",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "float16",
+    "bfloat16",
+    "float32",
+    "float64",
+    "complex64",
+    "complex128",
+]
+#: A relaxed dtype *family* constraint (matches any concrete member). The names are the keys of
+#: ``_DTYPE_FAMILIES`` (pinned equal in tests); kept as a ``Literal`` for the same author/UI reasons.
+DtypeFamily = Literal["floating", "integer", "unsigned", "bool", "complex", "numeric"]
+#: What :attr:`ArrayType.dtype` accepts: a concrete :data:`Dtype` or a relaxed :data:`DtypeFamily`.
+DtypeSpec = Union[Dtype, DtypeFamily]
 
-def canonical_dtype(x: Any) -> str:
+
+def canonical_dtype(x: Any) -> DtypeSpec:
     """Normalize a dtype (str, numpy dtype/scalar-type, or torch dtype) to a canonical lowercase name.
 
     Family names (``"floating"``, ``"integer"``, ``"numeric"`` …) pass through unchanged so they can
-    be used as relaxed dtype constraints on an :class:`ArrayType`.
+    be used as relaxed dtype constraints on an :class:`ArrayType`. This is the single boundary where
+    arbitrary input (aliases, casing, framework dtype objects, exotic dtypes) crosses into the typed
+    :data:`DtypeSpec` domain — hence the closing ``cast``: a genuinely unmodeled dtype keeps its own
+    name (and simply matches no family), which is correct even though it lies outside the Literal.
     """
     if isinstance(x, str):
         s = x.lower()
-        return _DTYPE_ALIASES.get(s, s)
-    if isinstance(x, np.dtype):
-        return str(x.name)
-    if isinstance(x, type) and issubclass(x, np.generic):
-        return str(np.dtype(x).name)
-    # torch dtype (lazy — torch is a hard dep but we avoid importing it at module load)
-    try:
-        import torch
+        name = _DTYPE_ALIASES.get(s, s)
+    elif isinstance(x, np.dtype):
+        name = str(x.name)
+    elif isinstance(x, type) and issubclass(x, np.generic):
+        name = str(np.dtype(x).name)
+    else:
+        # Default for any non-numpy value; refined to the bare name for a torch dtype (lazy import —
+        # torch is a hard dep but we avoid importing it at module load).
+        name = str(x).lower()
+        try:
+            import torch
 
-        if isinstance(x, torch.dtype):
-            return str(x).replace("torch.", "")
-    except ImportError:  # pragma: no cover - torch is a hard dep
-        pass
-    return str(x).lower()
+            if isinstance(x, torch.dtype):
+                name = str(x).replace("torch.", "")
+        except ImportError:  # pragma: no cover - torch is a hard dep
+            pass
+    return cast(DtypeSpec, name)
 
 
 def _dtype_accepts(consumer: str, producer: str) -> bool:
@@ -214,16 +280,18 @@ class ArrayType:
 
     * ``ndim`` — required rank (derived from ``shape`` when that is given).
     * ``shape`` — per-axis :class:`Dim` tuple.
-    * ``dtype`` — canonical name (``"float32"``) or family (``"floating"``/``"numeric"`` …).
-    * ``frameworks`` — allowed framework set (``{"numpy", "torch"}`` …).
+    * ``dtype`` — a :data:`DtypeSpec`: a concrete :data:`Dtype` (``"float32"``) or a relaxed
+      :data:`DtypeFamily` (``"floating"``/``"numeric"`` …). Stored canonicalized via
+      :func:`canonical_dtype`, which also accepts aliases / casing / framework dtype objects at runtime.
+    * ``frameworks`` — allowed framework set, each a :data:`Framework` (``{"numpy", "torch"}`` …).
     * ``semantic`` — free-form tag (e.g. ``"image"``); display/inference hint, never matched.
     """
 
     ndim: Optional[int] = None
     shape: Optional[Tuple[Dim, ...]] = None
-    dtype: Optional[str] = None
+    dtype: Optional[DtypeSpec] = None
     # Accept any set on construction (ergonomic ``frameworks={"torch"}``); ``__post_init__`` freezes it.
-    frameworks: Optional[AbstractSet[str]] = None
+    frameworks: Optional[AbstractSet[Framework]] = None
     semantic: Optional[str] = None
 
     def __post_init__(self) -> None:
@@ -242,10 +310,10 @@ class ArrayType:
     @classmethod
     def image(
         cls,
-        layout: str = "CHW",
+        layout: ImageLayout = "CHW",
         channels: Union[int, Tuple[int, ...]] = 3,
-        dtype: Optional[str] = None,
-        framework: Optional[str] = None,
+        dtype: Optional[DtypeSpec] = None,
+        framework: Optional[Framework] = None,
     ) -> "ArrayType":
         """Rank-3 image convenience. ``channels`` as a tuple is treated as the inclusive range
         ``[min, max]`` (a pragmatic approximation — pass an exact :class:`Dim` via the constructor
@@ -269,8 +337,8 @@ class ArrayType:
     def parse(
         cls,
         spec: str,
-        dtype: Optional[str] = None,
-        framework: Optional[str] = None,
+        dtype: Optional[DtypeSpec] = None,
+        framework: Optional[Framework] = None,
         semantic: Optional[str] = None,
     ) -> "ArrayType":
         """Build from a jaxtyping-style shape string: space-separated axes where a bare int is an

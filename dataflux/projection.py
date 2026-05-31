@@ -23,14 +23,23 @@ Design notes
   make every ``Flux`` look classification-capable to duck-typed consumers.
 """
 
-from typing import Any, Collection, Iterator, Protocol, runtime_checkable
+from typing import Any, Collection, Iterator, Literal, Protocol, Tuple, get_args, runtime_checkable
 
 from dataflux.sample import Sample
 
-INPUT = "input"
-TARGET = "target"
-METADATA = "metadata"
-_FIELDS = (INPUT, TARGET, METADATA)
+#: The projectable :class:`~dataflux.sample.Sample` fields, as a *closed*
+#: ``Literal`` rather than a bare ``str``. Typing the field set this way lets
+#: UIs, form-spec builders, and MCP tool schemas enumerate the allowed values
+#: straight from the annotation (``typing.get_args(ProjectionField)``) and lets
+#: a type checker reject a typo at the call site — the Literal-over-strings
+#: discipline the workspace mandate calls for, applied because the set is fixed
+#: and short.
+ProjectionField = Literal["input", "target", "metadata"]
+
+INPUT: ProjectionField = "input"
+TARGET: ProjectionField = "target"
+METADATA: ProjectionField = "metadata"
+_FIELDS: Tuple[ProjectionField, ...] = get_args(ProjectionField)
 
 
 @runtime_checkable
@@ -44,10 +53,10 @@ class SupportsProjection(Protocol):
     (``{}`` for ``metadata``).
     """
 
-    def project(self, fields: Collection[str]) -> Iterator[Sample]: ...
+    def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]: ...
 
 
-def project(source: Any, fields: Collection[str]) -> Iterator[Sample]:
+def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Sample]:
     """Yield :class:`Sample` records from ``source`` carrying only ``fields``.
 
     Uses the source's own ``project`` when it implements
@@ -136,6 +145,7 @@ def num_classes(source: Any) -> int:
 
 
 __all__ = [
+    "ProjectionField",
     "SupportsProjection",
     "project",
     "iter_inputs",

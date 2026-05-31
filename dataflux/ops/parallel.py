@@ -29,7 +29,7 @@ from dataflux.core import _worker_task
 from dataflux.sample import Sample
 
 
-@configurable(category="op")
+@configurable(category="op", group="compose")
 class Parallel:
     """Run an inner op sub-pipeline in a worker pool with bounded prefetch.
 
