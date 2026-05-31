@@ -53,13 +53,15 @@ class MetadataToTargetOp:
     before :class:`EncodeTargetOp` overwrites it with a class id.
 
     Args:
-        key: Metadata key to read the value from into ``sample.target``.
+        key: Metadata key to read the value from into ``sample.target`` (defaults to ``""``; a missing
+            or empty key surfaces as a ``KeyError`` when the op runs, per the lazy-init convention).
         target_key: When set, the value is also written to ``metadata[target_key]``
             (so the raw label survives a later ``EncodeTargetOp`` and can be decoded
             back). ``None`` (default) leaves ``metadata`` untouched.
     """
 
-    def __init__(self, key: str, target_key: Optional[str] = None) -> None:
+    def __init__(self, key: str = "", target_key: Optional[str] = None) -> None:
+        # Lazy / zero-arg: store config only; a missing key surfaces lazily as a KeyError in __call__.
         self.key = str(key)
         self.target_key = str(target_key) if target_key is not None else None
 
@@ -94,14 +96,17 @@ class EncodeTargetOp:
             Defaults to ``0``.
     """
 
-    def __init__(self, mapping: Dict[Any, Any], ignore_unknown: bool = False, default: Any = 0) -> None:
-        if not mapping:
-            raise ValueError("EncodeTargetOp: mapping must contain at least one entry.")
-        self.mapping = dict(mapping)
+    def __init__(
+        self, mapping: Optional[Dict[Any, Any]] = None, ignore_unknown: bool = False, default: Any = 0
+    ) -> None:
+        # Lazy / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
+        self.mapping = dict(mapping) if mapping else {}
         self.ignore_unknown = bool(ignore_unknown)
         self.default = default
 
     def __call__(self, sample: Sample) -> Sample:
+        if not self.mapping:
+            raise ValueError("EncodeTargetOp: mapping must contain at least one entry.")
         encoded = _lookup(sample.target, self.mapping, self.ignore_unknown, self.default, "EncodeTargetOp")
         return sample._replace(target=encoded)
 
@@ -122,14 +127,17 @@ class DecodeTargetOp:
             Defaults to ``None``.
     """
 
-    def __init__(self, mapping: Dict[Any, Any], ignore_unknown: bool = False, default: Any = None) -> None:
-        if not mapping:
-            raise ValueError("DecodeTargetOp: mapping must contain at least one entry.")
-        self.mapping = dict(mapping)
+    def __init__(
+        self, mapping: Optional[Dict[Any, Any]] = None, ignore_unknown: bool = False, default: Any = None
+    ) -> None:
+        # Lazy / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
+        self.mapping = dict(mapping) if mapping else {}
         self.ignore_unknown = bool(ignore_unknown)
         self.default = default
 
     def __call__(self, sample: Sample) -> Sample:
+        if not self.mapping:
+            raise ValueError("DecodeTargetOp: mapping must contain at least one entry.")
         decoded = _lookup(sample.target, self.mapping, self.ignore_unknown, self.default, "DecodeTargetOp")
         return sample._replace(target=decoded)
 

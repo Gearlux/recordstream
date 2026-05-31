@@ -65,8 +65,8 @@ class RescaleOp:
     promoted to ``float32`` (``float64`` is preserved).
 
     Args:
-        in_min: Lower edge of the input range. Required.
-        in_max: Upper edge of the input range, must be ``> in_min``. Required.
+        in_min: Lower edge of the input range. Default ``0.0``.
+        in_max: Upper edge of the input range, must be ``> in_min``. Default ``1.0``.
         out_min: Lower edge of the output range. Default ``0.0``.
         out_max: Upper edge of the output range, must be ``> out_min``. Default ``1.0``.
         clip: When True (default), clamp values outside ``[in_min, in_max]``
@@ -78,16 +78,13 @@ class RescaleOp:
 
     def __init__(
         self,
-        in_min: float,
-        in_max: float,
+        in_min: float = 0.0,
+        in_max: float = 1.0,
         out_min: float = 0.0,
         out_max: float = 1.0,
         clip: bool = True,
     ) -> None:
-        if not (in_min < in_max):
-            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}")
-        if not (out_min < out_max):
-            raise ValueError(f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}")
+        # Lazy / zero-arg: store config only; the bound relationships are validated lazily in __call__.
         self.in_min = float(in_min)
         self.in_max = float(in_max)
         self.out_min = float(out_min)
@@ -95,6 +92,12 @@ class RescaleOp:
         self.clip = bool(clip)
 
     def __call__(self, sample: Sample) -> Sample:
+        if not (self.in_min < self.in_max):
+            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={self.in_min}, in_max={self.in_max}")
+        if not (self.out_min < self.out_max):
+            raise ValueError(
+                f"RescaleOp: require out_min < out_max; got out_min={self.out_min}, out_max={self.out_max}"
+            )
         tensor = sample.input
         if not isinstance(tensor, torch.Tensor):
             raise TypeError(f"RescaleOp expects a torch.Tensor, got {type(tensor).__name__}")
@@ -124,7 +127,8 @@ class StandardizeOp:
     ACCEPTS = SampleType(input=_TORCH)
     PRODUCES = SampleType(input=_TORCH_FLOAT)
 
-    def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]):
+    def __init__(self, mean: Union[float, Sequence[float]] = 0.0, std: Union[float, Sequence[float]] = 1.0):
+        # Lazy / zero-arg: store config only. The defaults (mean 0, std 1) are an identity standardize.
         self.mean = mean
         self.std = std
 

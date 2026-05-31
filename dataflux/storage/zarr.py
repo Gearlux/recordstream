@@ -17,7 +17,8 @@ class ZarrGroupSink(Storage, DataSink):
     Supports variable lengths while keeping data in a single bundle.
     """
 
-    def __init__(self, path: Union[str, Path], overwrite: bool = False) -> None:
+    def __init__(self, path: Union[str, Path] = "", overwrite: bool = False) -> None:
+        # Lazy / zero-arg: store config only; the group is opened lazily in open().
         self.path = str(path)
         self.overwrite = overwrite
         self._root: Optional[zarr.Group] = None
@@ -74,10 +75,11 @@ class ZarrGroupSource(Storage, DataSource):
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: Union[str, Path] = "",
         sample_key: str = "data",
         target_key: str = "target",
     ) -> None:
+        # Lazy / zero-arg: store config only; the group is opened lazily in open().
         self.path = str(path)
         self.sample_key = sample_key
         self.target_key = target_key
@@ -116,14 +118,16 @@ class ZarrBatchSink(Storage, DataSink):
 
     def __init__(
         self,
-        path: Union[str, Path],
-        shape: List[int],
+        path: Union[str, Path] = "",
+        shape: Optional[List[int]] = None,
         dtype: str = "float32",
         chunks: Optional[List[int]] = None,
         overwrite: bool = False,
     ) -> None:
+        # Lazy / zero-arg: store config only; the array is created lazily in open() (an unset
+        # path / shape surfaces there).
         self.path = str(path)
-        self.shape = tuple(shape)
+        self.shape = tuple(shape) if shape else ()
         self.dtype = dtype
         self.chunks = tuple(chunks) if chunks else None
         self.overwrite = overwrite
@@ -173,7 +177,8 @@ class ZarrBatchSource(Storage, DataSource):
         path: Path to the Zarr store written by ZarrBatchSink (the directory holding the ``data`` array).
     """
 
-    def __init__(self, path: Union[str, Path]) -> None:
+    def __init__(self, path: Union[str, Path] = "") -> None:
+        # Lazy / zero-arg: store config only; the array is opened lazily in open().
         self.path = str(path)
         self._data_arr: Optional[zarr.Array] = None
 

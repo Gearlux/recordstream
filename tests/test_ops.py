@@ -135,12 +135,14 @@ class TestRescaleOp:
             RescaleOp(in_min=0.0, in_max=255.0)(Sample(input=np.array([1, 2, 3])))
 
     def test_validation_rejects_bad_input_range(self) -> None:
+        op = RescaleOp(in_min=10.0, in_max=10.0)  # lazy: construction succeeds
         with pytest.raises(ValueError, match="require in_min < in_max"):
-            RescaleOp(in_min=10.0, in_max=10.0)
+            op(Sample(input=torch.zeros(2)))
 
     def test_validation_rejects_bad_output_range(self) -> None:
+        op = RescaleOp(in_min=0.0, in_max=1.0, out_min=5.0, out_max=5.0)
         with pytest.raises(ValueError, match="require out_min < out_max"):
-            RescaleOp(in_min=0.0, in_max=1.0, out_min=5.0, out_max=5.0)
+            op(Sample(input=torch.zeros(2)))
 
     def test_pipeline_to_tensor_then_rescale(self) -> None:
         """Integration: ToTensorOp(normalize=False) -> RescaleOp()."""
@@ -297,8 +299,9 @@ class TestClipPercentilesOp:
 
     @pytest.mark.parametrize("low,high", [(50, 50), (60, 50), (-1, 50), (50, 101)])
     def test_validation_rejects_bad_bounds(self, low: float, high: float) -> None:
+        op = np_ops.ClipPercentilesOp(low=low, high=high)  # lazy: construction succeeds
         with pytest.raises(ValueError, match="ClipPercentilesOp: require"):
-            np_ops.ClipPercentilesOp(low=low, high=high)
+            op(Sample(input=np.array([1.0, 2.0, 3.0])))
 
 
 # ---------------------------------------------------------------------------
@@ -358,12 +361,14 @@ class TestNpRescaleOp:
             np_ops.RescaleOp(in_min=0.0, in_max=1.0)(Sample(input=[1.0, 2.0]))
 
     def test_validation_rejects_bad_input_range(self) -> None:
+        op = np_ops.RescaleOp(in_min=10.0, in_max=10.0)  # lazy: construction succeeds
         with pytest.raises(ValueError, match="require in_min < in_max"):
-            np_ops.RescaleOp(in_min=10.0, in_max=10.0)
+            op(Sample(input=np.zeros(2)))
 
     def test_validation_rejects_bad_output_range(self) -> None:
+        op = np_ops.RescaleOp(in_min=0.0, in_max=1.0, out_min=5.0, out_max=5.0)
         with pytest.raises(ValueError, match="require out_min < out_max"):
-            np_ops.RescaleOp(in_min=0.0, in_max=1.0, out_min=5.0, out_max=5.0)
+            op(Sample(input=np.zeros(2)))
 
     def test_pipeline_rescale_then_to_tensor(self) -> None:
         """Integration: numpy RescaleOp -> ToTensorOp(normalize=False)."""
@@ -414,8 +419,9 @@ class TestReplaceNonFiniteOp:
             np_ops.ReplaceNonFiniteOp()(Sample(input=torch.tensor([1.0])))
 
     def test_validation_rejects_unknown_string(self) -> None:
+        op = np_ops.ReplaceNonFiniteOp(value="median")  # lazy: construction succeeds
         with pytest.raises(ValueError, match="value string must be 'min' or 'max'"):
-            np_ops.ReplaceNonFiniteOp(value="median")
+            op(Sample(input=np.array([1.0, np.inf])))
 
 
 # ---------------------------------------------------------------------------
@@ -699,8 +705,9 @@ class TestThresholdOp:
         assert out.metadata["threshold_high"] == -20.0
 
     def test_raises_when_no_bounds(self) -> None:
+        op = np_ops.ThresholdOp()  # lazy: construction succeeds (zero-arg)
         with pytest.raises(ValueError, match="at least one of 'low_level' / 'high_level'"):
-            np_ops.ThresholdOp()
+            op(Sample(input=np.zeros(3)))
 
     def test_raises_on_non_ndarray(self) -> None:
         with pytest.raises(TypeError, match="ThresholdOp expects an np.ndarray"):
@@ -784,9 +791,11 @@ class TestConnectedComponentsOp:
             np_ops.ConnectedComponentsOp()(Sample(input=np.array([True, False])))
 
     def test_validation_rejects_bad_min_area(self) -> None:
+        op = np_ops.ConnectedComponentsOp(min_area_bins=0)  # lazy: construction succeeds
         with pytest.raises(ValueError, match="min_area_bins must be >= 1"):
-            np_ops.ConnectedComponentsOp(min_area_bins=0)
+            op(Sample(input=np.zeros((2, 2), dtype=bool)))
 
     def test_validation_rejects_bad_connectivity(self) -> None:
+        op = np_ops.ConnectedComponentsOp(connectivity=6)
         with pytest.raises(ValueError, match="connectivity must be 4 or 8"):
-            np_ops.ConnectedComponentsOp(connectivity=6)
+            op(Sample(input=np.zeros((2, 2), dtype=bool)))

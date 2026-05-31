@@ -15,7 +15,8 @@ class DirectorySink(Storage, DataSink):
     Perfect for irregular data lengths and massive parallel writing.
     """
 
-    def __init__(self, path: Union[str, Path], overwrite: bool = False, use_npz: bool = True) -> None:
+    def __init__(self, path: Union[str, Path] = "", overwrite: bool = False, use_npz: bool = True) -> None:
+        # Lazy / zero-arg: store config only; the directory is created lazily in open().
         self.path = Path(path)
         self.overwrite = overwrite
         self.use_npz = use_npz

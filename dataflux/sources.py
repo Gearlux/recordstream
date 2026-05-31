@@ -25,7 +25,7 @@ METADATA_ALL_FEATURES = "*"
 
 
 def _resolve_metadata_features(
-    requested: Optional[Any],
+    requested: Optional[List[str] | str],
     column_names: Optional[List[str]],
     input_feature: str,
     target_feature: str,
@@ -77,7 +77,7 @@ class HuggingFaceSource:
         split: str = "train",
         input_feature: str = "image",
         target_feature: str = "label",
-        metadata_features: Optional[List[str]] = None,
+        metadata_features: Optional[List[str] | str] = "*",
         count: Optional[int] = None,
         name: Optional[str] = None,
         **kwargs: Any,
@@ -220,7 +220,7 @@ class DatasetSplit:
     arithmetic happens up front; samples are produced on demand.
 
     Args:
-        source: The underlying indexable source.
+        source: The underlying indexable source (defaults to ``None``; validated lazily on first use).
         split: View this iterates as a source — ``train`` / ``val`` / ``test`` (``None`` ⇒ ``train``).
         val_fraction: Fraction of samples assigned to the ``val`` view. Must be in ``(0, 1)``.
         test_fraction: Fraction of samples assigned to the ``test`` view. Must be in ``(0, 1)``.
@@ -229,30 +229,14 @@ class DatasetSplit:
 
     def __init__(
         self,
-        source: Any,
+        source: Any = None,
         split: Optional[SplitName] = None,
         val_fraction: Optional[float] = None,
         test_fraction: Optional[float] = None,
         seed: Optional[int] = None,
     ) -> None:
-        if not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
-            raise TypeError(
-                "DatasetSplit requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"
-            )
-        if split is not None and split not in _SPLIT_NAMES:
-            raise ValueError(f"split must be one of {_SPLIT_NAMES}; got {split!r}")
-        if (val_fraction is not None or test_fraction is not None) and seed is None:
-            raise ValueError("DatasetSplit requires `seed` when a fraction is set, so the partition is reproducible.")
-        if val_fraction is not None and not (0.0 < val_fraction < 1.0):
-            raise ValueError(f"val_fraction must be in (0, 1); got {val_fraction}")
-        if test_fraction is not None and not (0.0 < test_fraction < 1.0):
-            raise ValueError(f"test_fraction must be in (0, 1); got {test_fraction}")
-        if (val_fraction or 0.0) + (test_fraction or 0.0) >= 1.0:
-            raise ValueError(
-                "val_fraction + test_fraction must be < 1 (to leave a non-empty train split); "
-                f"got val_fraction={val_fraction}, test_fraction={test_fraction}"
-            )
-
+        # Lazy / zero-arg: store config only. All validation is deferred to first materialization
+        # (``_validate``, invoked from ``_view``) so the source can be configured post-construction.
         self.source = source
         self.split = split
         self.val_fraction = val_fraction
@@ -263,6 +247,27 @@ class DatasetSplit:
         # @property descriptors live on the class, not in vars(obj), so they never
         # surface as configurable attributes either).
         self._views: Dict[str, "_SplitView"] = {}
+
+    def _validate(self) -> None:
+        """Validate the (post-construction) configuration. Called lazily before the first partition."""
+        source = self.source
+        if source is None or not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
+            raise TypeError(
+                "DatasetSplit requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"
+            )
+        if self.split is not None and self.split not in _SPLIT_NAMES:
+            raise ValueError(f"split must be one of {_SPLIT_NAMES}; got {self.split!r}")
+        if (self.val_fraction is not None or self.test_fraction is not None) and self.seed is None:
+            raise ValueError("DatasetSplit requires `seed` when a fraction is set, so the partition is reproducible.")
+        if self.val_fraction is not None and not (0.0 < self.val_fraction < 1.0):
+            raise ValueError(f"val_fraction must be in (0, 1); got {self.val_fraction}")
+        if self.test_fraction is not None and not (0.0 < self.test_fraction < 1.0):
+            raise ValueError(f"test_fraction must be in (0, 1); got {self.test_fraction}")
+        if (self.val_fraction or 0.0) + (self.test_fraction or 0.0) >= 1.0:
+            raise ValueError(
+                "val_fraction + test_fraction must be < 1 (to leave a non-empty train split); "
+                f"got val_fraction={self.val_fraction}, test_fraction={self.test_fraction}"
+            )
 
     def _partition(self) -> Dict[str, List[int]]:
         """Deterministically partition the source indices into ``train`` / ``val`` / ``test``.
@@ -288,6 +293,7 @@ class DatasetSplit:
 
     def _view(self, split: SplitName) -> "_SplitView":
         if split not in self._views:
+            self._validate()
             self._views[split] = _SplitView(self.source, self._partition()[split])
         return self._views[split]
 
@@ -352,40 +358,50 @@ class RangeSource:
     The wrapped source must implement ``__len__`` and ``__getitem__``.
 
     Args:
-        source: The underlying indexable source.
+        source: The underlying indexable source (defaults to ``None``; validated lazily on first use).
         start: Inclusive start index (``None`` ⇒ 0; a negative value counts from the end).
         end: Exclusive end index (``None`` ⇒ len(source); a negative value counts from the end).
     """
 
-    def __init__(self, source: Any, start: Optional[int] = None, end: Optional[int] = None) -> None:
-        if not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
-            raise TypeError(
-                "RangeSource requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"
-            )
+    def __init__(self, source: Any = None, start: Optional[int] = None, end: Optional[int] = None) -> None:
+        # Lazy / zero-arg: store config only; the index arithmetic (and source validation) is deferred
+        # to the ``indices`` property so the source can be configured post-construction.
         self.source = source
         self.start = start
         self.end = end
-        n = len(source)
-        s = 0 if start is None else start
-        e = n if end is None else end
-        if s < 0:
-            s = max(0, n + s)
-        if e < 0:
-            e = max(0, n + e)
-        s = max(0, min(s, n))
-        e = max(s, min(e, n))
-        self._indices: List[int] = list(range(s, e))
-        logger.debug("RangeSource: size=%d source_size=%d", len(self._indices), n)
+        self._indices: Optional[List[int]] = None
+
+    @property
+    def indices(self) -> List[int]:
+        """The contiguous ``[start:end)`` source indices, computed lazily on first access and cached."""
+        if self._indices is None:
+            source = self.source
+            if source is None or not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
+                raise TypeError(
+                    "RangeSource requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"
+                )
+            n = len(source)
+            s = 0 if self.start is None else self.start
+            e = n if self.end is None else self.end
+            if s < 0:
+                s = max(0, n + s)
+            if e < 0:
+                e = max(0, n + e)
+            s = max(0, min(s, n))
+            e = max(s, min(e, n))
+            self._indices = list(range(s, e))
+            logger.debug("RangeSource: size=%d source_size=%d", len(self._indices), n)
+        return self._indices
 
     def __iter__(self) -> Iterator[Sample]:
-        for idx in self._indices:
+        for idx in self.indices:
             yield Sample.from_any(self.source[idx])
 
     def __getitem__(self, index: int) -> Sample:
-        return Sample.from_any(self.source[self._indices[index]])
+        return Sample.from_any(self.source[self.indices[index]])
 
     def __len__(self) -> int:
-        return len(self._indices)
+        return len(self.indices)
 
 
 @configurable(category="source")
@@ -401,26 +417,38 @@ class ConcatSource:
     Each sub-source must implement ``__len__`` and ``__getitem__``.
 
     Args:
-        sources: The indexable sources to concatenate, walked in order.
+        sources: The indexable sources to concatenate, walked in order (defaults to ``None`` ⇒ empty).
     """
 
-    def __init__(self, sources: List[Any]) -> None:
-        for i, src in enumerate(sources):
-            if not hasattr(src, "__len__") or not hasattr(src, "__getitem__"):
-                raise TypeError(
-                    "ConcatSource requires sources supporting __len__ and __getitem__; "
-                    f"source[{i}] is {type(src).__name__}"
-                )
-        self.sources = list(sources)
-        # Cumulative END offsets, for an O(log k) global-index → (sub-source, local index) map.
-        self._offsets: List[int] = []
-        total = 0
-        for src in self.sources:
-            total += len(src)
-            self._offsets.append(total)
+    def __init__(self, sources: Optional[List[Any]] = None) -> None:
+        # Lazy / zero-arg: store config only; sub-source validation + the cumulative-offset precompute
+        # are deferred to the ``offsets`` property so sources can be configured post-construction.
+        self.sources = list(sources) if sources else []
+        self._offsets: Optional[List[int]] = None
+
+    @property
+    def offsets(self) -> List[int]:
+        """Cumulative END offsets per sub-source, computed lazily on first access and cached.
+
+        Computing them validates each sub-source (``__len__`` / ``__getitem__``); enables an
+        O(log k) global-index → (sub-source, local index) map.
+        """
+        if self._offsets is None:
+            offsets: List[int] = []
+            total = 0
+            for i, src in enumerate(self.sources):
+                if not hasattr(src, "__len__") or not hasattr(src, "__getitem__"):
+                    raise TypeError(
+                        "ConcatSource requires sources supporting __len__ and __getitem__; "
+                        f"source[{i}] is {type(src).__name__}"
+                    )
+                total += len(src)
+                offsets.append(total)
+            self._offsets = offsets
+        return self._offsets
 
     def __len__(self) -> int:
-        return self._offsets[-1] if self._offsets else 0
+        return self.offsets[-1] if self.offsets else 0
 
     def __getitem__(self, index: int) -> Sample:
         n = len(self)
@@ -428,8 +456,8 @@ class ConcatSource:
             index += n
         if not 0 <= index < n:
             raise IndexError(index)
-        j = bisect.bisect_right(self._offsets, index)
-        start = self._offsets[j - 1] if j > 0 else 0
+        j = bisect.bisect_right(self.offsets, index)
+        start = self.offsets[j - 1] if j > 0 else 0
         return Sample.from_any(self.sources[j][index - start])
 
     def __iter__(self) -> Iterator[Sample]:

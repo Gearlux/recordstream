@@ -69,8 +69,9 @@ def test_fraction_mode_different_seeds_differ() -> None:
 
 
 def test_fraction_mode_requires_seed() -> None:
+    split = DatasetSplit(source=IndexedSource(size=10), split="train", val_fraction=0.1)  # lazy ctor
     with pytest.raises(ValueError, match="seed"):
-        DatasetSplit(source=IndexedSource(size=10), split="train", val_fraction=0.1)
+        _ = split.train
 
 
 def test_fraction_mode_rejects_invalid_split() -> None:
@@ -80,8 +81,9 @@ def test_fraction_mode_rejects_invalid_split() -> None:
 
 def test_fraction_mode_rejects_out_of_range_fraction() -> None:
     src = IndexedSource(size=10)
+    split = DatasetSplit(source=src, split="train", val_fraction=1.5, seed=0)  # lazy ctor
     with pytest.raises(ValueError, match="val_fraction"):
-        DatasetSplit(source=src, split="train", val_fraction=1.5, seed=0)
+        _ = split.train
 
 
 # ---------------------------------------------------------------------------
@@ -111,13 +113,15 @@ def test_three_way_split_partitions_cleanly() -> None:
 
 
 def test_test_fraction_out_of_range_rejected() -> None:
+    split = DatasetSplit(source=IndexedSource(size=10), split="test", test_fraction=1.5, seed=0)  # lazy ctor
     with pytest.raises(ValueError, match="test_fraction"):
-        DatasetSplit(source=IndexedSource(size=10), split="test", test_fraction=1.5, seed=0)
+        _ = split.test
 
 
 def test_val_plus_test_fraction_must_be_under_one() -> None:
+    split = DatasetSplit(source=IndexedSource(size=10), split="train", val_fraction=0.6, test_fraction=0.5, seed=0)
     with pytest.raises(ValueError, match="must be < 1"):
-        DatasetSplit(source=IndexedSource(size=10), split="train", val_fraction=0.6, test_fraction=0.5, seed=0)
+        _ = split.train
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +182,12 @@ def test_datasetsplit_dropped_range_params() -> None:
 
 
 def test_invalid_source_type() -> None:
+    class _Plain:
+        pass
+
+    split = DatasetSplit(source=_Plain())  # lazy: construction succeeds
     with pytest.raises(TypeError, match="__len__"):
-
-        class _Plain:
-            pass
-
-        DatasetSplit(source=_Plain())
+        _ = split.train
 
 
 # ---------------------------------------------------------------------------
@@ -218,12 +222,12 @@ def test_range_source_getitem_resolves_through_underlying_source() -> None:
 
 
 def test_range_source_invalid_source_type() -> None:
+    class _Plain:
+        pass
+
+    rng = RangeSource(source=_Plain())  # lazy: construction succeeds
     with pytest.raises(TypeError, match="__len__"):
-
-        class _Plain:
-            pass
-
-        RangeSource(source=_Plain())
+        len(rng)
 
 
 def _scale(value: int, factor: int = 1) -> int:
@@ -269,8 +273,9 @@ def test_concat_source_empty() -> None:
 
 
 def test_concat_source_rejects_non_indexable() -> None:
+    cat = ConcatSource(sources=[object()])  # lazy: construction succeeds
     with pytest.raises(TypeError, match="__len__"):
-        ConcatSource(sources=[object()])
+        len(cat)
 
 
 def test_concat_source_is_splittable() -> None:

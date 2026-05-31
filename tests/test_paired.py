@@ -362,13 +362,15 @@ def test_invalid_policy_raises() -> None:
 
 
 def test_right_driven_requires_data_resolver() -> None:
+    # Lazy: construction succeeds; the policy-conditional requirement is validated on iteration.
+    src = AnnotationJoinSource(
+        data=PairedIndexedSource(),
+        annotations=DictStore(),
+        key_fn=sample_id_key,
+        policy="right_driven",
+    )
     with pytest.raises(ValueError, match="data_resolver"):
-        AnnotationJoinSource(
-            data=PairedIndexedSource(),
-            annotations=DictStore(),
-            key_fn=sample_id_key,
-            policy="right_driven",
-        )
+        list(src)
 
 
 def test_right_driven_requires_annotations_keys_method() -> None:

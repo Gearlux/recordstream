@@ -101,8 +101,9 @@ def test_parallel_filter_drops_nones_and_preserves_order() -> None:
 def test_parallel_workers_must_be_positive() -> None:
     import pytest
 
+    op = Parallel(ops=[double_input], workers=0)  # lazy: construction succeeds
     with pytest.raises(ValueError, match="workers="):
-        Parallel(ops=[double_input], workers=0)
+        list(op.stream([]))
 
 
 def test_parallel_close_propagates_to_inner_ops() -> None:

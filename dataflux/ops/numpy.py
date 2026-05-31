@@ -79,7 +79,8 @@ class StandardizeOp:
     ACCEPTS = SampleType(input=_NUMERIC_OR_PIL)
     PRODUCES = SampleType(input=ArrayType(dtype="floating", frameworks={"numpy"}))
 
-    def __init__(self, mean: Union[float, Sequence[float]], std: Union[float, Sequence[float]]):
+    def __init__(self, mean: Union[float, Sequence[float]] = 0.0, std: Union[float, Sequence[float]] = 1.0):
+        # Lazy / zero-arg: store config only. The defaults (mean 0, std 1) are an identity standardize.
         self.mean = mean
         self.std = std
 
@@ -143,12 +144,13 @@ class ClipPercentilesOp:
     PRODUCES = SampleType(input=_NDARRAY)
 
     def __init__(self, low: float = 2.0, high: float = 98.0) -> None:
-        if not (0.0 <= low < high <= 100.0):
-            raise ValueError(f"ClipPercentilesOp: require 0 <= low < high <= 100; got low={low}, high={high}")
+        # Lazy / zero-arg: store config only; the bound relationship is validated lazily in __call__.
         self.low = float(low)
         self.high = float(high)
 
     def __call__(self, sample: Sample) -> Sample:
+        if not (0.0 <= self.low < self.high <= 100.0):
+            raise ValueError(f"ClipPercentilesOp: require 0 <= low < high <= 100; got low={self.low}, high={self.high}")
         arr = _require_ndarray(sample, "ClipPercentilesOp")
         finite = np.isfinite(arr)
         if not finite.any():
@@ -169,8 +171,8 @@ class RescaleOp:
     (``float64`` is preserved).
 
     Args:
-        in_min: Lower edge of the input range. Required.
-        in_max: Upper edge of the input range, must be ``> in_min``. Required.
+        in_min: Lower edge of the input range. Default ``0.0``.
+        in_max: Upper edge of the input range, must be ``> in_min``. Default ``1.0``.
         out_min: Lower edge of the output range. Default ``0.0``.
         out_max: Upper edge of the output range, must be ``> out_min``. Default ``1.0``.
         clip: When True (default), clamp values outside ``[in_min, in_max]``
@@ -182,16 +184,13 @@ class RescaleOp:
 
     def __init__(
         self,
-        in_min: float,
-        in_max: float,
+        in_min: float = 0.0,
+        in_max: float = 1.0,
         out_min: float = 0.0,
         out_max: float = 1.0,
         clip: bool = True,
     ) -> None:
-        if not (in_min < in_max):
-            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={in_min}, in_max={in_max}")
-        if not (out_min < out_max):
-            raise ValueError(f"RescaleOp: require out_min < out_max; got out_min={out_min}, out_max={out_max}")
+        # Lazy / zero-arg: store config only; the bound relationships are validated lazily in __call__.
         self.in_min = float(in_min)
         self.in_max = float(in_max)
         self.out_min = float(out_min)
@@ -199,6 +198,12 @@ class RescaleOp:
         self.clip = bool(clip)
 
     def __call__(self, sample: Sample) -> Sample:
+        if not (self.in_min < self.in_max):
+            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={self.in_min}, in_max={self.in_max}")
+        if not (self.out_min < self.out_max):
+            raise ValueError(
+                f"RescaleOp: require out_min < out_max; got out_min={self.out_min}, out_max={self.out_max}"
+            )
         arr = sample.input
         if hasattr(arr, "convert"):
             arr = np.array(arr)
@@ -229,8 +234,7 @@ class ReplaceNonFiniteOp:
     PRODUCES = SampleType(input=_NDARRAY)
 
     def __init__(self, value: Union[float, int, str] = "min") -> None:
-        if isinstance(value, str) and value not in ("min", "max"):
-            raise ValueError(f"ReplaceNonFiniteOp: value string must be 'min' or 'max'; got {value!r}")
+        # Lazy / zero-arg: store config only; the 'min'/'max' string is validated lazily in __call__.
         self.value = value
 
     def __call__(self, sample: Sample) -> Sample:
@@ -239,6 +243,8 @@ class ReplaceNonFiniteOp:
         if not non_finite.any():
             return sample
         if isinstance(self.value, str):
+            if self.value not in ("min", "max"):
+                raise ValueError(f"ReplaceNonFiniteOp: value string must be 'min' or 'max'; got {self.value!r}")
             finite = ~non_finite
             if not finite.any():
                 logger.warning("ReplaceNonFiniteOp: array is entirely non-finite; passing through")
@@ -282,7 +288,8 @@ class ThresholdOp:
     yield the CLOSED interval ``low_level <= input <= high_level``.
 
     At least one of ``low_level`` / ``high_level`` MUST be provided; passing
-    neither raises ``ValueError`` at construction.
+    neither raises ``ValueError`` when the op is applied (the zero-arg default is
+    deferred-valid so the op stays constructible, per the lazy-init convention).
 
     Each bound is either a numeric literal or a string expression resolved via
     :func:`resolve_expression` against ``sample.metadata`` and ``os.environ``:
@@ -315,8 +322,8 @@ class ThresholdOp:
         low_op: LowComparison = ">",
         high_op: HighComparison = "<",
     ) -> None:
-        if low_level is None and high_level is None:
-            raise ValueError("ThresholdOp requires at least one of 'low_level' / 'high_level'")
+        # Lazy / zero-arg: store config only; the "at least one bound" requirement is validated
+        # lazily in __call__ so the op stays constructible with no arguments.
         self.low_level = low_level
         self.high_level = high_level
         self.low_op = low_op
@@ -349,7 +356,8 @@ class ThresholdOp:
             sample.metadata["threshold_high"] = high
             below = _HIGH_COMPARISONS[self.high_op](arr, high)
             mask = below if mask is None else (mask & below)
-        assert mask is not None  # guaranteed by the __init__ presence check
+        if mask is None:
+            raise ValueError("ThresholdOp requires at least one of 'low_level' / 'high_level'")
         return sample._replace(input=mask)
 
 
@@ -379,14 +387,15 @@ class ConnectedComponentsOp:
     PRODUCES = SampleType(input=PythonType("list"))
 
     def __init__(self, min_area_bins: int = 1, connectivity: int = 4) -> None:
-        if min_area_bins < 1:
-            raise ValueError(f"min_area_bins must be >= 1; got {min_area_bins!r}")
-        if connectivity not in (4, 8):
-            raise ValueError(f"connectivity must be 4 or 8; got {connectivity!r}")
+        # Lazy / zero-arg: store config only; bounds are validated lazily in __call__.
         self.min_area_bins = int(min_area_bins)
         self.connectivity = int(connectivity)
 
     def __call__(self, sample: Sample) -> Sample:
+        if self.min_area_bins < 1:
+            raise ValueError(f"min_area_bins must be >= 1; got {self.min_area_bins!r}")
+        if self.connectivity not in (4, 8):
+            raise ValueError(f"connectivity must be 4 or 8; got {self.connectivity!r}")
         try:
             from scipy.ndimage import find_objects, generate_binary_structure, label
         except ImportError as exc:

@@ -113,12 +113,16 @@ class FilterOp:
 
     Args:
         p: Predicate ``Sample -> bool``; the sample passes through when it returns ``True``, else is dropped.
+            Defaults to ``None`` (zero-arg construction); a predicate must be set before the op runs.
     """
 
-    def __init__(self, p: Callable[[Sample], bool]):
+    def __init__(self, p: Optional[Callable[[Sample], bool]] = None):
+        # Lazy / zero-arg: store config only; a missing predicate is validated lazily in __call__.
         self.p = p
 
     def __call__(self, s: Sample) -> Optional[Sample]:
+        if self.p is None:
+            raise ValueError("FilterOp.p (predicate) is not set — provide a Sample->bool callable before use.")
         return s if self.p(s) else None
 
 
@@ -128,17 +132,19 @@ class WrappedOp:
 
     Args:
         f: The wrapped callable, or its importable ``module:function`` path (stored as a string for serialization).
-        s: Which Sample slot to transform — ``"input"``, ``"target"``, or ``"all"`` (the whole Sample).
-        kw: Extra keyword arguments forwarded to the wrapped callable on every call.
+            Defaults to ``""`` (zero-arg construction); resolving an empty path fails lazily on first call.
+        s: Which Sample slot to transform — ``"input"`` (default), ``"target"``, or ``"all"`` (the whole Sample).
+        kw: Extra keyword arguments forwarded to the wrapped callable on every call (defaults to none).
     """
 
-    def __init__(self, f: Union[str, Callable], s: str, kw: Dict[str, Any]):
+    def __init__(self, f: Union[str, Callable] = "", s: str = "input", kw: Optional[Dict[str, Any]] = None):
         from dataflux.discovery import get_callable_path
 
-        # EXPLICIT: Always store the string path for serialization
+        # Lazy / zero-arg: store config only (the empty-path default resolves lazily via the `func`
+        # property). EXPLICIT: always store the string path for serialization.
         self.f = get_callable_path(f) if callable(f) else f
         self.s = s
-        self.kw = kw
+        self.kw = dict(kw) if kw else {}
         # Internal cache for the live callable
         self._func_cache: Optional[Callable] = None
 
@@ -183,10 +189,12 @@ class JointFlux:
 
     Args:
         fluxes: The Flux streams to concatenate; iteration walks them in order and length is their sum.
+            Defaults to ``None`` ⇒ an empty joint stream (zero-arg construction).
     """
 
-    def __init__(self, fluxes: List["Flux"]) -> None:
-        self.fluxes = fluxes
+    def __init__(self, fluxes: Optional[List["Flux"]] = None) -> None:
+        # Lazy / zero-arg: store config only; no sub-fluxes ⇒ an empty stream.
+        self.fluxes = fluxes if fluxes is not None else []
 
     def __iter__(self) -> Iterator[Sample]:
         """Iterate through all sub-fluxes sequentially."""

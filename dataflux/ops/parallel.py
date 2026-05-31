@@ -38,10 +38,9 @@ class Parallel:
         workers: Number of worker processes (spawn context). Must be >= 1.
     """
 
-    def __init__(self, ops: List[Any], workers: int = 4) -> None:
-        if workers < 1:
-            raise ValueError(f"Parallel(workers={workers!r}): must be >= 1")
-        self.ops = list(ops)
+    def __init__(self, ops: Optional[List[Any]] = None, workers: int = 4) -> None:
+        # Lazy / zero-arg: store config only; ``workers >= 1`` is validated lazily in ``stream``.
+        self.ops = list(ops) if ops else []
         self.workers = int(workers)
 
     def _materialize_ops(self) -> None:
@@ -63,6 +62,8 @@ class Parallel:
 
     def stream(self, samples: Iterable[Optional[Sample]]) -> Iterator[Optional[Sample]]:
         """Stream-level dispatch with bounded prefetch (in-order yield)."""
+        if self.workers < 1:
+            raise ValueError(f"Parallel(workers={self.workers!r}): must be >= 1")
         self._materialize_ops()
         ctx = multiprocessing.get_context("spawn")
         limit = max(2 * self.workers, self.workers + 1)

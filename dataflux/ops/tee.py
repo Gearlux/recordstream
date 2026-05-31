@@ -26,8 +26,9 @@ class Tee:
             ``Sample -> Optional[Sample]`` run in order.
     """
 
-    def __init__(self, branches: List[List[Any]]) -> None:
-        self.branches = [list(b) for b in branches]
+    def __init__(self, branches: Optional[List[List[Any]]] = None) -> None:
+        # Lazy / zero-arg: store config only; no branches ⇒ __call__ passes the sample through.
+        self.branches = [list(b) for b in branches] if branches else []
 
     def __call__(self, sample: Sample) -> Optional[Sample]:
         current: Optional[Sample] = sample

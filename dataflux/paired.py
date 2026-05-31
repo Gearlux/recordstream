@@ -114,9 +114,9 @@ class AnnotationJoinSource:
 
     def __init__(
         self,
-        data: Iterable[Any],
-        annotations: AnnotationStore,
-        key_fn: Union[str, Callable[[Sample], str]],
+        data: Any = None,
+        annotations: Optional[AnnotationStore] = None,
+        key_fn: Union[str, Callable[[Sample], str]] = "",
         policy: Policy = "left_outer",
         extract_fn: Optional[Union[str, Callable[[Dict[str, Any], Sample], Optional[Dict[str, Any]]]]] = None,
         prefix: str = "",
@@ -126,14 +126,11 @@ class AnnotationJoinSource:
         # those signatures against a broader annotation.
         data_resolver: Optional[Union[str, Callable[[str, Any], Any]]] = None,
     ) -> None:
-        # `annotations` shape is enforced by the AnnotationStore Protocol via
-        # pydantic at construction. Only the policy-conditional requirement that
-        # right_driven needs a resolver is checked here (a Protocol can't express it).
-        if policy == "right_driven" and data_resolver is None:
-            raise ValueError("policy='right_driven' requires data_resolver")
-
+        # Lazy / zero-arg: store config only. `annotations` shape is enforced by the AnnotationStore
+        # Protocol via pydantic at construction; the policy-conditional "right_driven needs a resolver"
+        # requirement (which a Protocol can't express) is validated lazily in `_iter_right_driven`.
         self.data = data
-        self.annotations = annotations
+        self.annotations: AnnotationStore = annotations if annotations is not None else {}
         self.key_fn = get_callable_path(key_fn) if callable(key_fn) else key_fn
         self.policy = policy
         self.extract_fn = get_callable_path(extract_fn) if callable(extract_fn) else extract_fn
@@ -206,6 +203,8 @@ class AnnotationJoinSource:
             yield self._attach(sample, record, key)
 
     def _iter_right_driven(self) -> Iterator[Sample]:
+        if self.data_resolver is None:
+            raise ValueError("policy='right_driven' requires data_resolver")
         resolver = self._resolved_data_resolver
         for key in self.annotations.keys():
             raw = resolver(key, self.data)

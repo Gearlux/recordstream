@@ -31,7 +31,8 @@ class StashInputOp:
             don't mutate the shared array in place.
     """
 
-    def __init__(self, key: str, copy: bool = False) -> None:
+    def __init__(self, key: str = "", copy: bool = False) -> None:
+        # Lazy / zero-arg: store config only.
         self.key = key
         self.copy = copy
 
@@ -53,7 +54,8 @@ class UnstashInputOp:
             that no downstream op mutates the array in place.
     """
 
-    def __init__(self, key: str, copy: bool = True) -> None:
+    def __init__(self, key: str = "", copy: bool = True) -> None:
+        # Lazy / zero-arg: store config only; a missing key surfaces lazily as a KeyError in __call__.
         self.key = key
         self.copy = copy
 

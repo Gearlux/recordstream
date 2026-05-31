@@ -57,8 +57,9 @@ def test_encode_target_unknown_substitutes_default_when_ignored() -> None:
 
 
 def test_encode_target_empty_mapping_rejected() -> None:
+    op = EncodeTargetOp(mapping={})  # lazy: construction succeeds
     with pytest.raises(ValueError, match="at least one entry"):
-        EncodeTargetOp(mapping={})
+        op(Sample(input=0, target="x"))
 
 
 # --------------------------------------------------------------------------- #
@@ -79,8 +80,9 @@ def test_decode_target_unknown_default_is_none() -> None:
 
 
 def test_decode_target_empty_mapping_rejected() -> None:
+    op = DecodeTargetOp(mapping={})  # lazy: construction succeeds
     with pytest.raises(ValueError, match="at least one entry"):
-        DecodeTargetOp(mapping={})
+        op(Sample(input=0, target=1))
 
 
 # --------------------------------------------------------------------------- #

@@ -19,10 +19,12 @@ class HDF5Source(Storage, DataSource):
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: Union[str, Path] = "",
         sample_key: str = "data",
         target_key: Optional[str] = "target",
     ) -> None:
+        # Lazy / zero-arg: store config only; the file is opened lazily in open() (an unset path
+        # surfaces there, not in __init__).
         self.path = Path(path)
         self.sample_key = sample_key
         self.target_key = target_key
@@ -71,10 +73,11 @@ class HDF5Sink(Storage, DataSink):
 
     def __init__(
         self,
-        path: Union[str, Path],
+        path: Union[str, Path] = "",
         compression: Optional[str] = "gzip",
         overwrite: bool = False,
     ) -> None:
+        # Lazy / zero-arg: store config only; the file is opened lazily in open().
         self.path = Path(path)
         self.compression = compression
         self.overwrite = overwrite
