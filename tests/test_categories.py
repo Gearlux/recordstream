@@ -11,9 +11,11 @@ from confluid.registry import get_registry
 
 from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
 from dataflux.ops.copy import CopyInputOp
+from dataflux.ops.enable import Enable
 from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
 from dataflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
 from dataflux.ops.parallel import Parallel
+from dataflux.ops.sink import SampleSinkOp
 from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import ToTensorOp
@@ -61,6 +63,8 @@ def test_op_classes_tagged() -> None:
     assert StandardizeOp.__confluid_category__ == "op"
     assert ThresholdOp.__confluid_category__ == "op"
     assert Tee.__confluid_category__ == "op"
+    assert Enable.__confluid_category__ == "op"
+    assert SampleSinkOp.__confluid_category__ == "op"
     assert MetadataToTargetOp.__confluid_category__ == "op"
     assert EncodeTargetOp.__confluid_category__ == "op"
     assert DecodeTargetOp.__confluid_category__ == "op"
@@ -81,8 +85,10 @@ def test_op_group_tags() -> None:
     assert DecodeTargetOp.__confluid_group__ == "structure"
     assert Tee.__confluid_group__ == "compose"
     assert Parallel.__confluid_group__ == "compose"
+    assert Enable.__confluid_group__ == "compose"
     assert ConvertToImageOp.__confluid_group__ == "image"
     assert NormalizeToUint8Op.__confluid_group__ == "image"
+    assert SampleSinkOp.__confluid_group__ == "sink"
 
 
 def test_categories_enumerable_via_registry() -> None:
@@ -105,6 +111,8 @@ def test_categories_enumerable_via_registry() -> None:
         "StandardizeOp",
         "ThresholdOp",
         "Tee",
+        "Enable",
+        "SampleSinkOp",
         "MetadataToTargetOp",
         "EncodeTargetOp",
         "DecodeTargetOp",
@@ -116,7 +124,8 @@ def test_groups_enumerable_via_registry() -> None:
     registry = get_registry()
     assert {"RescaleOp", "StandardizeOp", "ThresholdOp"} <= registry.list_classes(group="numpy")
     assert {"ConvertToImageOp", "NormalizeToUint8Op"} <= registry.list_classes(group="image")
-    assert {"Tee", "Parallel"} <= registry.list_classes(group="compose")
+    assert {"Tee", "Parallel", "Enable"} <= registry.list_classes(group="compose")
+    assert {"SampleSinkOp"} <= registry.list_classes(group="sink")
     assert {"MetadataToTargetOp", "EncodeTargetOp", "DecodeTargetOp"} <= registry.list_classes(group="structure")
     # group × category intersect, like task × role.
     assert "Tee" in registry.list_classes(category="op", group="compose")

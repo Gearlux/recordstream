@@ -7,6 +7,8 @@ Submodules:
     - dataflux.ops.torch: RescaleOp, StandardizeOp, ToTensorOp (tensor)
     - dataflux.ops.tee: Tee (fan-out branching)
     - dataflux.ops.parallel: Parallel (worker-pool sub-pipeline)
+    - dataflux.ops.enable: Enable (toggle an op-list via one named CLI flag)
+    - dataflux.ops.sink: SampleSinkOp (adapt a DataSink as a pass-through op)
     - dataflux.ops.copy: CopySampleOp, CopyInputOp, CopyTargetOp, CopyMetadataOp
     - dataflux.ops.swap: SwapInputTargetOp
     - dataflux.ops.stash: StashInputOp, UnstashInputOp
@@ -17,7 +19,9 @@ swap / stash / target utilities are field-agnostic.
 """
 
 from dataflux.ops.copy import CopyInputOp, CopyMetadataOp, CopySampleOp, CopyTargetOp
+from dataflux.ops.enable import Enable
 from dataflux.ops.parallel import Parallel
+from dataflux.ops.sink import SampleSinkOp
 from dataflux.ops.stash import StashInputOp, UnstashInputOp
 from dataflux.ops.swap import SwapInputTargetOp
 from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
@@ -30,10 +34,12 @@ __all__ = [
     "CopySampleOp",
     "CopyTargetOp",
     "DecodeTargetOp",
+    "Enable",
     "EncodeTargetOp",
     "MetadataToTargetOp",
     "Parallel",
     "RescaleOp",
+    "SampleSinkOp",
     "StandardizeOp",
     "StashInputOp",
     "SwapInputTargetOp",
