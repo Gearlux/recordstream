@@ -11,7 +11,7 @@ from confluid.registry import get_registry
 
 from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
 from dataflux.ops.copy import CopyInputOp
-from dataflux.ops.image import ConvertToImageOp
+from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
 from dataflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
 from dataflux.ops.parallel import Parallel
 from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
@@ -82,6 +82,7 @@ def test_op_group_tags() -> None:
     assert Tee.__confluid_group__ == "compose"
     assert Parallel.__confluid_group__ == "compose"
     assert ConvertToImageOp.__confluid_group__ == "image"
+    assert NormalizeToUint8Op.__confluid_group__ == "image"
 
 
 def test_categories_enumerable_via_registry() -> None:
@@ -114,6 +115,7 @@ def test_groups_enumerable_via_registry() -> None:
     """The registry's group index must surface the tagged ops (``list_classes(group=...)``)."""
     registry = get_registry()
     assert {"RescaleOp", "StandardizeOp", "ThresholdOp"} <= registry.list_classes(group="numpy")
+    assert {"ConvertToImageOp", "NormalizeToUint8Op"} <= registry.list_classes(group="image")
     assert {"Tee", "Parallel"} <= registry.list_classes(group="compose")
     assert {"MetadataToTargetOp", "EncodeTargetOp", "DecodeTargetOp"} <= registry.list_classes(group="structure")
     # group × category intersect, like task × role.

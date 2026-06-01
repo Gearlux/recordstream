@@ -18,7 +18,7 @@ is imported lazily inside :func:`_apply_colormap` — only non-``"gray"`` colorm
 need it, so the pure-greyscale path stays matplotlib-free.
 """
 
-from typing import Any, Literal, Tuple, get_args
+from typing import Any, Literal, Optional, Tuple, get_args
 
 import numpy as np
 import torch
@@ -77,24 +77,6 @@ def _apply_colormap(spec_u8: np.ndarray, colormap: Colormap) -> Image.Image:
     return Image.fromarray(rgb, mode="RGB")
 
 
-def _to_uint8(arr: np.ndarray) -> np.ndarray:
-    """Min-max normalize a numeric array to ``uint8`` in ``[0, 255]``.
-
-    Non-finite entries are treated as the finite minimum. A flat array
-    (``max == min``) maps to all-zeros to avoid a divide-by-zero.
-    """
-    arr = arr.astype(np.float32)
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return np.zeros(arr.shape, dtype=np.uint8)
-    lo = float(finite.min())
-    hi = float(finite.max())
-    if hi <= lo:
-        return np.zeros(arr.shape, dtype=np.uint8)
-    norm = (np.nan_to_num(arr, nan=lo, posinf=hi, neginf=lo) - lo) / (hi - lo)
-    return (np.clip(norm, 0.0, 1.0) * 255.0).astype(np.uint8)
-
-
 def _text_to_image(text: str, width: int = 512, height: int = 160) -> np.ndarray:
     """Render a short string to an ``(H, W, 3)`` uint8 image (non-image fallback)."""
     img = Image.new("RGB", (width, height), color=(30, 30, 30))
@@ -130,7 +112,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
         arr = arr.astype(np.uint8) * 255
 
     if arr.ndim == 2:
-        return np.array(_apply_colormap(_to_uint8(arr), colormap))
+        return np.array(_apply_colormap(NormalizeToUint8Op.normalize_to_uint8(arr), colormap))
     if arr.ndim == 3:
         # Normalize channel position to trailing (HWC).
         if arr.shape[0] in (1, 3, 4) and arr.shape[2] not in (1, 3, 4):
@@ -144,7 +126,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
             arr = arr[..., :3]
         else:  # 2 channels (or other) — replicate the first
             arr = np.repeat(arr[..., :1], 3, axis=2)
-        return arr if arr.dtype == np.uint8 else _to_uint8(arr)
+        return arr if arr.dtype == np.uint8 else NormalizeToUint8Op.normalize_to_uint8(arr)
     return _text_to_image(f"input ndim={arr.ndim}, shape={arr.shape}")
 
 
@@ -272,10 +254,74 @@ class ConvertToImageOp:
         return sample._replace(input=img)
 
 
+@configurable(category="op", group="image")
+class NormalizeToUint8Op:
+    """Min-max normalize ``sample.input`` to a ``uint8`` array in ``[0, 255]``.
+
+    The generic value→``uint8`` conversion step, decoupled from any colormap or
+    PIL rendering (that is :class:`ConvertToImageOp`). Useful as a standalone
+    quantization stage — e.g. turning a dB spectrogram or a logit map into a
+    display-ready 8-bit grid — and as the shared math behind the renderers in
+    this module (:func:`value_to_image` calls :meth:`normalize_to_uint8`
+    directly for its 2-D-map and float-array paths).
+
+    By default the scale is taken from the array's own finite min/max (per-array
+    auto-contrast). Supply ``vmin`` / ``vmax`` to pin a *fixed* range instead so
+    successive samples are quantized on a common scale (e.g. a constant dB window
+    across a dataset) — values outside the range clamp to ``0`` / ``255``.
+
+    Non-finite entries (``NaN`` / ``±inf``) are folded to the low / high bound
+    before scaling; a degenerate range (``vmax <= vmin``, or a flat array under
+    auto bounds) maps to all-zeros to avoid a divide-by-zero.
+
+    Args:
+        vmin: Lower bound mapped to ``0``; ``None`` (default) uses the array's finite minimum.
+        vmax: Upper bound mapped to ``255``; ``None`` (default) uses the array's finite maximum.
+    """
+
+    ACCEPTS = SampleType(input=_ArrayType(frameworks={"numpy", "torch"}))
+    PRODUCES = SampleType(input=_ArrayType(dtype="uint8", frameworks={"numpy"}))
+
+    def __init__(self, vmin: Optional[float] = None, vmax: Optional[float] = None) -> None:
+        self.vmin = None if vmin is None else float(vmin)
+        self.vmax = None if vmax is None else float(vmax)
+
+    @staticmethod
+    def normalize_to_uint8(
+        arr: np.ndarray,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+    ) -> np.ndarray:
+        """Min-max normalize ``arr`` to ``uint8`` in ``[0, 255]``.
+
+        ``vmin`` / ``vmax`` pin the scale when given (clamping out-of-range
+        values); otherwise the array's finite min / max are used. Non-finite
+        entries are folded to the bounds; a degenerate range yields all-zeros.
+        """
+        arr = np.asarray(arr).astype(np.float32)
+        finite = arr[np.isfinite(arr)]
+        lo = float(vmin) if vmin is not None else (float(finite.min()) if finite.size else 0.0)
+        hi = float(vmax) if vmax is not None else (float(finite.max()) if finite.size else 0.0)
+        if hi <= lo:
+            return np.zeros(arr.shape, dtype=np.uint8)
+        filled = np.nan_to_num(arr, nan=lo, posinf=hi, neginf=lo)
+        norm = (filled - lo) / (hi - lo)
+        return (np.clip(norm, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+    def __call__(self, sample: Sample) -> Sample:
+        if self.vmin is not None and self.vmax is not None and self.vmin >= self.vmax:
+            raise ValueError(f"NormalizeToUint8Op: vmin must be < vmax; got vmin={self.vmin!r}, vmax={self.vmax!r}")
+        arr = sample.input
+        if isinstance(arr, torch.Tensor):
+            arr = arr.detach().cpu().numpy()
+        return sample._replace(input=self.normalize_to_uint8(arr, self.vmin, self.vmax))
+
+
 __all__ = [
     "Colormap",
     "COLORMAPS",
     "ConvertToImageOp",
+    "NormalizeToUint8Op",
     "value_to_image",
     "sample_to_image",
 ]

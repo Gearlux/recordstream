@@ -13,7 +13,15 @@ import pytest
 import torch
 from PIL import Image
 
-from dataflux.ops.image import COLORMAPS, Colormap, ConvertToImageOp, _apply_colormap, sample_to_image, value_to_image
+from dataflux.ops.image import (
+    COLORMAPS,
+    Colormap,
+    ConvertToImageOp,
+    NormalizeToUint8Op,
+    _apply_colormap,
+    sample_to_image,
+    value_to_image,
+)
 from dataflux.sample import Sample
 
 
@@ -128,6 +136,54 @@ def test_value_to_image_renders_an_arbitrary_value() -> None:
 def test_sample_to_image_delegates_to_value_to_image() -> None:
     arr = np.linspace(0.0, 1.0, 64).reshape(8, 8).astype(np.float32)
     assert np.array_equal(sample_to_image(Sample(input=arr)), value_to_image(arr))
+
+
+# ---------------------------------------------------------------------------
+# NormalizeToUint8Op
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_to_uint8_auto_minmax_spans_full_range() -> None:
+    arr = np.linspace(-3.0, 7.0, 100, dtype=np.float32).reshape(10, 10)
+    out = NormalizeToUint8Op.normalize_to_uint8(arr)
+    assert out.dtype == np.uint8
+    assert int(out.min()) == 0 and int(out.max()) == 255
+
+
+def test_normalize_to_uint8_fixed_range_clamps_outside() -> None:
+    arr = np.array([[-10.0, 0.0, 5.0, 20.0]], dtype=np.float32)
+    out = NormalizeToUint8Op.normalize_to_uint8(arr, vmin=0.0, vmax=10.0)
+    # -10 and 0 clamp to 0; 5 is mid (≈127); 20 clamps to 255.
+    assert list(out.ravel()) == [0, 0, 127, 255]
+
+
+def test_normalize_to_uint8_flat_array_is_all_zero() -> None:
+    out = NormalizeToUint8Op.normalize_to_uint8(np.full((4, 4), 9.0, dtype=np.float32))
+    assert int(out.max()) == 0
+
+
+def test_normalize_to_uint8_handles_non_finite() -> None:
+    arr = np.array([[0.0, np.nan, np.inf, -np.inf, 4.0]], dtype=np.float32)
+    out = NormalizeToUint8Op.normalize_to_uint8(arr)
+    # NaN/-inf fold to the low bound (0), +inf to the high bound (4 → 255).
+    assert out[0, 0] == 0 and out[0, 1] == 0 and out[0, 3] == 0
+    assert out[0, 2] == 255 and out[0, 4] == 255
+
+
+def test_normalize_to_uint8_op_converts_sample_input() -> None:
+    arr = np.linspace(0.0, 1.0, 64, dtype=np.float32).reshape(8, 8)
+    out = NormalizeToUint8Op()(Sample(input=arr))
+    assert out.input.dtype == np.uint8 and out.input.shape == (8, 8)
+
+
+def test_normalize_to_uint8_op_accepts_torch_tensor() -> None:
+    out = NormalizeToUint8Op()(Sample(input=torch.linspace(0, 1, 16).reshape(4, 4)))
+    assert isinstance(out.input, np.ndarray) and out.input.dtype == np.uint8
+
+
+def test_normalize_to_uint8_op_rejects_inverted_range() -> None:
+    with pytest.raises(ValueError, match="vmin must be < vmax"):
+        NormalizeToUint8Op(vmin=10.0, vmax=1.0)(Sample(input=np.zeros((2, 2), dtype=np.float32)))
 
 
 # ---------------------------------------------------------------------------

@@ -141,6 +141,15 @@ sample = op(sample)          # also publishes image_width_px / image_height_px t
 
 # Library function for ad-hoc previews (PIL / tensor / ndarray / mask -> (H, W, 3) uint8):
 rgb = value_to_image(some_value, colormap="magma", max_size=512)
+
+# NormalizeToUint8Op: the standalone min-max value -> uint8 quantization step
+# (decoupled from colormap / PIL). vmin/vmax default None = per-array auto-contrast;
+# set them to pin a fixed scale across samples (out-of-range values clamp).
+from dataflux.ops.image import NormalizeToUint8Op
+
+sample = NormalizeToUint8Op()(sample)                       # auto per-array min/max
+sample = NormalizeToUint8Op(vmin=-80.0, vmax=0.0)(sample)   # fixed dB window across a dataset
+u8 = NormalizeToUint8Op.normalize_to_uint8(arr, vmin=-80.0, vmax=0.0)  # the backing @staticmethod
 ```
 
 `Colormap` / `COLORMAPS` / `value_to_image` / `sample_to_image` are re-exported
