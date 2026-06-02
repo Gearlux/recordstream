@@ -3,6 +3,7 @@ DataFlux: Modular, functional data pipelines.
 """
 
 from dataflux.core import Flux, JointFlux, WrappedOp
+from dataflux.labels import LabelMap
 from dataflux.ops import RescaleOp, StandardizeOp, ToTensorOp
 from dataflux.paired import AnnotationJoinSource, AnnotationStore
 from dataflux.projection import ProjectionField, SupportsProjection, iter_inputs, iter_targets, num_classes, project
@@ -41,6 +42,7 @@ __all__ = [
     "Framework",
     "HuggingFaceSource",
     "JointFlux",
+    "LabelMap",
     "ListType",
     "MappingType",
     "ProjectionField",

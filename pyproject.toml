@@ -16,7 +16,8 @@ dependencies = [
     "albumentations",
     "orjson",
     "fsspec",
-    "cloudpathlib"
+    "cloudpathlib",
+    "scikit-learn"  # LabelMap.fit() uses sklearn.preprocessing.LabelEncoder (lazy-imported)
 ]
 requires-python = ">=3.12"
 

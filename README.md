@@ -121,6 +121,30 @@ full-iteration fallback (just without the skip-decode speedup). `num_classes` is
 a free function, not a `Flux` method: integer class-id semantics are
 classification-specific, so the task-agnostic engine doesn't advertise it.
 
+### `LabelMap` — fittable name↔id encoding
+
+When a dataset's `target` is a class **name** rather than an integer id, `LabelMap` turns it into
+the pinned encoding the `EncodeTargetOp` / `DecodeTargetOp` need — the *fittable* companion to
+those ops. Fit it once (sklearn `LabelEncoder`, deterministic sorted ordering), persist it in the
+`class_names.json` format, and reload it at eval/predict so every stage shares one ordering:
+
+```python
+from dataflux import LabelMap, Flux
+
+lm = LabelMap.fit(iter_targets(train_source))   # {"bird": 0, "cat": 1, "dog": 2}
+lm.num_classes        # 3
+lm.label_names        # ["bird", "cat", "dog"]  (id -> name)
+lm.save("class_names.json")                     # marainer's class_names.json format
+
+encoded = Flux(source=train_source, ops=[lm.encode_op()])   # targets are now ints
+
+# Later, at eval time — reload the SAME ordering instead of refitting:
+lm2 = LabelMap.load("class_names.json")
+```
+
+`LabelMap.fit` is the *only* place a mapping is derived from data; everywhere downstream the
+mapping is pinned, so train / eval / predict never disagree. `scikit-learn` backs `fit` (lazy-imported).
+
 ## 🖼 Image Conversion (`dataflux.ops.image`)
 
 The single, modality-agnostic "any value → image" layer — generic so every
