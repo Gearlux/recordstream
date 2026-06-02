@@ -21,7 +21,7 @@ _EXPR_PATTERN = re.compile(r"\{(\w+)\}|\$(\w+)")
 
 
 def resolve_expression(value: str, sample: Sample) -> str:
-    """Substitute ``{key}`` from ``sample.metadata`` and ``$NAME`` from ``os.environ``.
+    """Substitute ``{key}`` from ``sample.meta`` and ``$NAME`` from ``os.environ``.
 
     Returns the substituted string verbatim — the caller is responsible for
     any further casting (e.g. ``float(...)`` for a numeric expression).
@@ -45,12 +45,12 @@ def resolve_expression(value: str, sample: Sample) -> str:
         meta_key = match.group(1)
         env_name = match.group(2)
         if meta_key is not None:
-            if meta_key not in sample.metadata:
+            if meta_key not in sample.meta:
                 raise KeyError(
                     f"resolve_expression: metadata key {meta_key!r} missing in {value!r}; "
-                    f"available keys: {sorted(sample.metadata)}"
+                    f"available keys: {sorted(sample.meta)}"
                 )
-            return str(sample.metadata[meta_key])
+            return str(sample.meta[meta_key])
         assert env_name is not None
         if env_name not in os.environ:
             raise KeyError(f"resolve_expression: environment variable {env_name!r} missing in {value!r}")
@@ -292,7 +292,7 @@ class ThresholdOp:
     deferred-valid so the op stays constructible, per the lazy-init convention).
 
     Each bound is either a numeric literal or a string expression resolved via
-    :func:`resolve_expression` against ``sample.metadata`` and ``os.environ``:
+    :func:`resolve_expression` against ``sample.meta`` and ``os.environ``:
 
     * ``5.5`` or ``"5.5"``                — fixed bound
     * ``"{reference_snr_level}"``         — looks up ``metadata["reference_snr_level"]``
@@ -349,11 +349,11 @@ class ThresholdOp:
         mask: Optional[np.ndarray] = None
         if self.low_level is not None:
             low = self._resolve(self.low_level, sample)
-            sample.metadata["threshold_low"] = low
+            sample.meta["threshold_low"] = low
             mask = _LOW_COMPARISONS[self.low_op](arr, low)
         if self.high_level is not None:
             high = self._resolve(self.high_level, sample)
-            sample.metadata["threshold_high"] = high
+            sample.meta["threshold_high"] = high
             below = _HIGH_COMPARISONS[self.high_op](arr, high)
             mask = below if mask is None else (mask & below)
         if mask is None:

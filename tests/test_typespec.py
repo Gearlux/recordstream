@@ -458,9 +458,9 @@ def test_sample_with_type_and_describe_stored() -> None:
     declared = SampleType(input=ArrayType.image("CHW", 3, "float32", "torch"))
     s = Sample(input=np.zeros((3, 8, 8), dtype=np.float32), metadata={"id": 7})
     typed_s = s.with_type(declared)
-    assert FEATURES_KEY in typed_s.metadata and SPEC_KEY in typed_s.metadata
-    assert typed_s.metadata["id"] == 7  # pre-existing metadata preserved
-    assert s.metadata == {"id": 7} and FEATURES_KEY not in s.metadata  # copy-on-write: original untouched
+    assert FEATURES_KEY in typed_s.meta and SPEC_KEY in typed_s.meta
+    assert typed_s.meta["id"] == 7  # pre-existing metadata preserved
+    assert s.meta == {"id": 7} and FEATURES_KEY not in s.meta  # copy-on-write: original untouched
     rt = typed_s.describe()
     assert rt.accepts(declared) and declared.accepts(rt)
 
@@ -488,7 +488,7 @@ def _run(sample: Sample, op: Any) -> Sample:
 
 def test_pipeline_does_not_stamp_untracked_samples() -> None:
     out = _run(Sample(input=np.array([1, 2, 3])), _ToFloat64Op())
-    assert FEATURES_KEY not in out.metadata and SPEC_KEY not in out.metadata
+    assert FEATURES_KEY not in out.meta and SPEC_KEY not in out.meta
 
 
 def test_pipeline_refreshes_stored_type_from_produces() -> None:
@@ -496,7 +496,7 @@ def test_pipeline_refreshes_stored_type_from_produces() -> None:
         SampleType(input=ArrayType(ndim=1, dtype="int64", frameworks={"numpy"}))
     )
     out = _run(stamped, _ToFloat64Op())
-    assert FEATURES_KEY in out.metadata
+    assert FEATURES_KEY in out.meta
     assert out.describe().accepts(_ToFloat64Op.PRODUCES)
     assert _ToFloat64Op.PRODUCES.accepts(out.describe())
 
@@ -506,7 +506,7 @@ def test_pipeline_drops_stored_type_when_op_has_no_produces() -> None:
         SampleType(input=ArrayType(ndim=1, dtype="int64", frameworks={"numpy"}))
     )
     out = _run(stamped, _UntypedOp())
-    assert FEATURES_KEY not in out.metadata and SPEC_KEY not in out.metadata
+    assert FEATURES_KEY not in out.meta and SPEC_KEY not in out.meta
     # describe() falls back to inference -> still correct, just not "stored"
     assert isinstance(out.describe().input, ArrayType)
 

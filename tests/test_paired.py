@@ -51,7 +51,7 @@ class DictStore:
 
 # Module-level callables so resolve_callable can find them
 def sample_id_key(sample: Sample) -> str:
-    return str(sample.metadata["id"])
+    return str(sample.meta["id"])
 
 
 def identity_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, Any]]:
@@ -64,7 +64,7 @@ def none_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, A
 
 def odd_only_extract(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, Any]]:
     """Return the record only for odd-id samples, None otherwise."""
-    idx = int(str(sample.metadata["id"])[1:])
+    idx = int(str(sample.meta["id"])[1:])
     if idx % 2 == 1:
         return record
     return None
@@ -90,7 +90,7 @@ def test_left_outer_emits_all_data() -> None:
 
     assert len(samples) == 4
     assert [s.input for s in samples] == [0, 10, 20, 30]
-    assert [s.metadata["annotated"] for s in samples] == [True, False, True, False]
+    assert [s.meta["annotated"] for s in samples] == [True, False, True, False]
 
 
 def test_left_outer_flattens_record_into_metadata() -> None:
@@ -100,11 +100,11 @@ def test_left_outer_flattens_record_into_metadata() -> None:
 
     samples = list(paired)
 
-    assert samples[0].metadata["label"] == "dog"
-    assert samples[0].metadata["confidence"] == 0.9
-    assert samples[0].metadata["annotation_key"] == "s0"
-    assert "label" not in samples[1].metadata
-    assert samples[1].metadata["annotation_key"] == "s1"
+    assert samples[0].meta["label"] == "dog"
+    assert samples[0].meta["confidence"] == 0.9
+    assert samples[0].meta["annotation_key"] == "s0"
+    assert "label" not in samples[1].meta
+    assert samples[1].meta["annotation_key"] == "s1"
 
 
 def test_left_outer_preserves_original_metadata() -> None:
@@ -113,8 +113,8 @@ def test_left_outer_preserves_original_metadata() -> None:
     paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     sample = list(paired)[0]
-    assert sample.metadata["id"] == "s0"  # data metadata survived
-    assert sample.metadata["label"] == "x"
+    assert sample.meta["id"] == "s0"  # data metadata survived
+    assert sample.meta["label"] == "x"
 
 
 def test_left_outer_prefix() -> None:
@@ -123,8 +123,8 @@ def test_left_outer_prefix() -> None:
     paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key, prefix="ann_")
 
     sample = list(paired)[0]
-    assert sample.metadata["ann_label"] == "x"
-    assert "label" not in sample.metadata
+    assert sample.meta["ann_label"] == "x"
+    assert "label" not in sample.meta
 
 
 def test_left_outer_store_full_under() -> None:
@@ -138,9 +138,9 @@ def test_left_outer_store_full_under() -> None:
     )
 
     sample = list(paired)[0]
-    assert sample.metadata["raw_annotation"] == {"label": "x", "score": 0.5}
+    assert sample.meta["raw_annotation"] == {"label": "x", "score": 0.5}
     # Still flattened too
-    assert sample.metadata["label"] == "x"
+    assert sample.meta["label"] == "x"
 
 
 def test_left_outer_len_delegates_to_data() -> None:
@@ -157,12 +157,12 @@ def test_left_outer_getitem_matched_and_unmatched() -> None:
     paired = AnnotationJoinSource(data=data, annotations=store, key_fn=sample_id_key)
 
     matched = paired[1]
-    assert matched.metadata["annotated"] is True
-    assert matched.metadata["label"] == "y"
+    assert matched.meta["annotated"] is True
+    assert matched.meta["label"] == "y"
 
     unmatched = paired[0]
-    assert unmatched.metadata["annotated"] is False
-    assert "label" not in unmatched.metadata
+    assert unmatched.meta["annotated"] is False
+    assert "label" not in unmatched.meta
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +178,8 @@ def test_inner_emits_only_matched() -> None:
     samples = list(paired)
 
     assert len(samples) == 2
-    assert {s.metadata["annotation_key"] for s in samples} == {"s0", "s3"}
-    assert all(s.metadata["annotated"] for s in samples)
+    assert {s.meta["annotation_key"] for s in samples} == {"s0", "s3"}
+    assert all(s.meta["annotated"] for s in samples)
 
 
 def test_inner_len_is_cached_scan() -> None:
@@ -218,8 +218,8 @@ def test_extract_fn_transforms_record() -> None:
 
     samples = list(paired)
 
-    assert samples[0].metadata["label"] == "a"
-    assert samples[1].metadata["label"] == "b"
+    assert samples[0].meta["label"] == "a"
+    assert samples[1].meta["label"] == "b"
 
 
 def test_extract_fn_returning_none_marks_unannotated() -> None:
@@ -235,7 +235,7 @@ def test_extract_fn_returning_none_marks_unannotated() -> None:
     samples = list(paired)
 
     # Every sample emitted under left_outer; only odd ones are annotated
-    assert [s.metadata["annotated"] for s in samples] == [False, True, False]
+    assert [s.meta["annotated"] for s in samples] == [False, True, False]
 
 
 def test_extract_fn_with_inner_policy_filters() -> None:
@@ -251,7 +251,7 @@ def test_extract_fn_with_inner_policy_filters() -> None:
 
     samples = list(paired)
 
-    assert {s.metadata["annotation_key"] for s in samples} == {"s1", "s3"}
+    assert {s.meta["annotation_key"] for s in samples} == {"s1", "s3"}
 
 
 def test_extract_fn_none_suppresses_flattening() -> None:
@@ -265,8 +265,8 @@ def test_extract_fn_none_suppresses_flattening() -> None:
     )
 
     sample = list(paired)[0]
-    assert sample.metadata["annotated"] is False
-    assert "label" not in sample.metadata
+    assert sample.meta["annotated"] is False
+    assert "label" not in sample.meta
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +286,8 @@ def test_coarser_key_broadcasts_to_all_matching_samples() -> None:
 
     samples = list(paired)
 
-    assert all(s.metadata["annotated"] for s in samples)
-    assert all(s.metadata["drone"] == "dji_mavic" for s in samples)
+    assert all(s.meta["annotated"] for s in samples)
+    assert all(s.meta["drone"] == "dji_mavic" for s in samples)
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +309,7 @@ def test_right_driven_iterates_annotation_keys() -> None:
     samples = list(paired)
 
     assert len(samples) == 2
-    assert [s.metadata["annotation_key"] for s in samples] == ["s0", "s3"]
+    assert [s.meta["annotation_key"] for s in samples] == ["s0", "s3"]
     assert [s.input for s in samples] == [0, 30]
 
 
@@ -341,7 +341,7 @@ def test_right_driven_skips_when_extract_fn_returns_none() -> None:
 
     samples = list(paired)
 
-    assert {s.metadata["annotation_key"] for s in samples} == {"s1", "s3"}
+    assert {s.meta["annotation_key"] for s in samples} == {"s1", "s3"}
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +422,7 @@ def test_key_fn_accepts_string_path() -> None:
     )
 
     sample = list(paired)[0]
-    assert sample.metadata["label"] == "x"
+    assert sample.meta["label"] == "x"
 
 
 def test_extract_fn_accepts_string_path() -> None:
@@ -436,7 +436,7 @@ def test_extract_fn_accepts_string_path() -> None:
     )
 
     sample = list(paired)[0]
-    assert sample.metadata["label"] == "x"
+    assert sample.meta["label"] == "x"
 
 
 def test_callable_is_stored_as_string() -> None:
@@ -467,9 +467,9 @@ def test_chained_paired_sources_compose() -> None:
     samples = list(full_paired)
 
     # Every sample has drone (from pack), s1 also has event
-    assert all(s.metadata["drone"] == "mavic" for s in samples)
-    assert samples[1].metadata["event"] == "takeoff"
-    assert "event" not in samples[0].metadata
+    assert all(s.meta["drone"] == "mavic" for s in samples)
+    assert samples[1].meta["event"] == "takeoff"
+    assert "event" not in samples[0].meta
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +491,7 @@ def test_confluid_roundtrip_preserves_behavior() -> None:
     yaml_state = confluid.dump(paired)
     restored = confluid.load(yaml_state)
 
-    original_result = [(s.input, s.metadata.get("ann_label"), s.metadata["annotated"]) for s in paired]
-    restored_result = [(s.input, s.metadata.get("ann_label"), s.metadata["annotated"]) for s in restored]
+    original_result = [(s.input, s.meta.get("ann_label"), s.meta["annotated"]) for s in paired]
+    restored_result = [(s.input, s.meta.get("ann_label"), s.meta["annotated"]) for s in restored]
 
     assert original_result == restored_result

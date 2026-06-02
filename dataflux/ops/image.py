@@ -209,7 +209,7 @@ class ConvertToImageOp:
     array's row 0 is the *bottom* of the desired image (a spectrogram stores
     row 0 = f_min but display wants f_max at the top, so overlay pixel math
     lines up). The final ``image_width_px`` / ``image_height_px`` are published
-    to ``sample.metadata`` so downstream consumers (e.g. a detector
+    to ``sample.meta`` so downstream consumers (e.g. a detector
     back-projecting pixel boxes to signal regions) can read the raster size.
 
     Args:
@@ -249,8 +249,8 @@ class ConvertToImageOp:
         else:
             img = Image.fromarray(_bound_longest_side(rgb, self.max_size))
 
-        sample.metadata["image_width_px"] = img.width
-        sample.metadata["image_height_px"] = img.height
+        sample.meta["image_width_px"] = img.width
+        sample.meta["image_height_px"] = img.height
         return sample._replace(input=img)
 
 

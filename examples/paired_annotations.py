@@ -62,11 +62,11 @@ class DictStore:
 # Module-level callables so they survive Confluid YAML round-trip via
 # dataflux.discovery.resolve_callable("examples.paired_annotations:<name>").
 def window_key(sample: Sample) -> str:
-    return f"{sample.metadata['pack_id']}:win{sample.metadata['window_start_sample']:08d}"
+    return f"{sample.meta['pack_id']}:win{sample.meta['window_start_sample']:08d}"
 
 
 def pack_key(sample: Sample) -> str:
-    return str(sample.metadata["pack_id"])
+    return str(sample.meta["pack_id"])
 
 
 def resolve_by_window_key(key: str, data: WindowedSource) -> Sample:
@@ -78,9 +78,9 @@ def resolve_by_window_key(key: str, data: WindowedSource) -> Sample:
 
 def slice_intervals(record: Dict[str, Any], sample: Sample) -> Optional[Dict[str, Any]]:
     """Trim per-pack time intervals down to each window's range."""
-    samplerate = sample.metadata["samplerate"]
-    win_start = sample.metadata["window_start_sample"] / samplerate
-    win_end = sample.metadata["window_end_sample"] / samplerate
+    samplerate = sample.meta["samplerate"]
+    win_start = sample.meta["window_start_sample"] / samplerate
+    win_end = sample.meta["window_end_sample"] / samplerate
     trimmed = []
     for iv in record.get("intervals", []):
         s, e = max(iv["start_s"], win_start), min(iv["end_s"], win_end)
@@ -102,9 +102,9 @@ def scenario_a_binary_first() -> None:
     paired = AnnotationJoinSource(data=data, annotations=store, key_fn=window_key)
 
     for s in paired:
-        flag = "ANNOTATED" if s.metadata["annotated"] else "        -"
-        label = s.metadata.get("label", "")
-        print(f"  [{flag}] window_start={s.metadata['window_start_sample']:>4}  label={label!r}")
+        flag = "ANNOTATED" if s.meta["annotated"] else "        -"
+        label = s.meta.get("label", "")
+        print(f"  [{flag}] window_start={s.meta['window_start_sample']:>4}  label={label!r}")
 
 
 def scenario_b_annotation_first() -> None:
@@ -121,7 +121,7 @@ def scenario_b_annotation_first() -> None:
     paired = AnnotationJoinSource(data=data, annotations=store, key_fn=window_key, policy="inner")
 
     for s in paired:
-        print(f"  key={s.metadata['annotation_key']:<30}  label={s.metadata['label']!r}")
+        print(f"  key={s.meta['annotation_key']:<30}  label={s.meta['label']!r}")
     print(f"  -> {len(list(paired))} samples (out of {len(data)} in data)")
 
 
@@ -135,8 +135,7 @@ def scenario_c1_broadcast() -> None:
 
     for s in paired:
         print(
-            f"  win={s.metadata['window_start_sample']:>4}  "
-            f"drone={s.metadata['drone']!r}  operator={s.metadata['operator']!r}"
+            f"  win={s.meta['window_start_sample']:>4}  " f"drone={s.meta['drone']!r}  operator={s.meta['operator']!r}"
         )
 
 
@@ -164,11 +163,11 @@ def scenario_c2_slicing() -> None:
     )
 
     for s in paired:
-        win = s.metadata["window_start_sample"]
-        if s.metadata["annotated"]:
-            iv = s.metadata["intervals"][0]
+        win = s.meta["window_start_sample"]
+        if s.meta["annotated"]:
+            iv = s.meta["intervals"][0]
             print(
-                f"  win_start={win:>4}  drone={s.metadata['drone']!r}  "
+                f"  win_start={win:>4}  drone={s.meta['drone']!r}  "
                 f"active=[{iv['start_s']*1e6:.1f}us, {iv['end_s']*1e6:.1f}us]"
             )
         else:
@@ -196,7 +195,7 @@ def scenario_d_right_driven() -> None:
     )
 
     for s in paired:
-        print(f"  key={s.metadata['annotation_key']:<30}  label={s.metadata['label']!r}")
+        print(f"  key={s.meta['annotation_key']:<30}  label={s.meta['label']!r}")
 
 
 def scenario_e_confluid_roundtrip() -> None:

@@ -121,7 +121,7 @@ class HDF5Sink(Storage, DataSink):
         # and the str() fallback would silently truncate the array — so it is written as its own
         # dataset under a per-sample group ``{prefix}_meta/<key>`` (the "/" makes h5py auto-create the
         # group; arbitrary metadata keys are safe as dataset names). HDF5Source merges both back.
-        for k, v in sample.metadata.items():
+        for k, v in sample.meta.items():
             if isinstance(v, (np.ndarray, torch.Tensor)):
                 arr = to_numpy(v)
                 m_kwargs = {}

@@ -542,7 +542,7 @@ def test_hf_source_iter_metadata_features_star_expands_on_real_dataset() -> None
 
     samples = list(src)
     assert [s.input for s in samples] == [0, 1, 2]
-    md = samples[0].metadata
+    md = samples[0].meta
     assert md["id"] == "r0" and md["src"] == "a"
     assert "image" not in md and "label" not in md  # input/target excluded from metadata
     assert md["hf_path"] == "fake/ds" and md["hf_split"] == "train"

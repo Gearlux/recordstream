@@ -22,7 +22,7 @@ class _CountingOp:
 
     def __call__(self, sample: Sample) -> Sample:
         self.counter["calls"] += 1
-        new_meta = dict(sample.metadata)
+        new_meta = dict(sample.meta)
         new_meta["counted"] = True
         return sample._replace(metadata=new_meta)
 
@@ -50,7 +50,7 @@ def test_enable_disabled_passes_sample_through_untouched() -> None:
     wrapped = _wrap(_CountingOp(counter), visualize=False)
     out = wrapped(_sample())
     assert counter["calls"] == 0
-    assert "counted" not in out.metadata
+    assert "counted" not in out.meta
 
 
 def test_enable_enabled_invokes_inner_op() -> None:
@@ -58,7 +58,7 @@ def test_enable_enabled_invokes_inner_op() -> None:
     wrapped = _wrap(_CountingOp(counter), visualize=True)
     out = wrapped(_sample())
     assert counter["calls"] == 1
-    assert out.metadata["counted"] is True
+    assert out.meta["counted"] is True
     assert wrapped.flag_name == "visualize"
 
 
@@ -92,7 +92,7 @@ def test_enable_multi_op_threads_sample_through_each() -> None:
 
         def __call__(self, sample: Sample) -> Sample:
             self.counter["calls"] += 1
-            new_meta = dict(sample.metadata)
+            new_meta = dict(sample.meta)
             tags = list(new_meta.get("tags", []))
             tags.append(self.tag)
             new_meta["tags"] = tags
@@ -105,7 +105,7 @@ def test_enable_multi_op_threads_sample_through_each() -> None:
     out = wrapped(_sample())
     assert counter_a["calls"] == 1
     assert counter_b["calls"] == 1
-    assert out.metadata["tags"] == ["first", "second"]
+    assert out.meta["tags"] == ["first", "second"]
 
 
 def test_enable_multi_op_disabled_skips_entire_chain() -> None:

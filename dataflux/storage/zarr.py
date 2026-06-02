@@ -49,8 +49,8 @@ class ZarrGroupSink(Storage, DataSink):
             grp.create_array("target", data=to_numpy(sample.target), overwrite=True)
 
         # 2. Save metadata as Zarr attributes (.zattrs)
-        if sample.metadata:
-            grp.attrs.update(sample.metadata)
+        if sample.meta:
+            grp.attrs.update(sample.meta)
 
         self._counter += 1
 

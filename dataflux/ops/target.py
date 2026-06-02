@@ -66,14 +66,13 @@ class MetadataToTargetOp:
         self.target_key = str(target_key) if target_key is not None else None
 
     def __call__(self, sample: Sample) -> Sample:
-        if self.key not in sample.metadata:
+        if self.key not in sample.meta:
             raise KeyError(
-                f"MetadataToTargetOp: sample.metadata has no key {self.key!r}. "
-                f"Available keys: {sorted(sample.metadata)}"
+                f"MetadataToTargetOp: sample.meta has no key {self.key!r}. " f"Available keys: {sorted(sample.meta)}"
             )
-        value = sample.metadata[self.key]
+        value = sample.meta[self.key]
         if self.target_key is not None:
-            sample.metadata[self.target_key] = value
+            sample.meta[self.target_key] = value
         return sample._replace(target=value)
 
 

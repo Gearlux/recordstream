@@ -50,13 +50,13 @@ def _refresh_type(sample: Sample, op: Any) -> Sample:
     dataset), an op that declares ``PRODUCES`` refreshes it; an op that declares none drops it so
     :meth:`Sample.describe` falls back to inference rather than reporting a stale type.
     """
-    if not any(key in sample.metadata for key in TYPE_KEYS):
+    if not any(key in sample.meta for key in TYPE_KEYS):
         return sample
     produces = getattr(op, "PRODUCES", None)
     if produces is not None:
         features_key, spec_key = _serialized_type_keys(produces)
-        return sample._replace(metadata={**sample.metadata, FEATURES_KEY: features_key, SPEC_KEY: spec_key})
-    return sample._replace(metadata={k: v for k, v in sample.metadata.items() if k not in TYPE_KEYS})
+        return sample._replace(metadata={**sample.meta, FEATURES_KEY: features_key, SPEC_KEY: spec_key})
+    return sample._replace(metadata={k: v for k, v in sample.meta.items() if k not in TYPE_KEYS})
 
 
 def _apply_op(sample: Sample, op: Any) -> Optional[Sample]:
@@ -514,5 +514,5 @@ class Flux(torch.utils.data.Dataset[Sample]):
             yield Sample(
                 input=sample.input if "input" in want else None,
                 target=sample.target if "target" in want else None,
-                metadata=sample.metadata if "metadata" in want else {},
+                metadata=sample.meta if "metadata" in want else {},
             )

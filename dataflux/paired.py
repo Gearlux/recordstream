@@ -168,7 +168,7 @@ class AnnotationJoinSource:
         return self._data_resolver_cache
 
     def _attach(self, sample: Sample, record: Optional[Dict[str, Any]], key: str) -> Sample:
-        metadata = dict(sample.metadata)
+        metadata = dict(sample.meta)
         metadata["annotation_key"] = key
         metadata["annotated"] = record is not None
 

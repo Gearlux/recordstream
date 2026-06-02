@@ -17,14 +17,14 @@ def test_metadata_to_target_moves_value() -> None:
 def test_metadata_to_target_leaves_metadata_untouched_without_target_key() -> None:
     sample = Sample(input=0, metadata={"drone": "DJI MINI3"})
     out = MetadataToTargetOp(key="drone")(sample)
-    assert set(out.metadata) == {"drone"}
+    assert set(out.meta) == {"drone"}
 
 
 def test_metadata_to_target_copies_to_target_key() -> None:
     sample = Sample(input=0, metadata={"drone": "DJI MINI3"})
     out = MetadataToTargetOp(key="drone", target_key="raw_label")(sample)
     assert out.target == "DJI MINI3"
-    assert out.metadata["raw_label"] == "DJI MINI3"
+    assert out.meta["raw_label"] == "DJI MINI3"
 
 
 def test_metadata_to_target_missing_key_raises() -> None:
@@ -95,4 +95,4 @@ def test_metadata_to_target_then_encode() -> None:
     sample = EncodeTargetOp(mapping=label_to_index)(sample)
     assert sample.target == 2
     # raw label preserved for decode/reporting
-    assert sample.metadata["raw_label"] == "DJI AVATA2"
+    assert sample.meta["raw_label"] == "DJI AVATA2"

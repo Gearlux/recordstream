@@ -69,7 +69,7 @@ class TestToTensorOp:
         arr = np.zeros((28, 28), dtype=np.uint8)
         result = ToTensorOp()(Sample(input=arr, target=5, metadata={"k": "v"}))
         assert result.target == 5
-        assert result.metadata == {"k": "v"}
+        assert result.meta == {"k": "v"}
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ class TestRescaleOp:
         tensor = torch.tensor([128.0])
         result = RescaleOp(in_min=0.0, in_max=255.0)(Sample(input=tensor, target=7, metadata={"key": "val"}))
         assert result.target == 7
-        assert result.metadata == {"key": "val"}
+        assert result.meta == {"key": "val"}
 
     def test_raises_on_non_tensor(self) -> None:
         with pytest.raises(TypeError, match="RescaleOp expects a torch.Tensor"):
@@ -193,7 +193,7 @@ class TestStandardizeOp:
         tensor = torch.tensor([5.0])
         result = StandardizeOp(mean=0.0, std=1.0)(Sample(input=tensor, target=3, metadata={"a": 1}))
         assert result.target == 3
-        assert result.metadata == {"a": 1}
+        assert result.meta == {"a": 1}
 
     def test_raises_on_non_tensor(self) -> None:
         with pytest.raises(TypeError, match="StandardizeOp expects a torch.Tensor"):
@@ -244,7 +244,7 @@ class TestNpStandardizeOp:
         arr = np.array([5.0], dtype=np.float32)
         result = np_ops.StandardizeOp(mean=0.0, std=1.0)(Sample(input=arr, target=3, metadata={"a": 1}))
         assert result.target == 3
-        assert result.metadata == {"a": 1}
+        assert result.meta == {"a": 1}
 
     def test_raises_on_non_ndarray(self) -> None:
         with pytest.raises(TypeError, match="StandardizeOp expects an np.ndarray"):
@@ -354,7 +354,7 @@ class TestNpRescaleOp:
         arr = np.array([128.0], dtype=np.float32)
         result = np_ops.RescaleOp(in_min=0.0, in_max=255.0)(Sample(input=arr, target=7, metadata={"key": "val"}))
         assert result.target == 7
-        assert result.metadata == {"key": "val"}
+        assert result.meta == {"key": "val"}
 
     def test_raises_on_non_ndarray(self) -> None:
         with pytest.raises(TypeError, match="RescaleOp expects an np.ndarray"):
@@ -434,17 +434,17 @@ class TestTee:
         sample = Sample(input=np.array([1.0]), target=None, metadata={})
 
         def writer_a(s: Sample) -> Sample:
-            s.metadata["a"] = 1
+            s.meta["a"] = 1
             return s
 
         def writer_b(s: Sample) -> Sample:
-            assert s.metadata["a"] == 1  # branch A's write is visible
-            s.metadata["b"] = 2
+            assert s.meta["a"] == 1  # branch A's write is visible
+            s.meta["b"] = 2
             return s
 
         out = Tee(branches=[[writer_a], [writer_b]])(sample)
         assert out is not None
-        assert out.metadata == {"a": 1, "b": 2}
+        assert out.meta == {"a": 1, "b": 2}
 
     def test_branches_run_sequentially(self) -> None:
         from typing import Callable
@@ -496,15 +496,15 @@ class TestCopyOps:
         out = CopySampleOp()(sample)
         assert out.input is not sample.input
         assert out.target is not sample.target
-        assert out.metadata is not sample.metadata
-        assert out.metadata["k"] is not sample.metadata["k"]
+        assert out.meta is not sample.meta
+        assert out.meta["k"] is not sample.meta["k"]
 
     def test_copy_input_only_copies_input(self) -> None:
         sample = Sample(input=np.array([1.0]), target=[5], metadata={"k": "v"})
         out = CopyInputOp()(sample)
         assert out.input is not sample.input
         assert out.target is sample.target
-        assert out.metadata is sample.metadata
+        assert out.meta is sample.meta
 
     def test_copy_target_only_copies_target(self) -> None:
         sample = Sample(input=[1, 2], target=[10, 20], metadata={})
@@ -516,7 +516,7 @@ class TestCopyOps:
         meta = {"k": [1]}
         sample = Sample(input=None, target=None, metadata=meta)
         out = CopyMetadataOp()(sample)
-        out.metadata["k"].append(2)
+        out.meta["k"].append(2)
         assert meta["k"] == [1]
 
 
@@ -531,7 +531,7 @@ class TestSwapInputTargetOp:
         out = SwapInputTargetOp()(sample)
         assert out.input == 2
         assert out.target == 1
-        assert out.metadata == {"k": "v"}
+        assert out.meta == {"k": "v"}
 
 
 # ---------------------------------------------------------------------------
@@ -544,15 +544,15 @@ class TestStashUnstash:
         arr = np.array([1.0, 2.0])
         sample = Sample(input=arr, target=None, metadata={})
         out = StashInputOp(key="snap")(sample)
-        assert out.metadata["snap"] is arr
+        assert out.meta["snap"] is arr
         assert out.input is arr
 
     def test_stash_with_copy_deepcopies(self) -> None:
         arr = np.array([1.0, 2.0])
         sample = Sample(input=arr, target=None, metadata={})
         out = StashInputOp(key="snap", copy=True)(sample)
-        assert out.metadata["snap"] is not arr
-        np.testing.assert_array_equal(out.metadata["snap"], arr)
+        assert out.meta["snap"] is not arr
+        np.testing.assert_array_equal(out.meta["snap"], arr)
 
     def test_unstash_default_copies_to_isolate_branches(self) -> None:
         arr = np.array([1.0, 2.0])
@@ -622,23 +622,23 @@ class TestThresholdOp:
         arr = np.array([0.0, 1.0, 2.0, 3.0])
         out = np_ops.ThresholdOp(low_level=1.5)(Sample(input=arr, metadata={}))
         np.testing.assert_array_equal(out.input, [False, False, True, True])
-        assert out.metadata["threshold_low"] == 1.5
-        assert "threshold_high" not in out.metadata
+        assert out.meta["threshold_low"] == 1.5
+        assert "threshold_high" not in out.meta
 
     def test_numeric_high_level(self) -> None:
         arr = np.array([0.0, 1.0, 2.0, 3.0])
         out = np_ops.ThresholdOp(high_level=1.5)(Sample(input=arr, metadata={}))
         np.testing.assert_array_equal(out.input, [True, True, False, False])
-        assert out.metadata["threshold_high"] == 1.5
-        assert "threshold_low" not in out.metadata
+        assert out.meta["threshold_high"] == 1.5
+        assert "threshold_low" not in out.meta
 
     def test_band_low_and_high(self) -> None:
         arr = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
         out = np_ops.ThresholdOp(low_level=1.0, high_level=3.0)(Sample(input=arr, metadata={}))
         # strictly between 1.0 and 3.0 (default open interval: > and <)
         np.testing.assert_array_equal(out.input, [False, False, True, False, False])
-        assert out.metadata["threshold_low"] == 1.0
-        assert out.metadata["threshold_high"] == 3.0
+        assert out.meta["threshold_low"] == 1.0
+        assert out.meta["threshold_high"] == 3.0
 
     def test_low_level_inclusive(self) -> None:
         arr = np.array([0.0, 1.0, 2.0])
@@ -682,14 +682,14 @@ class TestThresholdOp:
         sample = Sample(input=arr, target=None, metadata={"reference_snr_level": -25.0})
         out = np_ops.ThresholdOp(low_level="{reference_snr_level}")(sample)
         np.testing.assert_array_equal(out.input, [False, False, True])
-        assert out.metadata["threshold_low"] == -25.0
+        assert out.meta["threshold_low"] == -25.0
 
     def test_metadata_lookup_with_negation(self) -> None:
         arr = np.array([-50.0, -30.0, -10.0])
         sample = Sample(input=arr, target=None, metadata={"reference_snr_level": 30.0})
         out = np_ops.ThresholdOp(low_level="-{reference_snr_level}")(sample)
         np.testing.assert_array_equal(out.input, [False, False, True])
-        assert out.metadata["threshold_low"] == -30.0
+        assert out.meta["threshold_low"] == -30.0
 
     def test_env_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATAFLUX_TEST_THRESHOLD", "1.0")
@@ -702,7 +702,7 @@ class TestThresholdOp:
         sample = Sample(input=arr, target=None, metadata={"ceiling": -20.0})
         out = np_ops.ThresholdOp(high_level="{ceiling}")(sample)
         np.testing.assert_array_equal(out.input, [True, True, False])
-        assert out.metadata["threshold_high"] == -20.0
+        assert out.meta["threshold_high"] == -20.0
 
     def test_raises_when_no_bounds(self) -> None:
         op = np_ops.ThresholdOp()  # lazy: construction succeeds (zero-arg)

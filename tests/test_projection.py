@@ -55,7 +55,7 @@ def test_project_fallback_nulls_unrequested_fields() -> None:
     out = list(project(_plain_source(), (TARGET,)))
     assert [s.target for s in out] == [0, 2]
     assert all(s.input is None for s in out)
-    assert all(s.metadata == {} for s in out)
+    assert all(s.meta == {} for s in out)
 
 
 def test_project_fallback_input_only() -> None:

@@ -63,13 +63,13 @@ def test_hdf5_array_metadata_roundtrip(tmp_path: Path) -> None:
 
     assert len(loaded) == 2
     # Scalar metadata round-trips via attributes.
-    assert loaded[0].metadata["id"] == "a"
-    assert loaded[0].metadata["samplerate"] == 100.0
-    assert loaded[1].metadata["id"] == "b"
+    assert loaded[0].meta["id"] == "a"
+    assert loaded[0].meta["samplerate"] == 100.0
+    assert loaded[1].meta["id"] == "b"
     # Array metadata round-trips exactly (no truncation).
-    assert np.array_equal(loaded[0].metadata["mask"], mask)
+    assert np.array_equal(loaded[0].meta["mask"], mask)
     # The sample without array metadata has no spurious mask key.
-    assert "mask" not in loaded[1].metadata
+    assert "mask" not in loaded[1].meta
 
 
 def test_hdf5_array_metadata_no_compression(tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ def test_hdf5_array_metadata_no_compression(tmp_path: Path) -> None:
     sink.close()
 
     loaded = list(HDF5Source(h5_path))
-    assert np.array_equal(loaded[0].metadata["mask"], mask)
+    assert np.array_equal(loaded[0].meta["mask"], mask)
 
 
 def test_zarr_group_storage(tmp_path: Path) -> None:
@@ -212,8 +212,8 @@ def test_zarr_group_source_roundtrip(tmp_path: Path) -> None:
     assert np.array_equal(loaded[0].target, np.array([1]))
     assert loaded[1].target is None
     # Metadata round-trips via group attributes.
-    assert loaded[0].metadata["id"] == "a"
-    assert loaded[1].metadata["id"] == "b"
+    assert loaded[0].meta["id"] == "a"
+    assert loaded[1].meta["id"] == "b"
     source.close()
 
 

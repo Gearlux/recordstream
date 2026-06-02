@@ -22,7 +22,7 @@ class CopySampleOp:
         return Sample(
             input=copy.deepcopy(sample.input),
             target=copy.deepcopy(sample.target),
-            metadata=copy.deepcopy(sample.metadata),
+            metadata=copy.deepcopy(sample.meta),
         )
 
 
@@ -44,12 +44,12 @@ class CopyTargetOp:
 
 @configurable(category="op", group="structure")
 class CopyMetadataOp:
-    """Deepcopy ``sample.metadata``.
+    """Deepcopy ``sample.meta``.
 
     The replacement dict is a fresh object, so subsequent in-place writes
     on the new metadata won't be seen by other holders of the old dict.
     """
 
     def __call__(self, sample: Sample) -> Sample:
-        new_meta: Any = copy.deepcopy(sample.metadata)
+        new_meta: Any = copy.deepcopy(sample.meta)
         return sample._replace(metadata=new_meta)

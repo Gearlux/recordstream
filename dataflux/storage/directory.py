@@ -36,9 +36,9 @@ class DirectorySink(Storage, DataSink):
         sample_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Save Metadata (YAML via Confluid)
-        if sample.metadata:
+        if sample.meta:
             meta_path = sample_dir / "metadata.yaml"
-            meta_path.write_text(confluid.dump(sample.metadata))
+            meta_path.write_text(confluid.dump(sample.meta))
 
         # 2. Save Input and Target (Numpy)
         if self.use_npz:

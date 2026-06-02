@@ -34,8 +34,8 @@ def main() -> None:
             HDF5Sink(h5, overwrite=True)
         )
         loaded = next(iter(HDF5Source(h5)))
-        print(f"  mask round-trips exact : {np.array_equal(loaded.metadata['mask'], mask)}")
-        print(f"  scalar metadata kept   : snr={loaded.metadata['snr']}")
+        print(f"  mask round-trips exact : {np.array_equal(loaded.meta['mask'], mask)}")
+        print(f"  scalar metadata kept   : snr={loaded.meta['snr']}")
 
         # 2. Zarr group source — full input/target/metadata round-trip.
         print("\n--- Zarr group: ZarrGroupSink -> ZarrGroupSource ---")
@@ -47,7 +47,7 @@ def main() -> None:
         Flux(samples).to_sink(ZarrGroupSink(zg, overwrite=True))
         for s in ZarrGroupSource(zg):
             tgt = None if s.target is None else s.target.tolist()
-            print(f"  input={s.input.tolist()}  target={tgt}  id={s.metadata['id']!r}")
+            print(f"  input={s.input.tolist()}  target={tgt}  id={s.meta['id']!r}")
 
         # 3. Zarr batch source — stacked uniform array, input only.
         print("\n--- Zarr batch: ZarrBatchSink -> ZarrBatchSource ---")

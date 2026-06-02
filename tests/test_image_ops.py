@@ -39,16 +39,16 @@ def test_convert_2d_map_to_exact_size_pil_and_publishes_dims() -> None:
     out = ConvertToImageOp(colormap="gray", width=128, height=256)(_sample(arr))
     assert isinstance(out.input, Image.Image)
     assert out.input.size == (128, 256)
-    assert out.metadata["image_width_px"] == 128
-    assert out.metadata["image_height_px"] == 256
+    assert out.meta["image_width_px"] == 128
+    assert out.meta["image_height_px"] == 256
 
 
 def test_convert_max_size_path_bounds_longest_side() -> None:
     out = ConvertToImageOp(max_size=256)(_sample(np.zeros((1000, 400), dtype=np.float32)))
     assert max(out.input.size) == 256
     # Dims are published from the actual rendered raster.
-    assert out.metadata["image_width_px"] == out.input.width
-    assert out.metadata["image_height_px"] == out.input.height
+    assert out.meta["image_width_px"] == out.input.width
+    assert out.meta["image_height_px"] == out.input.height
 
 
 def test_convert_flip_vertical_mirrors_top_to_bottom() -> None:

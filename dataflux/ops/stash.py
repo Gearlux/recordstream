@@ -37,7 +37,7 @@ class StashInputOp:
         self.copy = copy
 
     def __call__(self, sample: Sample) -> Sample:
-        sample.metadata[self.key] = _copy.deepcopy(sample.input) if self.copy else sample.input
+        sample.meta[self.key] = _copy.deepcopy(sample.input) if self.copy else sample.input
         return sample
 
 
@@ -60,7 +60,7 @@ class UnstashInputOp:
         self.copy = copy
 
     def __call__(self, sample: Sample) -> Sample:
-        value = sample.metadata[self.key]
+        value = sample.meta[self.key]
         if self.copy:
             value = _copy.deepcopy(value)
         return sample._replace(input=value)

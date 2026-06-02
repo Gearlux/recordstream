@@ -77,7 +77,7 @@ def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Sample
         yield Sample(
             input=s.input if INPUT in want else None,
             target=s.target if TARGET in want else None,
-            metadata=s.metadata if METADATA in want else {},
+            metadata=s.meta if METADATA in want else {},
         )
 
 
