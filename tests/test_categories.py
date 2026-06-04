@@ -16,7 +16,13 @@ from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
 from dataflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
 from dataflux.ops.parallel import Parallel
 from dataflux.ops.sink import SampleSinkOp
-from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
+from dataflux.ops.target import (
+    CocoToTorchVisionDetectionOp,
+    DecodeTargetOp,
+    EncodeTargetOp,
+    MasksToDetectionBoxesOp,
+    MetadataToTargetOp,
+)
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import ToTensorOp
 from dataflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
@@ -68,6 +74,8 @@ def test_op_classes_tagged() -> None:
     assert MetadataToTargetOp.__confluid_category__ == "op"
     assert EncodeTargetOp.__confluid_category__ == "op"
     assert DecodeTargetOp.__confluid_category__ == "op"
+    assert CocoToTorchVisionDetectionOp.__confluid_category__ == "op"
+    assert MasksToDetectionBoxesOp.__confluid_category__ == "op"
 
 
 def test_op_group_tags() -> None:
@@ -83,6 +91,8 @@ def test_op_group_tags() -> None:
     assert MetadataToTargetOp.__confluid_group__ == "structure"
     assert EncodeTargetOp.__confluid_group__ == "structure"
     assert DecodeTargetOp.__confluid_group__ == "structure"
+    assert CocoToTorchVisionDetectionOp.__confluid_group__ == "structure"
+    assert MasksToDetectionBoxesOp.__confluid_group__ == "structure"
     assert Tee.__confluid_group__ == "compose"
     assert Parallel.__confluid_group__ == "compose"
     assert Enable.__confluid_group__ == "compose"
@@ -116,6 +126,8 @@ def test_categories_enumerable_via_registry() -> None:
         "MetadataToTargetOp",
         "EncodeTargetOp",
         "DecodeTargetOp",
+        "CocoToTorchVisionDetectionOp",
+        "MasksToDetectionBoxesOp",
     } <= registry.list_classes(category="op")
 
 
@@ -126,6 +138,12 @@ def test_groups_enumerable_via_registry() -> None:
     assert {"ConvertToImageOp", "NormalizeToUint8Op"} <= registry.list_classes(group="image")
     assert {"Tee", "Parallel", "Enable"} <= registry.list_classes(group="compose")
     assert {"SampleSinkOp"} <= registry.list_classes(group="sink")
-    assert {"MetadataToTargetOp", "EncodeTargetOp", "DecodeTargetOp"} <= registry.list_classes(group="structure")
+    assert {
+        "MetadataToTargetOp",
+        "EncodeTargetOp",
+        "DecodeTargetOp",
+        "CocoToTorchVisionDetectionOp",
+        "MasksToDetectionBoxesOp",
+    } <= registry.list_classes(group="structure")
     # group × category intersect, like task × role.
     assert "Tee" in registry.list_classes(category="op", group="compose")

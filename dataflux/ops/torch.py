@@ -1,4 +1,4 @@
-from typing import Sequence, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -18,20 +18,25 @@ class ToTensorOp:
 
     Args:
         normalize: When ``True``, scale integer pixel inputs into the ``[0, 1]`` float range during conversion.
+        mode: Optional PIL mode to convert to (e.g. "RGB" forces 3 channels); None (default) arrays as-is.
     """
 
     ACCEPTS = SampleType(input=UnionType((PythonType("PIL.Image.Image"), ArrayType(frameworks={"numpy"}))))
     PRODUCES = SampleType(input=_TORCH)
 
-    def __init__(self, normalize: bool = True):
+    def __init__(self, normalize: bool = True, mode: Optional[str] = None):
         self.normalize = normalize
+        self.mode = mode
 
     def __call__(self, sample: Sample) -> Sample:
         img = sample.input
 
         # Handle PIL / PngImageFile
         if hasattr(img, "convert"):
-            # Ensure grayscale or RGB as needed, but for generic we just array it
+            # Optionally coerce the PIL mode (e.g. "RGB") so a mixed-mode dataset
+            # (RGBA / grayscale / palette samples) yields a uniform channel count.
+            if self.mode is not None:
+                img = img.convert(self.mode)
             img = np.array(img)
 
         # Convert to Tensor

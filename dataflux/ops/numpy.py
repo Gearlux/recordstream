@@ -361,6 +361,52 @@ class ThresholdOp:
         return sample._replace(input=mask)
 
 
+def connected_component_bboxes(
+    mask: np.ndarray, min_area_bins: int = 1, connectivity: int = 4
+) -> List[Tuple[int, int, int, int]]:
+    """Label connected ``True`` regions of a 2-D bool mask → ``(row_min, row_max, col_min, col_max)`` inclusive tuples.
+
+    Components smaller than ``min_area_bins`` are dropped. ``connectivity`` is ``4``
+    (orthogonal neighbors) or ``8`` (orthogonal + diagonal). This is the shared scipy
+    core behind :class:`ConnectedComponentsOp` (signal-domain bin bboxes on ``input``)
+    AND :class:`dataflux.ops.target.MasksToDetectionBoxesOp` (its ``connected=True``
+    mode, which lifts the tuples to xyxy-pixel detection boxes). Requires ``scipy``
+    (``pip install data-flux[vision]``).
+    """
+    if min_area_bins < 1:
+        raise ValueError(f"min_area_bins must be >= 1; got {min_area_bins!r}")
+    if connectivity not in (4, 8):
+        raise ValueError(f"connectivity must be 4 or 8; got {connectivity!r}")
+    try:
+        from scipy.ndimage import find_objects, generate_binary_structure, label
+    except ImportError as exc:
+        raise ImportError(
+            "connected-components labeling requires scipy. "
+            "Install with `pip install data-flux[vision]` or add scipy to your environment."
+        ) from exc
+
+    structure = generate_binary_structure(2, 1 if connectivity == 4 else 2)
+    labels, n_components = label(mask, structure=structure)
+    bboxes: List[Tuple[int, int, int, int]] = []
+    if n_components > 0:
+        for idx, sl in enumerate(find_objects(labels), start=1):
+            if sl is None:
+                continue
+            row_slice, col_slice = sl
+            area = int((labels[row_slice, col_slice] == idx).sum())
+            if area < min_area_bins:
+                continue
+            bboxes.append(
+                (
+                    int(row_slice.start),
+                    int(row_slice.stop) - 1,
+                    int(col_slice.start),
+                    int(col_slice.stop) - 1,
+                )
+            )
+    return bboxes
+
+
 @configurable(category="op", group="numpy")
 class ConnectedComponentsOp:
     """Label connected ``True`` regions of a boolean mask into bin-bbox tuples.
@@ -392,41 +438,12 @@ class ConnectedComponentsOp:
         self.connectivity = int(connectivity)
 
     def __call__(self, sample: Sample) -> Sample:
-        if self.min_area_bins < 1:
-            raise ValueError(f"min_area_bins must be >= 1; got {self.min_area_bins!r}")
-        if self.connectivity not in (4, 8):
-            raise ValueError(f"connectivity must be 4 or 8; got {self.connectivity!r}")
-        try:
-            from scipy.ndimage import find_objects, generate_binary_structure, label
-        except ImportError as exc:
-            raise ImportError(
-                "ConnectedComponentsOp requires scipy. "
-                "Install with `pip install data-flux[vision]` or add scipy to your environment."
-            ) from exc
-
         mask = sample.input
         if not isinstance(mask, np.ndarray):
             raise TypeError(f"ConnectedComponentsOp expects an np.ndarray on sample.input, got {type(mask).__name__}")
         if mask.ndim != 2:
             raise ValueError(f"ConnectedComponentsOp expects a 2-D mask; got shape {mask.shape}")
-
-        structure = generate_binary_structure(2, 1 if self.connectivity == 4 else 2)
-        labels, n_components = label(mask, structure=structure)
-        bboxes: List[Tuple[int, int, int, int]] = []
-        if n_components > 0:
-            for idx, sl in enumerate(find_objects(labels), start=1):
-                if sl is None:
-                    continue
-                row_slice, col_slice = sl
-                area = int((labels[row_slice, col_slice] == idx).sum())
-                if area < self.min_area_bins:
-                    continue
-                bboxes.append(
-                    (
-                        int(row_slice.start),
-                        int(row_slice.stop) - 1,
-                        int(col_slice.start),
-                        int(col_slice.stop) - 1,
-                    )
-                )
+        # Shared scipy core (also used by dataflux.ops.target.MasksToDetectionBoxesOp);
+        # validates min_area_bins / connectivity and raises the scipy ImportError.
+        bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
         return sample._replace(input=bboxes)

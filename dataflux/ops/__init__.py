@@ -24,7 +24,13 @@ from dataflux.ops.parallel import Parallel
 from dataflux.ops.sink import SampleSinkOp
 from dataflux.ops.stash import StashInputOp, UnstashInputOp
 from dataflux.ops.swap import SwapInputTargetOp
-from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
+from dataflux.ops.target import (
+    CocoToTorchVisionDetectionOp,
+    DecodeTargetOp,
+    EncodeTargetOp,
+    MasksToDetectionBoxesOp,
+    MetadataToTargetOp,
+)
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import RescaleOp, StandardizeOp, ToTensorOp
 
@@ -37,6 +43,8 @@ __all__ = [
     "Enable",
     "EncodeTargetOp",
     "MetadataToTargetOp",
+    "CocoToTorchVisionDetectionOp",
+    "MasksToDetectionBoxesOp",
     "Parallel",
     "RescaleOp",
     "SampleSinkOp",

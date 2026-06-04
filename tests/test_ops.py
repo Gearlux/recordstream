@@ -71,6 +71,23 @@ class TestToTensorOp:
         assert result.target == 5
         assert result.meta == {"k": "v"}
 
+    def test_mode_rgb_forces_three_channels_from_mixed_pil_modes(self) -> None:
+        # A mixed-mode image dataset (RGBA / grayscale / palette) → uniform 3-channel
+        # RGB for a fixed-channel model (e.g. torchvision Faster R-CNN's 3-ch normalize).
+        op = ToTensorOp(mode="RGB")
+        for mode, arr in (
+            ("RGBA", np.zeros((8, 8, 4), dtype=np.uint8)),
+            ("L", np.zeros((8, 8), dtype=np.uint8)),
+            ("RGB", np.zeros((8, 8, 3), dtype=np.uint8)),
+        ):
+            out = op(Sample(input=Image.fromarray(arr, mode=mode)))
+            assert out.input.shape == (3, 8, 8), f"{mode} → {tuple(out.input.shape)}"
+
+    def test_mode_none_leaves_channels_as_is(self) -> None:
+        # Default mode=None arrays the image verbatim — RGBA stays 4-channel.
+        rgba = Image.fromarray(np.zeros((8, 8, 4), dtype=np.uint8), mode="RGBA")
+        assert ToTensorOp()(Sample(input=rgba)).input.shape == (4, 8, 8)
+
 
 # ---------------------------------------------------------------------------
 # Torch RescaleOp
