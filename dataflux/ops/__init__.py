@@ -3,11 +3,14 @@ DataFlux operations.
 
 Submodules:
     - dataflux.ops.numpy: RescaleOp, StandardizeOp, ClipPercentilesOp,
-      ReplaceNonFiniteOp, ThresholdOp, ConnectedComponentsOp (ndarray)
-    - dataflux.ops.torch: RescaleOp, StandardizeOp, ToTensorOp (tensor)
+      ReplaceNonFiniteOp, ThresholdOp, ConnectedComponentsOp, SqueezeOp,
+      UnsqueezeOp (ndarray)
+    - dataflux.ops.torch: RescaleOp, StandardizeOp, ToTensorOp, SqueezeOp,
+      UnsqueezeOp (tensor)
     - dataflux.ops.tee: Tee (fan-out branching)
     - dataflux.ops.parallel: Parallel (worker-pool sub-pipeline)
     - dataflux.ops.enable: Enable (toggle an op-list via one named CLI flag)
+    - dataflux.ops.random_apply: RandomApply (gate any op behind a Bernoulli flip)
     - dataflux.ops.sink: SampleSinkOp (adapt a DataSink as a pass-through op)
     - dataflux.ops.copy: CopySampleOp, CopyInputOp, CopyTargetOp, CopyMetadataOp
     - dataflux.ops.swap: SwapInputTargetOp
@@ -21,6 +24,7 @@ swap / stash / target utilities are field-agnostic.
 from dataflux.ops.copy import CopyInputOp, CopyMetadataOp, CopySampleOp, CopyTargetOp
 from dataflux.ops.enable import Enable
 from dataflux.ops.parallel import Parallel
+from dataflux.ops.random_apply import RandomApply
 from dataflux.ops.sink import SampleSinkOp
 from dataflux.ops.stash import StashInputOp, UnstashInputOp
 from dataflux.ops.swap import SwapInputTargetOp
@@ -32,7 +36,7 @@ from dataflux.ops.target import (
     MetadataToTargetOp,
 )
 from dataflux.ops.tee import Tee
-from dataflux.ops.torch import RescaleOp, StandardizeOp, ToTensorOp
+from dataflux.ops.torch import RescaleOp, SqueezeOp, StandardizeOp, ToTensorOp, UnsqueezeOp
 
 __all__ = [
     "CopyInputOp",
@@ -46,12 +50,15 @@ __all__ = [
     "CocoToTorchVisionDetectionOp",
     "MasksToDetectionBoxesOp",
     "Parallel",
+    "RandomApply",
     "RescaleOp",
     "SampleSinkOp",
+    "SqueezeOp",
     "StandardizeOp",
     "StashInputOp",
     "SwapInputTargetOp",
     "Tee",
     "ToTensorOp",
     "UnstashInputOp",
+    "UnsqueezeOp",
 ]
