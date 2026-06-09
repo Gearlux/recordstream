@@ -126,6 +126,46 @@ def _require_ndarray(sample: Sample, op_name: str) -> np.ndarray:
 
 
 @configurable(category="op", group="numpy")
+class SqueezeOp:
+    """Remove size-1 axes from an ``np.ndarray``.
+
+    Args:
+        axis: Axis index to remove. When ``None`` (default), all size-1 axes are removed.
+            When specified, the axis must have size 1 (numpy raises ``ValueError`` otherwise).
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: Optional[int] = None) -> None:
+        self.axis = axis
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "SqueezeOp")
+        out = np.squeeze(arr) if self.axis is None else np.squeeze(arr, axis=self.axis)
+        return sample._replace(input=out)
+
+
+@configurable(category="op", group="numpy")
+class UnsqueezeOp:
+    """Insert a size-1 axis at the specified position in an ``np.ndarray``.
+
+    Args:
+        axis: Axis index at which the new dimension is inserted. Default ``0``.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: int = 0) -> None:
+        self.axis = axis
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "UnsqueezeOp")
+        return sample._replace(input=np.expand_dims(arr, axis=self.axis))
+
+
+@configurable(category="op", group="numpy")
 class ClipPercentilesOp:
     """Clip ``sample.input`` to ``[p_low, p_high]`` percentiles of finite values.
 
@@ -329,7 +369,9 @@ class ThresholdOp:
         self.low_op = low_op
         self.high_op = high_op
 
-    def _resolve(self, bound: Union[float, int, str], sample: Sample) -> float:
+    def _resolve(self, bound: Optional[Union[float, int, str]], sample: Sample) -> float:
+        if bound is None:
+            raise ValueError("ThresholdOp._resolve called with None — bound was not filtered by __call__")
         if isinstance(bound, (int, float)):
             return float(bound)
         if not isinstance(bound, str):
@@ -346,13 +388,21 @@ class ThresholdOp:
         arr = sample.input
         if not isinstance(arr, np.ndarray):
             raise TypeError(f"ThresholdOp expects an np.ndarray on sample.input, got {type(arr).__name__}")
+        low_level = self.low_level
+        high_level = self.high_level
+        # Treat empty string (blank STRING widget left unset) as None ("disabled").
+        if isinstance(low_level, str) and low_level.strip() == "":
+            low_level = None
+        if isinstance(high_level, str) and high_level.strip() == "":
+            high_level = None
+
         mask: Optional[np.ndarray] = None
-        if self.low_level is not None:
-            low = self._resolve(self.low_level, sample)
+        if low_level is not None:
+            low = self._resolve(low_level, sample)
             sample.meta["threshold_low"] = low
             mask = _LOW_COMPARISONS[self.low_op](arr, low)
-        if self.high_level is not None:
-            high = self._resolve(self.high_level, sample)
+        if high_level is not None:
+            high = self._resolve(high_level, sample)
             sample.meta["threshold_high"] = high
             below = _HIGH_COMPARISONS[self.high_op](arr, high)
             mask = below if mask is None else (mask & below)
@@ -405,6 +455,144 @@ def connected_component_bboxes(
                 )
             )
     return bboxes
+
+
+@configurable(category="op", group="numpy")
+class MinOp:
+    """Reduce ``sample.input`` to its minimum value, ignoring NaN.
+
+    Args:
+        axis: Axis along which to compute the minimum. ``None`` (default) reduces over all axes.
+        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: Optional[int] = None, keepdims: bool = False) -> None:
+        self.axis = axis
+        self.keepdims = bool(keepdims)
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "MinOp")
+        return sample._replace(input=np.nanmin(arr, axis=self.axis, keepdims=self.keepdims))
+
+
+@configurable(category="op", group="numpy")
+class MaxOp:
+    """Reduce ``sample.input`` to its maximum value, ignoring NaN.
+
+    Args:
+        axis: Axis along which to compute the maximum. ``None`` (default) reduces over all axes.
+        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: Optional[int] = None, keepdims: bool = False) -> None:
+        self.axis = axis
+        self.keepdims = bool(keepdims)
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "MaxOp")
+        return sample._replace(input=np.nanmax(arr, axis=self.axis, keepdims=self.keepdims))
+
+
+@configurable(category="op", group="numpy")
+class MedianOp:
+    """Reduce ``sample.input`` to its median value, ignoring NaN.
+
+    Args:
+        axis: Axis along which to compute the median. ``None`` (default) reduces over all axes.
+        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: Optional[int] = None, keepdims: bool = False) -> None:
+        self.axis = axis
+        self.keepdims = bool(keepdims)
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "MedianOp")
+        return sample._replace(input=np.nanmedian(arr, axis=self.axis, keepdims=self.keepdims))
+
+
+@configurable(category="op", group="numpy")
+class PercentileOp:
+    """Reduce ``sample.input`` to a 2-element array ``[p_low, p_high]``, ignoring NaN.
+
+    Output shape when ``axis=None``: ``(2,)`` scalar pair. When ``axis=k``:
+    ``(2, …)`` stacked along a new leading dimension.
+
+    Args:
+        low: Lower percentile in ``[0, 100]``. Default ``5.0``.
+        high: Upper percentile in ``[0, 100]``, should be ``> low``. Default ``95.0``.
+        axis: Axis along which to compute the percentiles. ``None`` (default) reduces over all axes.
+        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(
+        self,
+        low: float = 5.0,
+        high: float = 95.0,
+        axis: Optional[int] = None,
+        keepdims: bool = False,
+    ) -> None:
+        self.low = float(low)
+        self.high = float(high)
+        self.axis = axis
+        self.keepdims = bool(keepdims)
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "PercentileOp")
+        p_low = np.nanpercentile(arr, self.low, axis=self.axis, keepdims=self.keepdims)
+        p_high = np.nanpercentile(arr, self.high, axis=self.axis, keepdims=self.keepdims)
+        return sample._replace(input=np.stack([p_low, p_high]))
+
+
+@configurable(category="op", group="numpy")
+class StatsOp:
+    """Compute summary statistics of ``sample.input`` and record them in metadata; input is passed through unchanged.
+
+    Writes five scalar float keys to ``sample.metadata``: ``{prefix}min``,
+    ``{prefix}max``, ``{prefix}median``, ``{prefix}p_low``, ``{prefix}p_high``.
+    NaN values are excluded from all computations.
+
+    Chain anywhere in a pipeline without disrupting the data flow — useful for
+    inspecting distribution properties during development or for downstream
+    normalisation decisions.
+
+    Args:
+        low: Lower percentile bound (0–100). Default ``5.0``.
+        high: Upper percentile bound (0–100). Default ``95.0``.
+        prefix: Optional string prepended to every metadata key, e.g. ``"input_"`` to
+            distinguish multiple ``StatsOp`` invocations in one pipeline.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, low: float = 5.0, high: float = 95.0, prefix: str = "") -> None:
+        self.low = float(low)
+        self.high = float(high)
+        self.prefix = prefix
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "StatsOp")
+        p = self.prefix
+        meta = dict(sample.meta)
+        meta[f"{p}min"] = float(np.nanmin(arr))
+        meta[f"{p}max"] = float(np.nanmax(arr))
+        meta[f"{p}median"] = float(np.nanmedian(arr))
+        meta[f"{p}p_low"] = float(np.nanpercentile(arr, self.low))
+        meta[f"{p}p_high"] = float(np.nanpercentile(arr, self.high))
+        return sample._replace(metadata=meta)
 
 
 @configurable(category="op", group="numpy")
