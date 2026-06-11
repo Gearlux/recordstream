@@ -8,10 +8,12 @@ import torch
 from PIL import Image
 
 from dataflux.ops import (
+    ConfigureOp,
     CopyInputOp,
     CopyMetadataOp,
     CopySampleOp,
     CopyTargetOp,
+    FormulaOp,
     RescaleOp,
     SqueezeOp,
     StandardizeOp,
@@ -25,6 +27,7 @@ from dataflux.ops import (
     UnstashTargetOp,
 )
 from dataflux.ops import numpy as np_ops
+from dataflux.ops.numpy import MaxOp, ThresholdOp
 from dataflux.sample import Sample
 
 # ---------------------------------------------------------------------------
@@ -643,6 +646,119 @@ class TestStashUnstashTarget:
         branched = stashed._replace(target="branch-target")
         restored = UnstashTargetOp(key="fork")(branched)
         assert restored.target == "fork-target"
+
+
+# ---------------------------------------------------------------------------
+# FormulaOp
+# ---------------------------------------------------------------------------
+
+
+class TestFormulaOp:
+    def test_evaluates_formula_over_input(self) -> None:
+        sample = Sample(input=10.0, target=None, metadata={})
+        out = FormulaOp(formula="a * 0.2")(sample)
+        assert out.input == 2.0
+
+    def test_custom_var_binding(self) -> None:
+        sample = Sample(input=9.0, target=None, metadata={})
+        out = FormulaOp(formula="sqrt(b)", var="b")(sample)
+        assert out.input == 3.0
+
+    def test_math_namespace_and_helpers(self) -> None:
+        sample = Sample(input=-4.2, target=None, metadata={})
+        out = FormulaOp(formula="round(abs(a))")(sample)
+        assert out.input == 4
+
+    def test_no_builtins_in_namespace(self) -> None:
+        sample = Sample(input=1.0, target=None, metadata={})
+        with pytest.raises(ValueError, match="failed"):
+            FormulaOp(formula="__import__('os').getcwd()")(sample)
+
+    def test_bad_formula_raises_value_error(self) -> None:
+        sample = Sample(input=1.0, target=None, metadata={})
+        with pytest.raises(ValueError, match="failed"):
+            FormulaOp(formula="a +")(sample)
+
+    def test_empty_formula_raises_lazily(self) -> None:
+        sample = Sample(input=1.0, target=None, metadata={})
+        with pytest.raises(ValueError, match="non-empty"):
+            FormulaOp(formula="  ")(sample)
+
+    def test_default_is_identity(self) -> None:
+        sample = Sample(input=7.5, target=None, metadata={})
+        assert FormulaOp()(sample).input == 7.5
+
+
+# ---------------------------------------------------------------------------
+# ConfigureOp (the helios Configure pattern)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigureOp:
+    def test_computes_injects_and_applies(self) -> None:
+        """compute-chain value → metadata + target attribute → target applied to the ORIGINAL sample."""
+        sample = Sample(input=np.array([1.0, 5.0, 3.0]), target=None, metadata={})
+        op = ConfigureOp(
+            ops=[MaxOp()],
+            target=ThresholdOp(low_op=">="),
+            param="low_level",
+        )
+        out = op(sample)
+        assert out is not None
+        target = op.target
+        assert isinstance(target, ThresholdOp) and target.low_level == 5.0  # injected per sample
+        assert out.meta["low_level"] == 5.0  # traceability: the value rides metadata too
+        np.testing.assert_array_equal(out.input, [False, True, False])  # threshold on the ORIGINAL array
+
+    def test_empty_compute_chain_uses_incoming_input(self) -> None:
+        class _Target:
+            def __init__(self) -> None:
+                self.level: object = None
+
+            def __call__(self, s: Sample) -> Sample:
+                return s
+
+        target = _Target()
+        sample = Sample(input=7.5, target=None, metadata={})
+        out = ConfigureOp(target=target, param="level")(sample)
+        assert out is not None
+        assert target.level == 7.5  # no compute chain → the incoming input IS the value
+        assert out.meta["level"] == 7.5
+
+    def test_key_overrides_metadata_key(self) -> None:
+        sample = Sample(input=np.array([2.0]), target=None, metadata={})
+        op = ConfigureOp(ops=[MaxOp()], target=ThresholdOp(low_op=">="), param="low_level", key="thr")
+        out = op(sample)
+        assert out is not None and out.meta["thr"] == 2.0
+        assert "low_level" not in out.meta
+
+    def test_missing_target_or_param_raise_lazily(self) -> None:
+        sample = Sample(input=np.array([1.0]), target=None, metadata={})
+        with pytest.raises(ValueError, match="'target' op is required"):
+            ConfigureOp(param="x")(sample)
+        with pytest.raises(ValueError, match="'param'"):
+            ConfigureOp(target=ThresholdOp())(sample)
+
+    def test_compute_chain_filtering_drops_sample(self) -> None:
+        """A compute op returning None propagates the drop (FilterOp semantics, like Tee)."""
+        sample = Sample(input=np.array([1.0]), target=None, metadata={})
+        op = ConfigureOp(ops=[lambda s: None], target=ThresholdOp(), param="low_level")
+        assert op(sample) is None
+
+    def test_fluid_markers_flow_lazily(self) -> None:
+        """!class: markers in ops/target are flowed at first call (YAML-built ConfigureOp)."""
+        from confluid.fluid import Class
+
+        sample = Sample(input=np.array([1.0, 4.0]), target=None, metadata={})
+        op = ConfigureOp(
+            ops=[Class(MaxOp)],
+            target=Class(ThresholdOp, low_op=">="),
+            param="low_level",
+        )
+        out = op(sample)
+        assert out is not None
+        assert isinstance(op.target, ThresholdOp) and op.target.low_level == 4.0
+        np.testing.assert_array_equal(out.input, [False, True])
 
 
 # ---------------------------------------------------------------------------

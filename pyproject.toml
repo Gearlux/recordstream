@@ -56,6 +56,10 @@ dataflux-ops-parallel = "dataflux.ops.parallel"
 dataflux-ops-tee = "dataflux.ops.tee"
 dataflux-ops-enable = "dataflux.ops.enable"
 dataflux-ops-random-apply = "dataflux.ops.random_apply"
+# ConfigureOp (per-sample parameter injection — the helios Configure pattern); entry-point
+# changes need an editable reinstall before FluxStudio/navigaitor discovery sees the module.
+dataflux-ops-configure = "dataflux.ops.configure"
+dataflux-ops-formula = "dataflux.ops.formula"
 dataflux-ops-transform-chain = "dataflux.ops.transform_chain"
 dataflux-ops-sink = "dataflux.ops.sink"
 dataflux-ops-stash = "dataflux.ops.stash"

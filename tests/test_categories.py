@@ -10,8 +10,10 @@ pinned here as a regression gate.
 from confluid.registry import get_registry
 
 from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from dataflux.ops.configure import ConfigureOp
 from dataflux.ops.copy import CopyInputOp
 from dataflux.ops.enable import Enable
+from dataflux.ops.formula import FormulaOp
 from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
 from dataflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
 from dataflux.ops.parallel import Parallel
@@ -102,6 +104,8 @@ def test_op_group_tags() -> None:
     assert Parallel.__confluid_group__ == "compose"
     assert Enable.__confluid_group__ == "compose"
     assert TransformChain.__confluid_group__ == "compose"
+    assert ConfigureOp.__confluid_group__ == "compose"
+    assert FormulaOp.__confluid_group__ == "compose"
     assert ConvertToImageOp.__confluid_group__ == "image"
     assert NormalizeToUint8Op.__confluid_group__ == "image"
     assert SampleSinkOp.__confluid_group__ == "sink"
