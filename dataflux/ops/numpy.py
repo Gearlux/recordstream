@@ -388,6 +388,7 @@ class ThresholdOp:
         arr = sample.input
         if not isinstance(arr, np.ndarray):
             raise TypeError(f"ThresholdOp expects an np.ndarray on sample.input, got {type(arr).__name__}")
+
         low_level = self.low_level
         high_level = self.high_level
         # Treat empty string (blank STRING widget left unset) as None ("disabled").
@@ -399,13 +400,25 @@ class ThresholdOp:
         mask: Optional[np.ndarray] = None
         if low_level is not None:
             low = self._resolve(low_level, sample)
-            sample.meta["threshold_low"] = low
-            mask = _LOW_COMPARISONS[self.low_op](arr, low)
+            if np.isnan(low):
+                logger.warning(
+                    f"ThresholdOp: resolved low_level is NaN; no values will be above the threshold. "
+                    f"Expression was {self.low_level!r} resolved to {low!r}"
+                )
+            else:
+                sample.meta["threshold_low"] = low
+                mask = _LOW_COMPARISONS[self.low_op](arr, low)
         if high_level is not None:
             high = self._resolve(high_level, sample)
-            sample.meta["threshold_high"] = high
-            below = _HIGH_COMPARISONS[self.high_op](arr, high)
-            mask = below if mask is None else (mask & below)
+            if np.isnan(high):
+                logger.warning(
+                    f"ThresholdOp: resolved high_level is NaN; no values will be below the threshold. "
+                    f"Expression was {self.high_level!r} resolved to {high!r}"
+                )
+            else:
+                sample.meta["threshold_high"] = high
+                below = _HIGH_COMPARISONS[self.high_op](arr, high)
+                mask = below if mask is None else (mask & below)
         if mask is None:
             raise ValueError("ThresholdOp requires at least one of 'low_level' / 'high_level'")
         return sample._replace(input=mask)

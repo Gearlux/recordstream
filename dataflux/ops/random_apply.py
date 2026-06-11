@@ -45,16 +45,26 @@ class RandomApply:
             (identity); validated lazily on first call.
         probability: Gate probability in ``[0, 1]``.  ``0.0`` = never apply;
             ``1.0`` = always apply.  Defaults to ``0.5``.
+        random_state: Seed for the Bernoulli gate RNG. ``None`` = non-deterministic (default).
     """
 
-    def __init__(self, op: Optional[object] = None, probability: float = 0.5) -> None:
+    def __init__(
+        self,
+        op: Optional[object] = None,
+        probability: float = 0.5,
+        random_state: Optional[int] = None,
+    ) -> None:
         self.op = op
         self.probability = probability
+        self.random_state = random_state
+        self._gate_rng: Optional[random.Random] = None
 
     def __call__(self, sample: Sample) -> Sample:
         if self.op is None:
             raise ValueError("RandomApply requires 'op' to be set before calling.")
-        if random.random() >= self.probability:
+        if self._gate_rng is None:
+            self._gate_rng = random.Random(self.random_state)
+        if self._gate_rng.random() >= self.probability:
             return sample
         from confluid import flow
         from confluid.fluid import Fluid

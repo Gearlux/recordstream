@@ -1,6 +1,6 @@
 """Exhaustive tests for the dataflux type-spec system (matching, inference, JSON, HF bridge)."""
 
-from typing import Any, List, Tuple, cast, get_args
+from typing import Any, Iterable, List, Tuple, cast, get_args
 
 import numpy as np
 import pytest
@@ -539,3 +539,120 @@ def test_dataflux_op_spec_conformance() -> None:
         assert op.PRODUCES.accepts(infer_sample_type(out)), f"{name}: PRODUCES rejects its real output"
         # specs are JSON round-trippable
         assert SampleType.from_dict(op.PRODUCES.to_dict()) == op.PRODUCES
+
+
+# --------------------------------------------------------------------------------------------------
+# Dim / ArrayType __str__ and SampleType.explain_mismatch
+# --------------------------------------------------------------------------------------------------
+
+
+class TestDimStr:
+    def test_unbounded(self) -> None:
+        assert str(Dim.any()) == "any"
+
+    def test_exact(self) -> None:
+        assert str(Dim.exact(3)) == "3"
+
+    def test_range(self) -> None:
+        assert str(Dim(min=2, max=8)) == "2–8"
+
+    def test_open_upper(self) -> None:
+        assert str(Dim(min=1, max=None)) == "1–∞"
+
+    def test_open_lower(self) -> None:
+        assert str(Dim(min=None, max=4)) == "0–4"
+
+
+class TestArrayTypeStr:
+    def test_framework_only(self) -> None:
+        assert str(ArrayType(frameworks={"torch"})) == "array[torch]"
+
+    def test_framework_and_dtype(self) -> None:
+        s = str(ArrayType(frameworks={"numpy"}, dtype="float32"))
+        assert "numpy" in s and "float32" in s
+
+    def test_shape_shown(self) -> None:
+        s = str(ArrayType(shape=(Dim.exact(3), Dim.any())))
+        assert "shape=(3, any)" in s
+
+    def test_rank_without_shape(self) -> None:
+        s = str(ArrayType(ndim=2))
+        assert "rank-2" in s
+
+    def test_empty_is_just_array(self) -> None:
+        assert str(ArrayType()) == "array"
+
+
+class TestExplainMismatch:
+    """SampleType.explain_mismatch produces actionable human-readable reasons."""
+
+    def _make(
+        self,
+        frameworks: Iterable[Framework] | None = None,
+        dtype: Dtype | None = None,
+        ndim: int | None = None,
+    ) -> SampleType:
+        return SampleType(
+            input=ArrayType(
+                frameworks=frozenset(cast(Iterable[Framework], frameworks)) if frameworks is not None else None,
+                dtype=cast(Dtype | None, dtype),
+                ndim=ndim,
+            )
+        )
+
+    def test_framework_mismatch_names_both_sides(self) -> None:
+        consumer = self._make(frameworks={"numpy"})
+        producer = self._make(frameworks={"torch"})
+        msg = consumer.explain_mismatch(producer)
+        assert "numpy" in msg and "torch" in msg
+        assert "framework" in msg
+
+    def test_dtype_mismatch_names_both_dtypes(self) -> None:
+        consumer = self._make(dtype="float32")
+        producer = self._make(dtype="complex64")
+        msg = consumer.explain_mismatch(producer)
+        assert "float32" in msg and "complex64" in msg
+        assert "dtype" in msg
+
+    def test_ndim_mismatch_names_both_ranks(self) -> None:
+        consumer = self._make(ndim=2)
+        producer = self._make(ndim=3)
+        msg = consumer.explain_mismatch(producer)
+        assert "2" in msg and "3" in msg
+        assert "rank" in msg
+
+    def test_shape_axis_mismatch_names_axis_and_sizes(self) -> None:
+        consumer = SampleType(input=ArrayType(shape=(Dim.exact(1), Dim.any())))
+        producer = SampleType(input=ArrayType(shape=(Dim.exact(2), Dim.any())))
+        msg = consumer.explain_mismatch(producer)
+        assert "axis 0" in msg
+        assert "1" in msg and "2" in msg
+
+    def test_no_reasons_when_accepts(self) -> None:
+        consumer = self._make(frameworks={"torch"})
+        producer = self._make(frameworks={"torch"})
+        # accepts() is True — explain_mismatch should return empty/fallback
+        msg = consumer.explain_mismatch(producer)
+        assert msg  # always returns a string
+
+    def test_python_type_mismatch(self) -> None:
+        consumer = SampleType(input=PythonType("PIL.Image.Image"))
+        producer = SampleType(input=PythonType("dict"))
+        msg = consumer.explain_mismatch(producer)
+        assert "PIL.Image.Image" in msg and "dict" in msg
+
+    def test_original_error_scenario(self) -> None:
+        """The exact case from the bug report: numpy op, torch upstream."""
+        consumer = SampleType(input=ArrayType(frameworks=frozenset({"numpy"})))
+        producer = SampleType(
+            input=ArrayType(
+                ndim=2,
+                shape=(Dim.exact(1), Dim.exact(1228800)),
+                dtype="complex64",
+                frameworks=frozenset({"torch"}),
+            )
+        )
+        msg = consumer.explain_mismatch(producer)
+        assert "numpy" in msg
+        assert "torch" in msg
+        assert "framework" in msg

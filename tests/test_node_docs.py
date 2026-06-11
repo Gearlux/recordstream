@@ -18,6 +18,7 @@ from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTarget
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import StandardizeOp as TorchStandardizeOp
 from dataflux.ops.torch import ToTensorOp
+from dataflux.ops.transform_chain import TransformChain
 from dataflux.sources import HuggingFaceSource
 
 _NODE_CLASSES = [
@@ -35,6 +36,7 @@ _NODE_CLASSES = [
     MetadataToTargetOp,
     EncodeTargetOp,
     DecodeTargetOp,
+    TransformChain,
 ]
 
 

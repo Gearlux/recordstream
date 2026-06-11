@@ -256,6 +256,15 @@ class Dim:
             return False
         return True
 
+    def __str__(self) -> str:
+        if self.min is None and self.max is None:
+            return "any"
+        if self.min == self.max:
+            return str(self.min)
+        lo = str(self.min) if self.min is not None else "0"
+        hi = str(self.max) if self.max is not None else "∞"
+        return f"{lo}–{hi}"
+
     def to_dict(self) -> Dict[str, Any]:
         return {"min": self.min, "max": self.max, "name": self.name}
 
@@ -359,6 +368,42 @@ class ArrayType:
         fws = frozenset({framework}) if framework else None
         return cls(ndim=len(dims), shape=tuple(dims), dtype=dtype, frameworks=fws, semantic=semantic)
 
+    def __str__(self) -> str:
+        parts: List[str] = []
+        if self.frameworks:
+            parts.append("/".join(sorted(self.frameworks)))
+        if self.dtype:
+            parts.append(str(self.dtype))
+        if self.shape is not None:
+            parts.append(f"shape=({', '.join(str(d) for d in self.shape)})")
+        elif self.ndim is not None:
+            parts.append(f"rank-{self.ndim}")
+        return f"array[{', '.join(parts)}]" if parts else "array"
+
+    def explain_mismatch(self, producer: "ArrayType") -> List[str]:
+        """Return human-readable reasons why this consumer does not accept *producer*."""
+        reasons: List[str] = []
+        if self.frameworks is not None:
+            if producer.frameworks is None:
+                reasons.append(f"framework unknown in upstream (op requires {'/'.join(sorted(self.frameworks))})")
+            elif not (producer.frameworks <= self.frameworks):
+                exp = "/".join(sorted(self.frameworks))
+                got = "/".join(sorted(producer.frameworks))
+                reasons.append(f"framework mismatch: op requires {exp}, upstream produces {got}")
+        if self.ndim is not None and producer.ndim is not None and producer.ndim != self.ndim:
+            reasons.append(f"rank mismatch: op requires rank {self.ndim}, upstream has rank {producer.ndim}")
+        if self.dtype is not None and producer.dtype is not None:
+            if not _dtype_accepts(self.dtype, producer.dtype):
+                reasons.append(f"dtype mismatch: op requires {self.dtype}, upstream produces {producer.dtype}")
+        elif self.dtype is not None and producer.dtype is None:
+            reasons.append(f"dtype unknown in upstream (op requires {self.dtype})")
+        if self.shape is not None and producer.shape is not None and len(self.shape) == len(producer.shape):
+            for i, (cdim, pdim) in enumerate(zip(self.shape, producer.shape)):
+                if not cdim.accepts(pdim):
+                    name = f" ({cdim.name})" if cdim.name else ""
+                    reasons.append(f"axis {i}{name}: op requires size {cdim}, upstream has size {pdim}")
+        return reasons
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "kind": "array",
@@ -447,6 +492,19 @@ class SampleType:
             self.target, producer.target, permissive=True
         )
 
+    def explain_mismatch(self, producer: "SampleType") -> str:
+        """Return a human-readable explanation of why ``self.accepts(producer)`` is False.
+
+        Walks each slot (input / target) and collects all failing conditions — framework,
+        rank, dtype, and per-axis shape — then returns them as a single comma-separated
+        sentence so the caller can embed it directly in an error message.
+        """
+        reasons: List[str] = []
+        for slot, cspec, pspec in (("input", self.input, producer.input), ("target", self.target, producer.target)):
+            slot_reasons = _explain_slot_mismatch(cspec, pspec)
+            reasons.extend(f"{slot} {r}" for r in slot_reasons)
+        return "; ".join(reasons) if reasons else "incompatible types (no specific reason derived)"
+
     def to_dict(self) -> Dict[str, Any]:
         return {"kind": "sample", "input": type_to_dict(self.input), "target": type_to_dict(self.target)}
 
@@ -500,6 +558,26 @@ def accepts(consumer: TypeSpec, producer: TypeSpec) -> bool:
 def compatible(consumer: TypeSpec, producer: TypeSpec) -> bool:
     """Permissive single-slot match (edit-time / discovery): ``Any``/unknown on either side passes."""
     return _accepts(consumer, producer, permissive=True)
+
+
+def _explain_slot_mismatch(consumer: TypeSpec, producer: TypeSpec) -> List[str]:
+    """Return human-readable reasons why *consumer* does not strictly accept *producer* for one slot."""
+    if isinstance(consumer, AnyType) or isinstance(producer, AnyType):
+        return []
+    if isinstance(consumer, ArrayType) and isinstance(producer, ArrayType):
+        return consumer.explain_mismatch(producer)
+    if isinstance(consumer, UnionType):
+        # None of the union members accepted — collect reasons from the closest member.
+        all_reasons = [_explain_slot_mismatch(m, producer) for m in consumer.members]
+        # Pick the member with fewest (most specific) reasons as the most helpful.
+        best = min(all_reasons, key=lambda r: (len(r) == 0, len(r)), default=[])
+        return best if best else ["incompatible union types"]
+    if isinstance(consumer, PythonType) and isinstance(producer, PythonType):
+        if consumer.qualname != producer.qualname:
+            return [f"type mismatch: op requires {consumer.qualname}, upstream produces {producer.qualname}"]
+        return []
+    # Framework/kind-level mismatch (e.g. ArrayType vs PythonType).
+    return [f"kind mismatch: op requires {type(consumer).__name__}, upstream produces {type(producer).__name__}"]
 
 
 def _accepts(consumer: TypeSpec, producer: TypeSpec, *, permissive: bool) -> bool:

@@ -13,12 +13,16 @@ from dataflux.ops import (
     CopySampleOp,
     CopyTargetOp,
     RescaleOp,
+    SqueezeOp,
     StandardizeOp,
     StashInputOp,
+    StashTargetOp,
     SwapInputTargetOp,
     Tee,
     ToTensorOp,
+    UnsqueezeOp,
     UnstashInputOp,
+    UnstashTargetOp,
 )
 from dataflux.ops import numpy as np_ops
 from dataflux.sample import Sample
@@ -595,6 +599,53 @@ class TestStashUnstash:
 
 
 # ---------------------------------------------------------------------------
+# StashTargetOp / UnstashTargetOp
+# ---------------------------------------------------------------------------
+
+
+class TestStashUnstashTarget:
+    def test_stash_target_aliases_by_default(self) -> None:
+        arr = np.array([1.0, 2.0])
+        sample = Sample(input=None, target=arr, metadata={})
+        out = StashTargetOp(key="snap")(sample)
+        assert out.meta["snap"] is arr
+        assert out.target is arr
+
+    def test_stash_target_with_copy_deepcopies(self) -> None:
+        arr = np.array([1.0, 2.0])
+        sample = Sample(input=None, target=arr, metadata={})
+        out = StashTargetOp(key="snap", copy=True)(sample)
+        assert out.meta["snap"] is not arr
+        np.testing.assert_array_equal(out.meta["snap"], arr)
+
+    def test_unstash_target_default_copies_to_isolate_branches(self) -> None:
+        arr = np.array([1.0, 2.0])
+        sample = Sample(input=None, target=None, metadata={"snap": arr})
+        out = UnstashTargetOp(key="snap")(sample)
+        assert out.target is not arr
+        np.testing.assert_array_equal(out.target, arr)
+
+    def test_unstash_target_no_copy_aliases(self) -> None:
+        arr = np.array([1.0, 2.0])
+        sample = Sample(input=None, target=None, metadata={"snap": arr})
+        out = UnstashTargetOp(key="snap", copy=False)(sample)
+        assert out.target is arr
+
+    def test_unstash_target_missing_key_raises_lazily(self) -> None:
+        sample = Sample(input=None, target=None, metadata={})
+        with pytest.raises(KeyError):
+            UnstashTargetOp(key="nope")(sample)
+
+    def test_stash_restore_round_trip_preserves_fork_target(self) -> None:
+        """The DAG→sequential pattern: snapshot at a fork, restore after a branch replaced it."""
+        sample = Sample(input=None, target="fork-target", metadata={})
+        stashed = StashTargetOp(key="fork")(sample)
+        branched = stashed._replace(target="branch-target")
+        restored = UnstashTargetOp(key="fork")(branched)
+        assert restored.target == "fork-target"
+
+
+# ---------------------------------------------------------------------------
 # numpy.resolve_expression
 # ---------------------------------------------------------------------------
 
@@ -816,3 +867,180 @@ class TestConnectedComponentsOp:
         op = np_ops.ConnectedComponentsOp(connectivity=6)
         with pytest.raises(ValueError, match="connectivity must be 4 or 8"):
             op(Sample(input=np.zeros((2, 2), dtype=bool)))
+
+
+# ---------------------------------------------------------------------------
+# Torch SqueezeOp
+# ---------------------------------------------------------------------------
+
+
+class TestTorchSqueezeOp:
+    """Tests for torch SqueezeOp."""
+
+    def test_squeeze_all_size1_dims(self) -> None:
+        tensor = torch.zeros(1, 3, 1, 4)
+        result = SqueezeOp()(Sample(input=tensor))
+        assert result.input.shape == (3, 4)
+
+    def test_squeeze_specific_dim(self) -> None:
+        tensor = torch.zeros(1, 3, 4)
+        result = SqueezeOp(dim=0)(Sample(input=tensor))
+        assert result.input.shape == (3, 4)
+
+    def test_squeeze_non_unit_dim_is_noop(self) -> None:
+        # torch.squeeze leaves non-size-1 dims unchanged
+        tensor = torch.zeros(2, 3)
+        result = SqueezeOp(dim=0)(Sample(input=tensor))
+        assert result.input.shape == (2, 3)
+
+    def test_preserves_target_and_metadata(self) -> None:
+        tensor = torch.zeros(1, 4)
+        result = SqueezeOp()(Sample(input=tensor, target=7, metadata={"k": "v"}))
+        assert result.target == 7
+        assert result.meta == {"k": "v"}
+
+    def test_raises_on_non_tensor(self) -> None:
+        with pytest.raises(TypeError, match="SqueezeOp expects a torch.Tensor"):
+            SqueezeOp()(Sample(input=np.zeros((1, 3))))
+
+    def test_zero_arg_construction(self) -> None:
+        op = SqueezeOp()
+        assert op.dim is None
+
+    def test_negative_dim(self) -> None:
+        tensor = torch.zeros(3, 1)
+        result = SqueezeOp(dim=-1)(Sample(input=tensor))
+        assert result.input.shape == (3,)
+
+
+# ---------------------------------------------------------------------------
+# Torch UnsqueezeOp
+# ---------------------------------------------------------------------------
+
+
+class TestTorchUnsqueezeOp:
+    """Tests for torch UnsqueezeOp."""
+
+    def test_unsqueeze_at_dim0(self) -> None:
+        tensor = torch.zeros(3, 4)
+        result = UnsqueezeOp(dim=0)(Sample(input=tensor))
+        assert result.input.shape == (1, 3, 4)
+
+    def test_unsqueeze_at_dim1(self) -> None:
+        tensor = torch.zeros(3, 4)
+        result = UnsqueezeOp(dim=1)(Sample(input=tensor))
+        assert result.input.shape == (3, 1, 4)
+
+    def test_unsqueeze_at_last_dim(self) -> None:
+        tensor = torch.zeros(3, 4)
+        result = UnsqueezeOp(dim=-1)(Sample(input=tensor))
+        assert result.input.shape == (3, 4, 1)
+
+    def test_default_dim_is_zero(self) -> None:
+        tensor = torch.zeros(5)
+        result = UnsqueezeOp()(Sample(input=tensor))
+        assert result.input.shape == (1, 5)
+
+    def test_preserves_target_and_metadata(self) -> None:
+        tensor = torch.zeros(4)
+        result = UnsqueezeOp()(Sample(input=tensor, target=2, metadata={"x": 1}))
+        assert result.target == 2
+        assert result.meta == {"x": 1}
+
+    def test_raises_on_non_tensor(self) -> None:
+        with pytest.raises(TypeError, match="UnsqueezeOp expects a torch.Tensor"):
+            UnsqueezeOp()(Sample(input=np.zeros(3)))
+
+    def test_roundtrip_squeeze_unsqueeze(self) -> None:
+        tensor = torch.zeros(3, 4)
+        squeezed = UnsqueezeOp(dim=0)(Sample(input=tensor))
+        restored = SqueezeOp(dim=0)(squeezed)
+        assert restored.input.shape == tensor.shape
+
+
+# ---------------------------------------------------------------------------
+# Numpy SqueezeOp
+# ---------------------------------------------------------------------------
+
+
+class TestNumpySqueezeOp:
+    """Tests for numpy SqueezeOp."""
+
+    def test_squeeze_all_size1_axes(self) -> None:
+        arr = np.zeros((1, 3, 1, 4))
+        result = np_ops.SqueezeOp()(Sample(input=arr))
+        assert result.input.shape == (3, 4)
+
+    def test_squeeze_specific_axis(self) -> None:
+        arr = np.zeros((1, 3, 4))
+        result = np_ops.SqueezeOp(axis=0)(Sample(input=arr))
+        assert result.input.shape == (3, 4)
+
+    def test_squeeze_non_unit_axis_raises(self) -> None:
+        arr = np.zeros((2, 3))
+        with pytest.raises(ValueError):
+            np_ops.SqueezeOp(axis=0)(Sample(input=arr))
+
+    def test_preserves_target_and_metadata(self) -> None:
+        arr = np.zeros((1, 4))
+        result = np_ops.SqueezeOp()(Sample(input=arr, target=7, metadata={"k": "v"}))
+        assert result.target == 7
+        assert result.meta == {"k": "v"}
+
+    def test_raises_on_non_ndarray(self) -> None:
+        with pytest.raises(TypeError, match="SqueezeOp expects an np.ndarray"):
+            np_ops.SqueezeOp()(Sample(input=torch.zeros(1, 3)))
+
+    def test_zero_arg_construction(self) -> None:
+        op = np_ops.SqueezeOp()
+        assert op.axis is None
+
+    def test_negative_axis(self) -> None:
+        arr = np.zeros((3, 1))
+        result = np_ops.SqueezeOp(axis=-1)(Sample(input=arr))
+        assert result.input.shape == (3,)
+
+
+# ---------------------------------------------------------------------------
+# Numpy UnsqueezeOp
+# ---------------------------------------------------------------------------
+
+
+class TestNumpyUnsqueezeOp:
+    """Tests for numpy UnsqueezeOp."""
+
+    def test_unsqueeze_at_axis0(self) -> None:
+        arr = np.zeros((3, 4))
+        result = np_ops.UnsqueezeOp(axis=0)(Sample(input=arr))
+        assert result.input.shape == (1, 3, 4)
+
+    def test_unsqueeze_at_axis1(self) -> None:
+        arr = np.zeros((3, 4))
+        result = np_ops.UnsqueezeOp(axis=1)(Sample(input=arr))
+        assert result.input.shape == (3, 1, 4)
+
+    def test_unsqueeze_at_last_axis(self) -> None:
+        arr = np.zeros((3, 4))
+        result = np_ops.UnsqueezeOp(axis=-1)(Sample(input=arr))
+        assert result.input.shape == (3, 4, 1)
+
+    def test_default_axis_is_zero(self) -> None:
+        arr = np.zeros(5)
+        result = np_ops.UnsqueezeOp()(Sample(input=arr))
+        assert result.input.shape == (1, 5)
+
+    def test_preserves_target_and_metadata(self) -> None:
+        arr = np.zeros(4)
+        result = np_ops.UnsqueezeOp()(Sample(input=arr, target=2, metadata={"x": 1}))
+        assert result.target == 2
+        assert result.meta == {"x": 1}
+
+    def test_raises_on_non_ndarray(self) -> None:
+        with pytest.raises(TypeError, match="UnsqueezeOp expects an np.ndarray"):
+            np_ops.UnsqueezeOp()(Sample(input=torch.zeros(3)))
+
+    def test_roundtrip_squeeze_unsqueeze(self) -> None:
+        arr = np.zeros((3, 4))
+        unsqueezed = np_ops.UnsqueezeOp(axis=0)(Sample(input=arr))
+        restored = np_ops.SqueezeOp(axis=0)(unsqueezed)
+        assert restored.input.shape == arr.shape

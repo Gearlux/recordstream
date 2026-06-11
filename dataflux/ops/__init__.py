@@ -12,9 +12,10 @@ Submodules:
     - dataflux.ops.enable: Enable (toggle an op-list via one named CLI flag)
     - dataflux.ops.random_apply: RandomApply (gate any op behind a Bernoulli flip)
     - dataflux.ops.sink: SampleSinkOp (adapt a DataSink as a pass-through op)
+    - dataflux.ops.transform_chain: TransformChain (sequential op-chain grouping)
     - dataflux.ops.copy: CopySampleOp, CopyInputOp, CopyTargetOp, CopyMetadataOp
     - dataflux.ops.swap: SwapInputTargetOp
-    - dataflux.ops.stash: StashInputOp, UnstashInputOp
+    - dataflux.ops.stash: StashInputOp, UnstashInputOp, StashTargetOp, UnstashTargetOp
     - dataflux.ops.target: MetadataToTargetOp, EncodeTargetOp, DecodeTargetOp (target field)
 
 Flat imports default to torch variants for the data ops; flow / copy /
@@ -26,7 +27,7 @@ from dataflux.ops.enable import Enable
 from dataflux.ops.parallel import Parallel
 from dataflux.ops.random_apply import RandomApply
 from dataflux.ops.sink import SampleSinkOp
-from dataflux.ops.stash import StashInputOp, UnstashInputOp
+from dataflux.ops.stash import StashInputOp, StashTargetOp, UnstashInputOp, UnstashTargetOp
 from dataflux.ops.swap import SwapInputTargetOp
 from dataflux.ops.target import (
     CocoToTorchVisionDetectionOp,
@@ -37,6 +38,7 @@ from dataflux.ops.target import (
 )
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import RescaleOp, SqueezeOp, StandardizeOp, ToTensorOp, UnsqueezeOp
+from dataflux.ops.transform_chain import TransformChain
 
 __all__ = [
     "CopyInputOp",
@@ -56,9 +58,12 @@ __all__ = [
     "SqueezeOp",
     "StandardizeOp",
     "StashInputOp",
+    "StashTargetOp",
     "SwapInputTargetOp",
     "Tee",
+    "TransformChain",
     "ToTensorOp",
     "UnstashInputOp",
+    "UnstashTargetOp",
     "UnsqueezeOp",
 ]

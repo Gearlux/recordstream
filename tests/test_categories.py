@@ -16,6 +16,7 @@ from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
 from dataflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
 from dataflux.ops.parallel import Parallel
 from dataflux.ops.sink import SampleSinkOp
+from dataflux.ops.stash import StashTargetOp, UnstashTargetOp
 from dataflux.ops.target import (
     CocoToTorchVisionDetectionOp,
     DecodeTargetOp,
@@ -25,6 +26,7 @@ from dataflux.ops.target import (
 )
 from dataflux.ops.tee import Tee
 from dataflux.ops.torch import ToTensorOp
+from dataflux.ops.transform_chain import TransformChain
 from dataflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
 
 
@@ -70,6 +72,7 @@ def test_op_classes_tagged() -> None:
     assert ThresholdOp.__confluid_category__ == "op"
     assert Tee.__confluid_category__ == "op"
     assert Enable.__confluid_category__ == "op"
+    assert TransformChain.__confluid_category__ == "op"
     assert SampleSinkOp.__confluid_category__ == "op"
     assert MetadataToTargetOp.__confluid_category__ == "op"
     assert EncodeTargetOp.__confluid_category__ == "op"
@@ -88,6 +91,8 @@ def test_op_group_tags() -> None:
     assert ThresholdOp.__confluid_group__ == "numpy"
     assert ToTensorOp.__confluid_group__ == "torch"
     assert CopyInputOp.__confluid_group__ == "structure"
+    assert StashTargetOp.__confluid_group__ == "structure"
+    assert UnstashTargetOp.__confluid_group__ == "structure"
     assert MetadataToTargetOp.__confluid_group__ == "structure"
     assert EncodeTargetOp.__confluid_group__ == "structure"
     assert DecodeTargetOp.__confluid_group__ == "structure"
@@ -96,6 +101,7 @@ def test_op_group_tags() -> None:
     assert Tee.__confluid_group__ == "compose"
     assert Parallel.__confluid_group__ == "compose"
     assert Enable.__confluid_group__ == "compose"
+    assert TransformChain.__confluid_group__ == "compose"
     assert ConvertToImageOp.__confluid_group__ == "image"
     assert NormalizeToUint8Op.__confluid_group__ == "image"
     assert SampleSinkOp.__confluid_group__ == "sink"
@@ -128,6 +134,7 @@ def test_categories_enumerable_via_registry() -> None:
         "DecodeTargetOp",
         "CocoToTorchVisionDetectionOp",
         "MasksToDetectionBoxesOp",
+        "TransformChain",
     } <= registry.list_classes(category="op")
 
 
@@ -136,7 +143,7 @@ def test_groups_enumerable_via_registry() -> None:
     registry = get_registry()
     assert {"RescaleOp", "StandardizeOp", "ThresholdOp"} <= registry.list_classes(group="numpy")
     assert {"ConvertToImageOp", "NormalizeToUint8Op"} <= registry.list_classes(group="image")
-    assert {"Tee", "Parallel", "Enable"} <= registry.list_classes(group="compose")
+    assert {"Tee", "Parallel", "Enable", "TransformChain"} <= registry.list_classes(group="compose")
     assert {"SampleSinkOp"} <= registry.list_classes(group="sink")
     assert {
         "MetadataToTargetOp",

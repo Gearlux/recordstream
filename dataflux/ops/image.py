@@ -306,7 +306,9 @@ class NormalizeToUint8Op:
             return np.zeros(arr.shape, dtype=np.uint8)
         filled = np.nan_to_num(arr, nan=lo, posinf=hi, neginf=lo)
         norm = (filled - lo) / (hi - lo)
-        return (np.clip(norm, 0.0, 1.0) * 255.0).astype(np.uint8)
+        # np.asarray (not .astype) so the return type is ndarray under stub
+        # versions where clip-arithmetic degrades to Any.
+        return np.asarray(np.clip(norm, 0.0, 1.0) * 255.0, dtype=np.uint8)
 
     def __call__(self, sample: Sample) -> Sample:
         if self.vmin is not None and self.vmax is not None and self.vmin >= self.vmax:

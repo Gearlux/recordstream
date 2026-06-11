@@ -115,6 +115,51 @@ class RescaleOp:
 
 
 @configurable(category="op", group="torch")
+class SqueezeOp:
+    """Remove size-1 dimensions from a ``torch.Tensor``.
+
+    Args:
+        dim: Axis index to remove. When ``None`` (default), all size-1 dimensions are removed.
+            When specified, the dimension must have size 1; otherwise the tensor is returned unchanged
+            (matching ``torch.squeeze`` semantics).
+    """
+
+    ACCEPTS = SampleType(input=_TORCH)
+    PRODUCES = SampleType(input=_TORCH)
+
+    def __init__(self, dim: Optional[int] = None) -> None:
+        self.dim = dim
+
+    def __call__(self, sample: Sample) -> Sample:
+        tensor = sample.input
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f"SqueezeOp expects a torch.Tensor, got {type(tensor).__name__}")
+        out = torch.squeeze(tensor) if self.dim is None else torch.squeeze(tensor, self.dim)
+        return sample._replace(input=out)
+
+
+@configurable(category="op", group="torch")
+class UnsqueezeOp:
+    """Insert a size-1 dimension at the specified position in a ``torch.Tensor``.
+
+    Args:
+        dim: Axis index at which the new dimension is inserted. Default ``0``.
+    """
+
+    ACCEPTS = SampleType(input=_TORCH)
+    PRODUCES = SampleType(input=_TORCH)
+
+    def __init__(self, dim: int = 0) -> None:
+        self.dim = dim
+
+    def __call__(self, sample: Sample) -> Sample:
+        tensor = sample.input
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError(f"UnsqueezeOp expects a torch.Tensor, got {type(tensor).__name__}")
+        return sample._replace(input=torch.unsqueeze(tensor, self.dim))
+
+
+@configurable(category="op", group="torch")
 class StandardizeOp:
     """
     Standardizes tensor values with given mean and standard deviation.

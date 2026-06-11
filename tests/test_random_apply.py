@@ -72,3 +72,43 @@ def test_sample_passes_through_unchanged_when_skipped() -> None:
     s = _s(42)
     op = RandomApply(op=_BumpOp(), probability=0.0)
     assert op(s) is s
+
+
+# ---------------------------------------------------------------------------
+# random_state / reproducibility
+# ---------------------------------------------------------------------------
+
+
+def test_random_state_stored_on_instance() -> None:
+    op = RandomApply(op=_BumpOp(), probability=0.5, random_state=42)
+    assert op.random_state == 42
+
+
+def test_random_state_none_is_default() -> None:
+    op = RandomApply(op=_BumpOp())
+    assert op.random_state is None
+
+
+def test_gate_reproducible_with_seed() -> None:
+    """Two RandomApply instances with the same seed must make identical gate decisions."""
+    s = _s(0)
+    op_a = RandomApply(op=_BumpOp(), probability=0.5, random_state=7)
+    op_b = RandomApply(op=_BumpOp(), probability=0.5, random_state=7)
+    results_a = [op_a(s).input for _ in range(30)]
+    results_b = [op_b(s).input for _ in range(30)]
+    assert results_a == results_b
+
+
+def test_gate_different_seeds_produce_different_sequences() -> None:
+    s = _s(0)
+    op_a = RandomApply(op=_BumpOp(), probability=0.5, random_state=1)
+    op_b = RandomApply(op=_BumpOp(), probability=0.5, random_state=2)
+    results_a = [op_a(s).input for _ in range(50)]
+    results_b = [op_b(s).input for _ in range(50)]
+    assert results_a != results_b
+
+
+def test_zero_arg_construction_with_random_state_none() -> None:
+    op = RandomApply()
+    assert op.random_state is None
+    assert op._gate_rng is None  # lazily initialized on first call
