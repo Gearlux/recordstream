@@ -60,6 +60,9 @@ dataflux-ops-random-apply = "dataflux.ops.random_apply"
 # changes need an editable reinstall before FluxStudio/navigaitor discovery sees the module.
 dataflux-ops-configure = "dataflux.ops.configure"
 dataflux-ops-formula = "dataflux.ops.formula"
+# CaptureOutputOp (records an op's @output value into metadata — the capture half of
+# FluxStudio's op-@output -> param wiring, paired with ConfigureOp(UnstashInputOp)).
+dataflux-ops-capture = "dataflux.ops.capture"
 dataflux-ops-transform-chain = "dataflux.ops.transform_chain"
 dataflux-ops-sink = "dataflux.ops.sink"
 dataflux-ops-stash = "dataflux.ops.stash"
@@ -69,6 +72,15 @@ dataflux-ops-copy = "dataflux.ops.copy"
 dataflux-ops-swap = "dataflux.ops.swap"
 dataflux-ops-target = "dataflux.ops.target"
 dataflux-ops-image = "dataflux.ops.image"
+# Storage SINKS (HDF5Sink / ZarrGroupSink / ZarrBatchSink / DirectorySink) carry
+# category="sink" so FluxStudio surfaces them as DatasetProcessor sink nodes. They live under
+# dataflux.storage.* (NOT re-exported from the package root), and scan_module does not recurse
+# submodules, so each storage module needs its own entry point. The matching SOURCES in these
+# modules stay uncategorised, so the positive {op,source,engine,sink} allowlist surfaces only the
+# tagged sinks. (Entry-point changes need an editable reinstall — `aisland setup`, never --reinstall.)
+dataflux-storage-hdf5 = "dataflux.storage.hdf5"
+dataflux-storage-zarr = "dataflux.storage.zarr"
+dataflux-storage-directory = "dataflux.storage.directory"
 
 [tool.setuptools.packages.find]
 where = ["."]

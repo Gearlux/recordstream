@@ -29,7 +29,7 @@ Part of the **Modular Quartet**: `LogFlow`, `Confluid`, `Liquify`, and `DataFlux
 
 ### Metadata & Discovery
 - **Passive Introspection:** Automatically discover available tools and ops for serialized manifests.
-- **Discovery Categories:** `@configurable` classes are tagged with a confluid `category` (sources `HuggingFaceSource`/`DatasetSplit` → `source`, engines `Flux`/`JointFlux` → `engine`, concrete `Sample→Sample` ops → `op`; `FilterOp`/`WrappedOp` are deliberately UNcategorised) so tools like navigaitor's `list_configurable_classes(category=...)` enumerate them by kind.
+- **Discovery Categories:** `@configurable` classes are tagged with a confluid `category` (sources `HuggingFaceSource`/`DatasetSplit` → `source`, engines `Flux`/`JointFlux` → `engine`, concrete `Sample→Sample` ops → `op`, storage **sinks** `HDF5Sink`/`ZarrGroupSink`/`ZarrBatchSink`/`DirectorySink` → `sink` (FluxStudio surfaces them as `DatasetProcessor` sink nodes; their read-back **sources** stay UNcategorised); `FilterOp`/`WrappedOp` are deliberately UNcategorised) so tools like navigaitor's `list_configurable_classes(category=...)` enumerate them by kind.
 - **Serialization Symmetry:** Ensure full-pipeline states are serializable and reconstructible via Confluid.
 
 ## 🛠 Quick Start
@@ -86,6 +86,69 @@ class StandardizeOp:
 ```
 
 Matching is asymmetric: `consumer.accepts(producer)` is strict (used at runtime against a concrete inferred type); `compatible(consumer, producer)` is permissive (used at edit time — `Any`/unknown on either side passes). A `Sample`'s own type comes from `sample.describe()` — it returns a type stored in the reserved metadata keys `__features__` (a `datasets.Features` dict) + `__spec__` (sidecar refinements), or infers one from the live data; attach a stored type with `sample.with_type(SampleType(...))`.
+
+## 🌀 Fourier Transform (`FourierOp` / `InverseFourierOp` / shift ops)
+
+A small **1-D FFT toolkit**, each op in a numpy variant (`dataflux.ops.numpy`, on `np.ndarray`) and a torch variant (`dataflux.ops.torch`, on `torch.Tensor`); the flat `from dataflux.ops import …` resolves to the torch one (the package's torch-default convention, like `RescaleOp`):
+
+- **`FourierOp`** — the 1-D discrete Fourier transform (`numpy.fft.fft` / `torch.fft.fft`).
+- **`InverseFourierOp`** — its inverse (`…fft.ifft`), back to the time domain.
+- **`FftShiftOp`** / **`IfftShiftOp`** — center the zero-frequency component, and undo it (`…fft.fftshift` / `ifftshift`).
+
+`FourierOp` / `InverseFourierOp` accept **real *and* complex** signals; the raw transform is always complex (take `.real` downstream if you started real). With a unit `scaling` (see **Windowing & spectral units** below) `FourierOp` may instead emit a *real* power/density spectrum, so it declares a permissive `PRODUCES` (complex **or** floating). The shift ops are pure, dtype-preserving bin rearrangements (no FFT), so they work on any array — including an already-computed 2-D spectrogram.
+
+```python
+import numpy as np
+from dataflux.sample import Sample
+from dataflux.ops.numpy import FourierOp, InverseFourierOp, FftShiftOp
+
+x = np.array([1.0, 2.0, 3.0, 4.0])                # real signal
+spectrum = FourierOp()(Sample(input=x)).input      # complex128, == np.fft.fft(x)
+
+xc = np.array([1 + 2j, 3 - 1j, 0j, -2 + 1j])       # complex signal — also supported
+FourierOp(n=8, axis=-1, norm="ortho")(Sample(input=xc))  # zero-pad to 8, orthonormal scaling
+
+# Round-trip (forward then inverse recovers the input):
+recovered = InverseFourierOp()(FourierOp()(Sample(input=x))).input.real  # ≈ x
+
+# Center the spectrum for display — two equivalent ways:
+centered = FftShiftOp()(FourierOp()(Sample(input=x)))   # explicit, composable
+centered = FourierOp(shift=True)(Sample(input=x))       # the one-node convenience flag
+```
+
+Parameters mirror `numpy.fft.fft` / `torch.fft.fft`: `n` (output length — zero-pad/truncate), `axis` (numpy) / `dim` (torch) — the single transform axis, default the last, so a `[B, N]` batch transforms per row — and `norm`, a closed `Literal["backward", "ortho", "forward"]` (use the **same** `norm` on the inverse to round-trip). Dtype promotion follows each framework: real `float32`/`complex64` → `complex64`, `float64`/integer/`complex128` → `complex128` (numpy) or `complex64` for integer (torch); the torch FFT/IFFT ops promote half precision (`float16`/`bfloat16`) to `float32` first because torch's FFT rejects it. Both transform ops take a `shift` flag — `FourierOp(shift=True)` applies `fftshift` **after** the transform, `InverseFourierOp(shift=True)` applies `ifftshift` **before** it — so the two invert each other exactly (the standalone `FftShiftOp`/`IfftShiftOp` are the same logic, decoupled, for centering arrays that didn't come from `FourierOp`).
+
+### Windowing & spectral units (`WindowOp` / `SpectrumScalingOp` / `FourierOp(window=…, scaling=…)`)
+
+A raw FFT is **uncalibrated** — to read a spectrum in real units you must taper the signal with a *window* (to control spectral leakage) and divide out the window's gain. DataFlux ships this as two composable ops plus options on `FourierOp` (numpy **and** torch variants). The window + unit math lives in **`dataflux.windows`** (pure numpy; `get_window` / `scale_spectrum` / the `WindowName` + `SpectrumScaling` Literals).
+
+- **`WindowOp(window=…)`** — multiplies the signal by a taper and **stashes the correction** (`window_sum` `S1=Σw`, `window_sum_sq` `S2=Σw²`, `window_enbw_bins`, `window_coherent_gain`) into the metadata for a later scaling step. Windows: `boxcar` (rectangular/none), `bartlett`, `hann`, `hamming`, `blackman`, `blackmanharris`, `nuttall`, `flattop`, `kaiser`, `tukey`, `gaussian` — parametrized ones take `window_param` (Kaiser β / Tukey α / Gaussian σ); `periodic=True` (default) is the DFT-even form correct for FFT analysis.
+- **`SpectrumScalingOp(scaling=…)`** — turns a spectrum into physical units, reading `S1`/`S2` from the metadata (rectangular `S1=S2=N` if no window was applied):
+
+  | `scaling`     | output            | formula                | units    |
+  |---------------|-------------------|------------------------|----------|
+  | `"none"`      | complex (raw)     | `X`                    | —        |
+  | `"amplitude"` | complex           | `X / S1`               | V        |
+  | `"power"`     | real              | `|X|² / S1²`           | V²       |
+  | `"density"`   | real              | `|X|² / (Fs·S2)`       | V²/Hz    |
+
+  `density` uses `sample_rate` (Hz) → falls back to `metadata["samplerate"]` → `1.0` (per normalized frequency). `one_sided=True` folds a real signal's spectrum to one side (keep `0…N/2`, double the interior bins).
+
+- **`FourierOp(window=…, scaling=…, sample_rate=…)`** folds all three into one node. The default (`window="boxcar"`, `scaling="none"`) is byte-for-byte the old behaviour. Calibrated `scaling` assumes the unscaled transform, so combining it with a non-`"backward"` `norm` raises.
+
+```python
+from dataflux.ops.numpy import FourierOp, WindowOp, SpectrumScalingOp
+
+# one node — Hann-windowed power-spectral density in dBW/Hz-ready units:
+psd = FourierOp(window="hann", scaling="density", sample_rate=122.88e6)(sample).input
+
+# …is exactly the explicit, composable chain:
+psd = SpectrumScalingOp(scaling="density", sample_rate=122.88e6)(
+    FourierOp()(WindowOp(window="hann")(sample))
+).input
+```
+
+A unit-amplitude tone reads `amplitude` ≈ its amplitude and `power` ≈ amplitude²; `power` and `density` differ by the window's equivalent noise bandwidth in Hz (`Fs·S2/S1²`) — the calibration that makes a windowed FFT match a reference analyzer.
 
 ## 🔎 Field Projection & Class Counting
 
@@ -312,6 +375,30 @@ flux = Flux.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="mnist"))
 ```
 
 The helper **materializes** the deferred `!class:` markers before attaching (via `confluid.materialize`) — necessary because `confluid.load` leaves markers nested under a mapping key deferred, and a `Flux` rejects deferred markers at iteration by design. The manual equivalent is `Flux(source=src, ops=confluid.materialize(confluid.load("ops.yaml")["ops"]))`.
+
+## 🎛 Per-sample op parameters (`ConfigureOp` / `CaptureOutputOp`)
+
+Some op parameters are only known *per sample*. Two composable ops cover this — both are what FluxStudio emits when you wire a value into an op parameter on the canvas:
+
+- **`ConfigureOp(ops, target, param, key)`** — runs `ops` on the sample as a side-branch; the chain's final `sample.input` is written to `metadata[key]` and injected as `target.<param>`, then `target` is applied. Use it when the value is *derived from the sample itself* (e.g. a threshold from the sample's own max).
+- **`CaptureOutputOp(op, output|captures, key)`** — applies `op`, then records one or more of its `@output` attribute values into `metadata[key]`. The value is captured from the **actual run**, so it works for *stochastic* outputs (a random draw) that can't be recomputed. It reads through a `.target` wrapper, so it composes with `ConfigureOp`.
+
+Together they express "feed one op's runtime `@output` into a later op's parameter" — capture the output, then unstash it into the parameter per sample:
+
+```yaml
+ops:
+  # NoiseFloorOp draws an SNR each call; capture it into metadata.
+  - !class:dataflux.ops.capture.CaptureOutputOp
+    op: !class:waivefront.torchsig.processing.NoiseFloorOp {}
+    output: applied_snr_db
+    key: __captured_snr
+  # …then inject the captured value into a later op's `noise_power_db` per sample.
+  - !class:dataflux.ops.configure.ConfigureOp
+    ops:
+      - !class:dataflux.ops.stash.UnstashInputOp { key: __captured_snr }
+    target: !class:waivefront.torchsig.processing.NoiseFloorOp {}
+    param: noise_power_db
+```
 
 ## 🔗 Paired Join (Binary ↔ Annotations)
 

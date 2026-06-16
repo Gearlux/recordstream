@@ -9,10 +9,24 @@ from logflow import get_logger
 
 from dataflux.sample import Sample
 from dataflux.typespec import ArrayType, PythonType, SampleType, UnionType
+from dataflux.windows import (
+    WINDOW_SUM_KEY,
+    WINDOW_SUMSQ_KEY,
+    SpectrumScaling,
+    WindowName,
+    get_window,
+    scale_spectrum,
+    window_metadata,
+    window_sums,
+)
 
 # Common shorthands for the numpy ops' declared types.
 _NDARRAY = ArrayType(frameworks={"numpy"})
 _NUMERIC_OR_PIL = UnionType((ArrayType(dtype="numeric", frameworks={"numpy"}), PythonType("PIL.Image.Image")))
+# Spectrum-scaling ops emit complex (none/amplitude) OR real (power/density) — a permissive union.
+_COMPLEX_OR_FLOAT = UnionType(
+    (ArrayType(dtype="complex", frameworks={"numpy"}), ArrayType(dtype="floating", frameworks={"numpy"}))
+)
 
 logger = get_logger(__name__)
 
@@ -648,3 +662,320 @@ class ConnectedComponentsOp:
         # validates min_area_bins / connectivity and raises the scipy ImportError.
         bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
         return sample._replace(input=bboxes)
+
+
+def _apply_window(arr: np.ndarray, window: np.ndarray, axis: int) -> np.ndarray:
+    """Multiply ``arr`` by the 1-D ``window`` broadcast along ``axis`` (dtype-preserving).
+
+    The window is cast to the real dtype matching ``arr`` so a ``complex64`` / ``float32`` signal
+    keeps its precision (a raw ``float64`` window would otherwise upcast it).
+    """
+    if np.issubdtype(arr.dtype, np.floating) or np.issubdtype(arr.dtype, np.complexfloating):
+        window = window.astype(arr.real.dtype, copy=False)
+    moved = np.swapaxes(arr, axis, -1)
+    return np.swapaxes(moved * window, axis, -1)
+
+
+def _resolve_fft_sample_rate(sample: Sample, explicit: Optional[float]) -> Optional[float]:
+    """Resolve the density-scaling sample rate: explicit arg → ``metadata['samplerate']`` → ``None``."""
+    if explicit is not None:
+        return explicit
+    if sample.is_batched:
+        return None
+    raw = sample.meta.get("samplerate")
+    return float(raw) if raw else None
+
+
+# FFT normalization mode. Closed ``Literal`` (workspace "prefer closed Literals over bare strings"
+# mandate) so FluxStudio / navigaitor render the choice as a dropdown and the allowed modes stay
+# machine-introspectable via ``typing.get_args(...)``. These three strings are EXACTLY what
+# ``numpy.fft.fft`` accepts for its ``norm=`` argument (the same set ``torch.fft.fft`` uses), passed
+# straight through with no parallel runtime tuple to drift.
+FourierNorm = Literal["backward", "ortho", "forward"]
+
+
+@configurable(category="op", group="numpy")
+class FourierOp:
+    """Compute the 1-D discrete Fourier transform of ``sample.input`` (``numpy.fft.fft``).
+
+    Accepts real **and** complex arrays; the raw output is always complex — ``complex64`` for
+    ``float32``/``complex64`` input, ``complex128`` for ``float64``/integer/``complex128`` input
+    (numpy's promotion rule). This is the **1-D** transform (``numpy.fft.fft``), not the 2-D / N-D
+    one: for an N-D array it runs along a single ``axis`` (default the last), so a ``[B, N]`` batch
+    of signals transforms per row. :class:`InverseFourierOp` is the inverse; set ``shift=True`` to
+    center the zero-frequency bin (the standalone :class:`FftShiftOp` does the same independently).
+
+    **Windowing & units.** ``window`` applies a :func:`dataflux.windows.get_window` taper before the
+    transform (default ``"boxcar"`` = no taper = unchanged behaviour) and stashes the window
+    correction into the metadata; ``scaling`` then returns the spectrum in real units —
+    ``"amplitude"`` (V), ``"power"`` (V²) or ``"density"`` (V²/Hz, using ``sample_rate``) — dividing
+    out the window's coherent gain / noise bandwidth. ``scaling="none"`` (default) leaves the raw
+    complex spectrum. The one-node ``FourierOp(window="hann", scaling="density", sample_rate=…)`` is
+    equivalent to the explicit chain ``WindowOp(window="hann") → FourierOp() →
+    SpectrumScalingOp(scaling="density", sample_rate=…)``. Calibrated ``scaling`` requires the
+    unscaled transform (``norm="backward"``); any other ``norm`` with ``scaling != "none"`` raises.
+
+    Args:
+        n: Output length along ``axis`` — zero-pad/truncate to ``n`` points. ``None`` (default) uses the input length.
+        axis: Axis to transform over. Default ``-1`` (the last axis — the natural choice for a 1-D signal).
+        norm: Normalization — ``"backward"`` (default, unscaled forward), ``"ortho"`` (1/sqrt(n) both ways),
+            or ``"forward"`` (1/n on the forward transform). Calibrated ``scaling`` requires ``"backward"``.
+        shift: When True, ``fftshift`` along ``axis`` after transforming (centers the zero bin). Default False.
+        window: Taper applied before the FFT — a ``WindowName`` (``"boxcar"`` default = no taper).
+        window_param: Kaiser ``β`` (def 8.6) / Tukey ``α`` (def 0.5) / Gaussian ``σ`` std (required); else ignored.
+        periodic: ``True`` (default) = DFT-even window (correct for FFT analysis); ``False`` = symmetric.
+        scaling: Units — ``"none"`` (complex, default), ``"amplitude"`` V, ``"power"`` V², ``"density"`` V²/Hz.
+        sample_rate: Hz, for ``"density"``. ``None`` reads ``metadata["samplerate"]``, else ``1.0`` (normalized).
+        one_sided: Fold to a one-sided spectrum (real signals). Default ``False``; exclusive with ``shift``.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_COMPLEX_OR_FLOAT)
+
+    def __init__(
+        self,
+        n: Optional[int] = None,
+        axis: int = -1,
+        norm: FourierNorm = "backward",
+        shift: bool = False,
+        window: WindowName = "boxcar",
+        window_param: Optional[float] = None,
+        periodic: bool = True,
+        scaling: SpectrumScaling = "none",
+        sample_rate: Optional[float] = None,
+        one_sided: bool = False,
+    ) -> None:
+        # Lazy / zero-arg: store config only. ``n`` and window params are validated lazily in __call__.
+        self.n = n
+        self.axis = axis
+        self.norm = norm
+        self.shift = bool(shift)
+        self.window: WindowName = window
+        self.window_param = window_param
+        self.periodic = bool(periodic)
+        self.scaling: SpectrumScaling = scaling
+        self.sample_rate = sample_rate
+        self.one_sided = bool(one_sided)
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "FourierOp")
+        if self.scaling != "none" and self.norm != "backward":
+            raise ValueError(
+                f"FourierOp: calibrated scaling={self.scaling!r} requires norm='backward' "
+                f"(the unscaled transform); got norm={self.norm!r}"
+            )
+        if self.shift and self.one_sided:
+            raise ValueError("FourierOp: shift and one_sided are mutually exclusive (one_sided is a half-spectrum)")
+        window = None
+        signal = arr
+        if self.window != "boxcar":
+            window = get_window(
+                self.window, arr.shape[self.axis], window_param=self.window_param, periodic=self.periodic
+            )
+            signal = _apply_window(arr, window, self.axis)
+        out = np.fft.fft(signal, n=self.n, axis=self.axis, norm=self.norm)
+        if self.scaling != "none":
+            s1, s2 = window_sums(window) if window is not None else (float(arr.shape[self.axis]),) * 2
+            out = scale_spectrum(
+                out,
+                self.scaling,
+                s1=s1,
+                s2=s2,
+                sample_rate=_resolve_fft_sample_rate(sample, self.sample_rate),
+                one_sided=self.one_sided,
+                axis=self.axis,
+            )
+        if self.shift:
+            out = np.fft.fftshift(out, axes=self.axis)
+        if window is not None and not sample.is_batched:
+            new_meta = dict(sample.meta)
+            new_meta.update(window_metadata(self.window, window))
+            return sample._replace(input=out, metadata=new_meta)
+        return sample._replace(input=out)
+
+
+@configurable(category="op", group="numpy")
+class InverseFourierOp:
+    """Compute the 1-D inverse discrete Fourier transform of ``sample.input`` (``numpy.fft.ifft``).
+
+    The sibling of :class:`FourierOp`: it maps a spectrum back to the time domain. The output is
+    always complex (``numpy.fft.ifft`` always returns complex; take ``.real`` downstream if the
+    original signal was real). ``InverseFourierOp(norm=…)`` must use the **same** ``norm`` as the
+    forward transform to round-trip. With ``shift=True`` an ``ifftshift`` is applied to the input
+    **before** the inverse transform, exactly undoing a prior ``FourierOp(shift=True)`` (the correct
+    pairing even for odd-length axes).
+
+    Args:
+        n: Output length along ``axis`` — zero-pad/truncate to ``n`` points. ``None`` (default) uses the input length.
+        axis: Axis to transform over. Default ``-1`` (the last axis — the natural choice for a 1-D signal).
+        norm: Normalization — must match the forward transform: ``"backward"`` (default), ``"ortho"``, or ``"forward"``.
+        shift: When True, ``ifftshift`` along ``axis`` before inverting (undoes a prior ``fftshift``). Default False.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=ArrayType(dtype="complex", frameworks={"numpy"}))
+
+    def __init__(
+        self, n: Optional[int] = None, axis: int = -1, norm: FourierNorm = "backward", shift: bool = False
+    ) -> None:
+        # Lazy / zero-arg: store config only. ``n`` (if set) is validated lazily by numpy in __call__.
+        self.n = n
+        self.axis = axis
+        self.norm = norm
+        self.shift = bool(shift)
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "InverseFourierOp")
+        if self.shift:
+            arr = np.fft.ifftshift(arr, axes=self.axis)
+        out = np.fft.ifft(arr, n=self.n, axis=self.axis, norm=self.norm)
+        return sample._replace(input=out)
+
+
+@configurable(category="op", group="numpy")
+class FftShiftOp:
+    """Shift the zero-frequency component to the center of the spectrum (``numpy.fft.fftshift``).
+
+    A pure bin-rearrangement — no FFT is computed, so it is dtype- AND shape-preserving and works
+    on **any** array (real, complex, or integer). Chain it after :class:`FourierOp` to center a
+    spectrum for display (the ``FourierOp(shift=True)`` flag is the one-node convenience), or use it
+    standalone to center an already-computed spectrum such as a 2-D spectrogram. :class:`IfftShiftOp`
+    is its exact inverse (they differ only for odd-length axes).
+
+    Args:
+        axis: Axis to shift. Default ``-1`` (last axis, matches :class:`FourierOp`); ``None`` shifts every axis.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: Optional[int] = -1) -> None:
+        self.axis = axis
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "FftShiftOp")
+        return sample._replace(input=np.fft.fftshift(arr, axes=self.axis))
+
+
+@configurable(category="op", group="numpy")
+class IfftShiftOp:
+    """Undo an :class:`FftShiftOp` — move the center frequency back to index 0 (``numpy.fft.ifftshift``).
+
+    The exact inverse of :class:`FftShiftOp` (the two coincide for even-length axes but differ for
+    odd-length ones, which is why both exist). Like its sibling it is a pure, dtype- and
+    shape-preserving rearrangement that accepts any array. Apply it before :class:`InverseFourierOp`
+    to recover the natural FFT bin order (``InverseFourierOp(shift=True)`` folds it in).
+
+    Args:
+        axis: Axis to shift. Default ``-1`` (last axis, matches :class:`InverseFourierOp`); ``None`` shifts every axis.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(self, axis: Optional[int] = -1) -> None:
+        self.axis = axis
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "IfftShiftOp")
+        return sample._replace(input=np.fft.ifftshift(arr, axes=self.axis))
+
+
+@configurable(category="op", group="numpy")
+class WindowOp:
+    """Apply a window taper to ``sample.input`` and record the unit-scaling correction.
+
+    Multiplies the signal by a :func:`dataflux.windows.get_window` taper (broadcast along ``axis``)
+    — the standard first step of spectral analysis, controlling FFT spectral leakage — and stashes
+    the window's correction factors into ``sample.metadata`` (``window`` / ``window_sum`` ``S1`` /
+    ``window_sum_sq`` ``S2`` / ``window_enbw_bins`` / ``window_coherent_gain``) so a later
+    :class:`SpectrumScalingOp` can divide them out and return the spectrum in real units. Chain
+    ``WindowOp → FourierOp → SpectrumScalingOp``, or fold all three into one node via
+    ``FourierOp(window=…, scaling=…)``. Shape-preserving; real input stays real, complex stays
+    complex (the taper is cast to the input's real dtype so precision is preserved).
+
+    Args:
+        window: Which taper — a ``WindowName`` (default ``"hann"``; ``"boxcar"`` is the rectangular identity).
+        window_param: Kaiser ``β`` (def 8.6) / Tukey ``α`` (def 0.5) / Gaussian ``σ`` std (required); else ignored.
+        periodic: ``True`` (default) = DFT-even window (correct for FFT analysis); ``False`` = symmetric.
+        axis: Axis the window is applied along. Default ``-1`` (the last axis — the 1-D signal).
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_NDARRAY)
+
+    def __init__(
+        self,
+        window: WindowName = "hann",
+        window_param: Optional[float] = None,
+        periodic: bool = True,
+        axis: int = -1,
+    ) -> None:
+        # Lazy / zero-arg: store config only; window params are validated lazily by get_window.
+        self.window: WindowName = window
+        self.window_param = window_param
+        self.periodic = bool(periodic)
+        self.axis = axis
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "WindowOp")
+        window = get_window(self.window, arr.shape[self.axis], window_param=self.window_param, periodic=self.periodic)
+        out = _apply_window(arr, window, self.axis)
+        if sample.is_batched:
+            return sample._replace(input=out)
+        new_meta = dict(sample.meta)
+        new_meta.update(window_metadata(self.window, window))
+        return sample._replace(input=out, metadata=new_meta)
+
+
+@configurable(category="op", group="numpy")
+class SpectrumScalingOp:
+    """Scale a (complex) FFT spectrum to physical units using the window correction.
+
+    The calibration half of the FFT chain: turns the raw :class:`FourierOp` output into an amplitude
+    (V), power (V²) or power-spectral-density (V²/Hz) spectrum, dividing out the window's coherent
+    gain ``S1`` / noise bandwidth ``S2`` — read from the ``window_*`` metadata stashed by
+    :class:`WindowOp` or ``FourierOp(window=…)``; if absent it assumes a rectangular/boxcar window
+    (``S1=S2=N``). Assumes the spectrum came from the **unscaled** forward transform
+    (``norm="backward"``, the FourierOp default). Output dtype follows the mode — complex for
+    ``"none"``/``"amplitude"`` (phase preserved), real for ``"power"``/``"density"``.
+
+    Args:
+        scaling: Units — ``"none"`` (unchanged), ``"amplitude"`` V, ``"power"`` V² (default), ``"density"`` V²/Hz.
+        sample_rate: Hz, for ``"density"``. ``None`` (default) reads ``metadata["samplerate"]``, else ``1.0``.
+        one_sided: Fold to one-sided (real-signal convention: keep 0…N/2, double interior bins). Default ``False``.
+        axis: Spectrum axis. Default ``-1``.
+    """
+
+    ACCEPTS = SampleType(input=_NDARRAY)
+    PRODUCES = SampleType(input=_COMPLEX_OR_FLOAT)
+
+    def __init__(
+        self,
+        scaling: SpectrumScaling = "power",
+        sample_rate: Optional[float] = None,
+        one_sided: bool = False,
+        axis: int = -1,
+    ) -> None:
+        # Lazy / zero-arg: store config only.
+        self.scaling: SpectrumScaling = scaling
+        self.sample_rate = sample_rate
+        self.one_sided = bool(one_sided)
+        self.axis = axis
+
+    def __call__(self, sample: Sample) -> Sample:
+        arr = _require_ndarray(sample, "SpectrumScalingOp")
+        n = arr.shape[self.axis]
+        if sample.is_batched:
+            s1 = s2 = float(n)
+        else:
+            meta = sample.meta
+            raw_s1, raw_s2 = meta.get(WINDOW_SUM_KEY), meta.get(WINDOW_SUMSQ_KEY)
+            s1, s2 = (
+                (float(raw_s1), float(raw_s2)) if raw_s1 is not None and raw_s2 is not None else (float(n), float(n))
+            )
+        fs = _resolve_fft_sample_rate(sample, self.sample_rate)
+        if self.scaling == "density" and not fs:
+            logger.debug("SpectrumScalingOp: no sample_rate for density; using normalized frequency (Fs=1.0)")
+        out = scale_spectrum(arr, self.scaling, s1=s1, s2=s2, sample_rate=fs, one_sided=self.one_sided, axis=self.axis)
+        return sample._replace(input=out)

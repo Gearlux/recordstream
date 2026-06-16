@@ -8,6 +8,7 @@ import torch
 from PIL import Image
 
 from dataflux.ops import (
+    CaptureOutputOp,
     ConfigureOp,
     CopyInputOp,
     CopyMetadataOp,
@@ -759,6 +760,122 @@ class TestConfigureOp:
         assert out is not None
         assert isinstance(op.target, ThresholdOp) and op.target.low_level == 4.0
         np.testing.assert_array_equal(out.input, [False, True])
+
+
+class TestCaptureOutputOp:
+    class _DrawOp:
+        """Stub op: transforms the sample (+1) and exposes its drawn value as an @output-like property."""
+
+        def __init__(self, value: float = 0.0) -> None:
+            self._value = value
+            self._last: object = None
+            self.calls = 0
+
+        def __call__(self, sample: Sample) -> Sample:
+            self.calls += 1
+            self._last = self._value
+            return sample._replace(input=sample.input + 1)
+
+        @property
+        def drawn(self) -> object:
+            return self._last
+
+    def test_records_output_into_metadata_and_keeps_transform(self) -> None:
+        op = self._DrawOp(value=42.0)
+        sample = Sample(input=np.array([1.0]), target=None, metadata={})
+        out = CaptureOutputOp(op=op, output="drawn", key="captured")(sample)
+        assert out is not None
+        assert out.meta["captured"] == 42.0  # the @output value rides metadata
+        np.testing.assert_array_equal(out.input, [2.0])  # the wrapped op's transform is kept
+        assert op.calls == 1
+
+    def test_default_key_is_output_name(self) -> None:
+        out = CaptureOutputOp(op=self._DrawOp(value=7.0), output="drawn")(Sample(input=0, target=None, metadata={}))
+        assert out is not None and out.meta["drawn"] == 7.0
+
+    def test_multi_capture_applies_op_once(self) -> None:
+        class _Multi:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def __call__(self, s: Sample) -> Sample:
+                self.calls += 1
+                return s
+
+            @property
+            def a(self) -> int:
+                return 1
+
+            @property
+            def b(self) -> int:
+                return 2
+
+        op = _Multi()
+        out = CaptureOutputOp(op=op, captures={"a": "ka", "b": "kb"})(Sample(input=0, target=None, metadata={}))
+        assert out is not None and out.meta["ka"] == 1 and out.meta["kb"] == 2
+        assert op.calls == 1  # one application, several captures
+
+    def test_captures_actual_drawn_value_not_recompute(self) -> None:
+        """A stochastic @output must be captured from the SAME application — never a fresh re-draw."""
+        seq = iter([11.0, 22.0, 33.0])
+
+        class _Stochastic:
+            def __init__(self) -> None:
+                self._last: object = None
+
+            def __call__(self, s: Sample) -> Sample:
+                self._last = next(seq)
+                return s
+
+            @property
+            def drawn(self) -> object:
+                return self._last
+
+        out = CaptureOutputOp(op=_Stochastic(), output="drawn", key="v")(Sample(input=0, target=None, metadata={}))
+        assert out is not None and out.meta["v"] == 11.0  # the first (and only) draw
+
+    def test_requires_op(self) -> None:
+        with pytest.raises(ValueError, match="'op'"):
+            CaptureOutputOp(output="x")(Sample(input=0, target=None, metadata={}))
+
+    def test_requires_something_to_capture(self) -> None:
+        with pytest.raises(ValueError, match="nothing to capture"):
+            CaptureOutputOp(op=self._DrawOp())(Sample(input=0, target=None, metadata={}))
+
+    def test_missing_attribute_raises(self) -> None:
+        with pytest.raises(AttributeError, match="no @output attribute"):
+            CaptureOutputOp(op=self._DrawOp(), output="nope")(Sample(input=0, target=None, metadata={}))
+
+    def test_filtering_op_propagates_none(self) -> None:
+        assert (
+            CaptureOutputOp(op=lambda s: None, output="x", key="k")(Sample(input=0, target=None, metadata={})) is None
+        )
+
+    def test_reads_output_through_target_wrapper(self) -> None:
+        """The @output is read THROUGH a ``.target`` wrapper (e.g. a ConfigureOp), so a node that is
+        both a capture-consumer (its param configured) AND a capture-producer composes."""
+        from typing import Callable
+
+        class _Wrapper:  # mimics ConfigureOp: applies .target and exposes it as .target
+            def __init__(self, target: Callable[[Sample], Sample]) -> None:
+                self.target = target
+
+            def __call__(self, s: Sample) -> Sample:
+                return self.target(s)
+
+        out = CaptureOutputOp(op=_Wrapper(self._DrawOp(value=99.0)), output="drawn", key="v")(
+            Sample(input=np.array([1.0]), target=None, metadata={})
+        )
+        assert out is not None and out.meta["v"] == 99.0
+        np.testing.assert_array_equal(out.input, [2.0])
+
+    def test_fluid_marker_op_flows_lazily(self) -> None:
+        from confluid.fluid import Class
+
+        op = CaptureOutputOp(op=Class(self._DrawOp, value=5.0), output="drawn", key="v")
+        out = op(Sample(input=np.array([1.0]), target=None, metadata={}))
+        assert out is not None and out.meta["v"] == 5.0
+        np.testing.assert_array_equal(out.input, [2.0])
 
 
 # ---------------------------------------------------------------------------

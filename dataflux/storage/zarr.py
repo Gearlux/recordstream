@@ -10,7 +10,8 @@ from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, DataSource, Storage, to_numpy
 
 
-@confluid.configurable
+# category="sink": surfaced as a FluxStudio sink node (DATAFLUX_OBJECT:sink → DatasetProcessor.sink).
+@confluid.configurable(category="sink")
 class ZarrGroupSink(Storage, DataSink):
     """
     Stores each sample as a unique array within a Zarr group.
@@ -110,7 +111,8 @@ class ZarrGroupSource(Storage, DataSource):
         return len(list(self._root.group_keys()))
 
 
-@confluid.configurable
+# category="sink": surfaced as a FluxStudio sink node (DATAFLUX_OBJECT:sink → DatasetProcessor.sink).
+@confluid.configurable(category="sink")
 class ZarrBatchSink(Storage, DataSink):
     """
     Optimized for uniform data. Appends samples into a single large Zarr array.

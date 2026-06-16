@@ -8,7 +8,8 @@ from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, Storage
 
 
-@confluid.configurable
+# category="sink": surfaced as a FluxStudio sink node (DATAFLUX_OBJECT:sink → DatasetProcessor.sink).
+@confluid.configurable(category="sink")
 class DirectorySink(Storage, DataSink):
     """
     High-concurrency sink that stores each Sample in its own directory.

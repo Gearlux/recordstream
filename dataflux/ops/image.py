@@ -18,7 +18,7 @@ is imported lazily inside :func:`_apply_colormap` — only non-``"gray"`` colorm
 need it, so the pure-greyscale path stays matplotlib-free.
 """
 
-from typing import Any, Literal, Optional, Tuple, get_args
+from typing import Any, Dict, Literal, Optional, Tuple, get_args
 
 import numpy as np
 import torch
@@ -186,6 +186,284 @@ def sample_to_image(sample: Sample, colormap: Colormap = "viridis", max_size: in
     return value_to_image(sample.input, colormap=colormap, max_size=max_size)
 
 
+# --------------------------------------------------------------------------- #
+# Array introspection helpers — channel selection + histogram.
+#
+# These back FluxStudio's "Array / Tensor Histogram" viewer node (and are usable
+# from any pipeline / notebook): a generic, modality-agnostic way to look at the
+# RAW numeric values of an array/tensor — pick a channel, render it, and bin its
+# values. Pure functions (NOT @configurable ops): they measure/derive, they don't
+# transform a Sample, so they're library helpers like value_to_image — not canvas
+# nodes. They live here (not in the FluxStudio node) so the computation is reusable
+# and unit-tested, per the workspace "rendering/analysis lives in dataflux" mandate.
+# --------------------------------------------------------------------------- #
+
+
+def _coerce_to_ndarray(value: Any) -> Optional[np.ndarray]:
+    """Best-effort view of an arbitrary value as a numeric ``np.ndarray`` for analysis.
+
+    PIL image → RGB array, ``torch.Tensor`` → detached numpy, complex array →
+    magnitude (``abs``), list/scalar → ``np.asarray``. Returns ``None`` when the
+    value cannot sensibly be viewed as a numeric array (string/bytes/None, or an
+    object-dtype array such as a list of ragged things).
+    """
+    data: Any = value
+    if data is None or isinstance(data, (str, bytes)):
+        return None
+    if hasattr(data, "convert"):  # PIL.Image.Image
+        data = np.array(data.convert("RGB"))
+    elif isinstance(data, torch.Tensor):
+        data = data.detach().cpu().numpy()
+    try:
+        arr = np.asarray(data)
+    except Exception:  # pragma: no cover - defensive: exotic objects np can't view
+        return None
+    if arr.dtype == object:
+        return None
+    if np.iscomplexobj(arr):
+        arr = np.abs(arr)
+    return arr
+
+
+def _squeeze_to_3d(arr: np.ndarray) -> np.ndarray:
+    """Squeeze size-1 axes, then drop leading axes until at most 3-D (a ``[B,C,H,W]`` → first item)."""
+    arr = np.squeeze(arr)
+    while arr.ndim > 3:
+        arr = arr[0]
+    return arr
+
+
+def _channel_axis(shape: Tuple[int, ...]) -> int:
+    """Index of the channel axis of a 3-D shape: the SMALLEST axis (channels-are-fewest convention).
+
+    Deliberately distinct from the other two channel heuristics in this workspace, each scoped to a
+    narrower job: :func:`_render_rgb`'s ``{1,3,4}``-membership test is RGB-render-specific (it only
+    recognises 1/3/4-channel *images*), and ``fluxstudio.nodes.SampleExtractorNode._as_2d`` is
+    mask-specific (float-only). For a general N-channel feature map (e.g. an 8-channel tensor) the
+    smallest-axis rule is the most defensible default; documented here so the three never look like an
+    accidental disagreement.
+    """
+    return int(np.argmin(shape))
+
+
+def select_channel(value: Any, channel: int = -1) -> np.ndarray:
+    """Reduce an arbitrary array/tensor to a single 2-D ``float32`` map for the given channel.
+
+    The view used both for rendering one channel and for the per-pixel hover readout:
+
+    * a 2-D array passes through; a 1-D array becomes a ``(1, N)`` strip; a scalar a ``(1, 1)`` cell;
+    * a 3-D array selects ``channel`` along its channel axis (the smallest axis — see
+      :func:`_channel_axis`); ``channel < 0`` collapses that axis by **mean** (an "all channels" view);
+    * higher-rank arrays drop leading axes to 3-D first; complex data is magnitude (``abs``).
+
+    Out-of-range ``channel`` is clamped into ``[0, channels-1]``. A non-numeric value yields a ``(1, 1)``
+    zero map (so callers always get a real 2-D array).
+
+    Args:
+        value: The array / tensor / PIL image / scalar to view.
+        channel: Channel index to select; ``-1`` (default) means "all" → mean across the channel axis.
+    """
+    arr = _coerce_to_ndarray(value)
+    if arr is None:
+        return np.zeros((1, 1), dtype=np.float32)
+    arr = _squeeze_to_3d(np.asarray(arr, dtype=np.float32))
+    if arr.ndim == 0:
+        return arr.reshape(1, 1)
+    if arr.ndim == 1:
+        return arr.reshape(1, -1)
+    if arr.ndim == 2:
+        return arr
+    # 3-D: the channel axis is the smallest axis.
+    caxis = _channel_axis(arr.shape)
+    n_channels = arr.shape[caxis]
+    if channel is None or channel < 0:
+        return np.asarray(arr.mean(axis=caxis), dtype=np.float32)
+    idx = min(max(int(channel), 0), n_channels - 1)
+    return np.asarray(np.take(arr, idx, axis=caxis), dtype=np.float32)
+
+
+def channel_count(value: Any) -> int:
+    """Number of channels of an array/tensor: 1 for ≤2-D data, the smallest-axis size for 3-D, 0 for non-arrays."""
+    arr = _coerce_to_ndarray(value)
+    if arr is None:
+        return 0
+    sq = _squeeze_to_3d(np.asarray(arr))
+    return int(sq.shape[_channel_axis(sq.shape)]) if sq.ndim == 3 else 1
+
+
+def array_histogram(value: Any, bins: int = 256, channel: int = -1) -> Dict[str, Any]:
+    """Bin the values of an array/tensor into a histogram + summary statistics.
+
+    Counts and statistics are taken over **finite** values only (``NaN`` / ``±inf`` are dropped, so
+    the result is always JSON-safe — no non-finite floats leak into ``min``/``max``/``bin_edges``).
+    When ``channel >= 0`` the histogram is of that single channel's plane; ``channel < 0`` histograms
+    **every** element across all channels.
+
+    Returns a dict with ``counts`` (length ``bins``), ``bin_edges`` (length ``bins+1``), ``min`` /
+    ``max`` / ``mean`` / ``std`` (``None`` when there are no finite values), ``count`` (number of
+    finite values) and ``channels`` (detected channel count). A degenerate all-equal array bins into
+    the first bin over a unit-wide range.
+
+    Args:
+        value: The array / tensor / PIL image / scalar to histogram.
+        bins: Number of histogram bins (clamped to at least 1).
+        channel: Channel to histogram; ``-1`` (default) histograms all elements across channels.
+    """
+    bins = max(1, int(bins))
+    arr = _coerce_to_ndarray(value)
+    channels = channel_count(value)
+    if arr is None:
+        flat = np.empty((0,), dtype=np.float32)
+    elif channel is not None and channel >= 0:
+        flat = select_channel(value, channel).astype(np.float32).ravel()
+    else:
+        flat = np.asarray(arr, dtype=np.float32).ravel()
+    finite = flat[np.isfinite(flat)]
+    if finite.size == 0:
+        edges = np.linspace(0.0, 1.0, bins + 1)
+        return {
+            "counts": [0] * bins,
+            "bin_edges": edges.tolist(),
+            "min": None,
+            "max": None,
+            "mean": None,
+            "std": None,
+            "count": 0,
+            "channels": channels,
+        }
+    lo = float(finite.min())
+    hi = float(finite.max())
+    # A flat array (all values equal) has a zero-width range — pin a deterministic unit range so the
+    # single populated bin is predictable (np.histogram would otherwise auto-pad to lo±0.5).
+    hi_edge = hi if hi > lo else lo + 1.0
+    # Pass EXPLICIT bin edges (np.linspace), NOT `bins=<int>, range=(lo, hi)`. numpy 2.2.x's uniform
+    # fast path block-accumulates with `np.bincount(...)` for arrays larger than its 65536-element
+    # block, and on the workspace build that miscomputes the bincount length so `n += bincount(...)`
+    # dies with "operands could not be broadcast together with shapes (256,) (257,) (256,)" — i.e. it
+    # fails on any real image/spectrogram (>65536 px) while passing on the small arrays unit tests use.
+    # The explicit-edges path (searchsorted) sidesteps that bug and is otherwise identical: the last
+    # bin is closed, so values == hi are still counted (sum(counts) == finite.size).
+    edges = np.linspace(lo, hi_edge, bins + 1)
+    counts, edges = np.histogram(finite, bins=edges)
+    return {
+        "counts": counts.astype(int).tolist(),
+        "bin_edges": edges.astype(float).tolist(),
+        "min": lo,
+        "max": hi,
+        "mean": float(finite.mean()),
+        "std": float(finite.std()),
+        "count": int(finite.size),
+        "channels": channels,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Text → image rendering — draw text onto an image (or a fresh canvas).
+# --------------------------------------------------------------------------- #
+
+# Closed 9-grid set of text anchor positions (a closed Literal per the workspace mandate, so the
+# choice is a dropdown in FluxStudio / navigaitor enumerated from one source of truth).
+TextPosition = Literal[
+    "top-left",
+    "top",
+    "top-right",
+    "center-left",
+    "center",
+    "center-right",
+    "bottom-left",
+    "bottom",
+    "bottom-right",
+]
+TEXT_POSITIONS: Tuple[TextPosition, ...] = get_args(TextPosition)
+
+
+def _text_anchor_xy(position: str, block_w: int, block_h: int, img_w: int, img_h: int, margin: int) -> Tuple[int, int]:
+    """Top-left ``(x, y)`` for a ``block_w × block_h`` text block per the 9-grid ``position`` + margin."""
+    if "left" in position:
+        x: float = margin
+    elif "right" in position:
+        x = img_w - block_w - margin
+    else:  # "top" / "bottom" / "center" (no left/right) → horizontally centered
+        x = (img_w - block_w) / 2
+    if position.startswith("top"):
+        y: float = margin
+    elif position.startswith("bottom"):
+        y = img_h - block_h - margin
+    else:  # "center-*" / left / right (no top/bottom) → vertically centered
+        y = (img_h - block_h) / 2
+    return int(round(x)), int(round(y))
+
+
+def _wrap_text(draw: "ImageDraw.ImageDraw", text: str, font: Any, max_width: int) -> str:
+    """Greedy word-wrap so each line fits ``max_width`` px (explicit newlines preserved)."""
+    out: list = []
+    for paragraph in text.split("\n"):
+        line = ""
+        for word in paragraph.split(" "):
+            trial = f"{line} {word}".strip()
+            if line and draw.textlength(trial, font=font) > max_width:
+                out.append(line)
+                line = word
+            else:
+                line = trial
+        out.append(line)
+    return "\n".join(out)
+
+
+def draw_text(
+    text: str,
+    image: Optional[Any] = None,
+    *,
+    width: int = 512,
+    height: int = 256,
+    font_size: int = 24,
+    color: str = "white",
+    background: str = "black",
+    position: TextPosition = "top-left",
+    margin: int = 8,
+    wrap: bool = True,
+) -> np.ndarray:
+    """Render ``text`` onto ``image`` (or a fresh ``background`` canvas) → an ``(H, W, 3)`` uint8 RGB array.
+
+    The single, modality-agnostic "draw text on an image" renderer (FluxStudio's *Draw Text to Image*
+    node is thin glue over it). When ``image`` is ``None`` a blank ``(height, width)`` canvas of color
+    ``background`` is created; otherwise the value is coerced to an RGB image (via :func:`_render_rgb`,
+    so PIL / ndarray / tensor / 2-D maps all work) and drawn on a copy. The text is word-wrapped to the
+    image width (``wrap``; explicit newlines kept) and anchored per the 9-grid ``position`` with a
+    ``margin`` inset. Uses PIL's sized default bitmap font.
+
+    Args:
+        text: The text to draw (multi-line allowed).
+        image: Background image (PIL / ndarray / tensor / 2-D map); ``None`` makes a blank canvas.
+        width: Blank-canvas width in pixels (used only when ``image`` is ``None``).
+        height: Blank-canvas height in pixels (used only when ``image`` is ``None``).
+        font_size: Font size in points.
+        color: Text color — any PIL color name or hex (``"white"`` / ``"#ffcc00"`` / ...).
+        background: Canvas color when ``image`` is ``None`` — any PIL color name or hex.
+        position: Anchor of the text block — one of the 9-grid ``TextPosition`` values.
+        margin: Inset in pixels from the edges for non-centered anchors.
+        wrap: Word-wrap long lines to fit the image width.
+    """
+    from PIL import ImageFont
+
+    if image is None:
+        img = Image.new("RGB", (max(1, int(width)), max(1, int(height))), color=background)
+    else:
+        img = Image.fromarray(_render_rgb(image, "gray"))
+    draw = ImageDraw.Draw(img)
+    try:
+        font = ImageFont.load_default(size=int(font_size))
+    except TypeError:  # Pillow < 10.1 has no sized default font — fall back to the fixed bitmap font
+        font = ImageFont.load_default()
+    rendered = _wrap_text(draw, text, font, max(1, img.width - 2 * margin)) if wrap else text
+    # multiline_textbbox is relative to the anchor; subtract its offset so the block's top-left lands at (x, y).
+    bbox = draw.multiline_textbbox((0, 0), rendered, font=font)
+    block_w, block_h = int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1])
+    x, y = _text_anchor_xy(position, block_w, block_h, img.width, img.height, margin)
+    draw.multiline_text((x - bbox[0], y - bbox[1]), rendered, fill=color, font=font)
+    return np.array(img)
+
+
 @configurable(category="op", group="image")
 class ConvertToImageOp:
     """Convert ``sample.input`` (array / tensor / 2-D map / PIL image) into a PIL image.
@@ -326,4 +604,10 @@ __all__ = [
     "NormalizeToUint8Op",
     "value_to_image",
     "sample_to_image",
+    "select_channel",
+    "channel_count",
+    "array_histogram",
+    "draw_text",
+    "TextPosition",
+    "TEXT_POSITIONS",
 ]

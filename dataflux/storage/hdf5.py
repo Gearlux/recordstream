@@ -67,7 +67,8 @@ class HDF5Source(Storage, DataSource):
         return len([k for k in self._file.keys() if k.endswith("_data")])
 
 
-@configurable
+# category="sink": surfaced as a FluxStudio sink node (DATAFLUX_OBJECT:sink → DatasetProcessor.sink).
+@configurable(category="sink")
 class HDF5Sink(Storage, DataSink):
     """High-performance HDF5 data sink focused on Sample triplets."""
 
