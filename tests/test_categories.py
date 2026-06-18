@@ -13,9 +13,11 @@ from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
 from dataflux.ops.capture import CaptureOutputOp
 from dataflux.ops.configure import ConfigureOp
 from dataflux.ops.copy import CopyInputOp
+from dataflux.ops.debug import PrintSampleOp
 from dataflux.ops.enable import Enable
 from dataflux.ops.formula import FormulaOp
 from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
+from dataflux.ops.metadata import DropMetadataOp
 from dataflux.ops.numpy import (
     FftShiftOp,
     FourierOp,
@@ -153,6 +155,8 @@ def test_op_group_tags() -> None:
     assert TorchWindowOp.__confluid_group__ == "torch"
     assert TorchSpectrumScalingOp.__confluid_group__ == "torch"
     assert CopyInputOp.__confluid_group__ == "structure"
+    assert DropMetadataOp.__confluid_group__ == "structure"
+    assert PrintSampleOp.__confluid_group__ == "debug"
     assert StashTargetOp.__confluid_group__ == "structure"
     assert UnstashTargetOp.__confluid_group__ == "structure"
     assert MetadataToTargetOp.__confluid_group__ == "structure"

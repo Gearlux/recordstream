@@ -386,16 +386,22 @@ class ThresholdOp:
     def _resolve(self, bound: Optional[Union[float, int, str]], sample: Sample) -> float:
         if bound is None:
             raise ValueError("ThresholdOp._resolve called with None — bound was not filtered by __call__")
-        if isinstance(bound, (int, float)):
-            return float(bound)
-        if not isinstance(bound, str):
-            raise TypeError(f"ThresholdOp bounds must be a number or expression string; got {type(bound).__name__}")
-        resolved = resolve_expression(bound, sample)
+        if isinstance(bound, str):
+            resolved = resolve_expression(bound, sample)
+            try:
+                return float(resolved)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"ThresholdOp: expression {bound!r} resolved to {resolved!r}, which is not a number"
+                ) from exc
+        # Any non-string numeric: a Python int/float, a NumPy scalar (e.g. the float32 a value-chain
+        # MaxOp → FormulaOp → ConfigureOp injects into low_level per sample), or a 0-d array — anything
+        # float() accepts. A list / multi-D array / complex value fails float() and raises the TypeError.
         try:
-            return float(resolved)
-        except ValueError as exc:
-            raise ValueError(
-                f"ThresholdOp: expression {bound!r} resolved to {resolved!r}, " f"which is not a number"
+            return float(bound)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"ThresholdOp bounds must be a number or expression string; got {type(bound).__name__}"
             ) from exc
 
     def __call__(self, sample: Sample) -> Sample:

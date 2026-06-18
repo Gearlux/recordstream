@@ -56,17 +56,26 @@ class UnstashInputOp:
             key from corrupting each other through downstream in-place
             mutations. Set ``False`` only when the caller has audited
             that no downstream op mutates the array in place.
+        remove: When ``True`` (default), DELETE the key from metadata after
+            restoring it — so the snapshot doesn't linger on the bus and
+            leak into a downstream sink. Set ``False`` to keep it (required
+            when the SAME key is unstashed again later, e.g. a fan-out that
+            restores the fork before several branches — only the LAST
+            unstash of a key may remove it).
     """
 
-    def __init__(self, key: str = "", copy: bool = True) -> None:
+    def __init__(self, key: str = "", copy: bool = True, remove: bool = True) -> None:
         # Lazy / zero-arg: store config only; a missing key surfaces lazily as a KeyError in __call__.
         self.key = key
         self.copy = copy
+        self.remove = remove
 
     def __call__(self, sample: Sample) -> Sample:
         value = sample.meta[self.key]
         if self.copy:
             value = _copy.deepcopy(value)
+        if self.remove:
+            del sample.meta[self.key]  # key exists (just read above)
         return sample._replace(input=value)
 
 
@@ -103,15 +112,24 @@ class UnstashTargetOp:
             key from corrupting each other through downstream in-place
             mutations. Set ``False`` only when the caller has audited
             that no downstream op mutates the value in place.
+        remove: When ``True`` (default), DELETE the key from metadata after
+            restoring it — so the snapshot doesn't linger on the bus and
+            leak into a downstream sink. Set ``False`` to keep it (required
+            when the SAME key is unstashed again later, e.g. a fan-out that
+            restores the fork before several branches — only the LAST
+            unstash of a key may remove it).
     """
 
-    def __init__(self, key: str = "", copy: bool = True) -> None:
+    def __init__(self, key: str = "", copy: bool = True, remove: bool = True) -> None:
         # Lazy / zero-arg: store config only; a missing key surfaces lazily as a KeyError in __call__.
         self.key = key
         self.copy = copy
+        self.remove = remove
 
     def __call__(self, sample: Sample) -> Sample:
         value = sample.meta[self.key]
         if self.copy:
             value = _copy.deepcopy(value)
+        if self.remove:
+            del sample.meta[self.key]  # key exists (just read above)
         return sample._replace(target=value)

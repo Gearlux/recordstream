@@ -72,6 +72,11 @@ dataflux-ops-copy = "dataflux.ops.copy"
 dataflux-ops-swap = "dataflux.ops.swap"
 dataflux-ops-target = "dataflux.ops.target"
 dataflux-ops-image = "dataflux.ops.image"
+# DropMetadataOp (strip metadata keys — e.g. the __taidal_stash_* snapshots) + PrintSampleOp
+# (log/print a per-sample summary). Entry-point changes need an editable reinstall before
+# FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
+dataflux-ops-metadata = "dataflux.ops.metadata"
+dataflux-ops-debug = "dataflux.ops.debug"
 # Storage SINKS (HDF5Sink / ZarrGroupSink / ZarrBatchSink / DirectorySink) carry
 # category="sink" so FluxStudio surfaces them as DatasetProcessor sink nodes. They live under
 # dataflux.storage.* (NOT re-exported from the package root), and scan_module does not recurse
