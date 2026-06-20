@@ -18,7 +18,7 @@ is imported lazily inside :func:`_apply_colormap` — only non-``"gray"`` colorm
 need it, so the pure-greyscale path stays matplotlib-free.
 """
 
-from typing import Any, Dict, Literal, Optional, Tuple, get_args
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, get_args
 
 import numpy as np
 import torch
@@ -357,6 +357,113 @@ def array_histogram(value: Any, bins: int = 256, channel: int = -1) -> Dict[str,
     }
 
 
+def confusion_matrix_payload(
+    matrix: Any,
+    class_names: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    """Structure a confusion matrix + class names into a JSON-safe payload for a GUI viewer.
+
+    Backs FluxStudio's *Confusion Matrix* viewer node (``fluxstudio.nodes.ConfusionMatrixViewerNode``).
+    The MATH that lives here is the three normalizations (the viewer toggles between them WITHOUT a
+    re-run — the JS only colours + labels + hovers): ``true`` (each row / actual-class sums to 1),
+    ``pred`` (each column / predicted-class sums to 1) and ``all`` (the whole matrix sums to 1). Every
+    float is finite-checked (``NaN``/``±inf`` → ``None``, never a misleading substitute) so the payload
+    survives ComfyUI's ``json.dumps`` websocket encoding — mirroring :func:`array_histogram`. A row /
+    column whose count-sum is ``0`` normalises to ``None`` (undefined, not ``0``).
+
+    Args:
+        matrix: A square ``N×N`` confusion matrix (integer counts) as an array / tensor / nested list.
+        class_names: Optional length-``N`` class labels; defaults to ``["0", "1", …, "N-1"]``.
+
+    Returns a dict with ``counts`` (``N×N`` ints), ``normalized`` (``{"true","pred","all"}``, each
+    ``N×N`` floats or ``None``), ``class_names`` (length ``N``), ``n_classes``, and ``total``. A
+    non-square / empty / non-2-D input yields ``{"n_classes": 0, ...}`` + a ``message``.
+    """
+    arr = _coerce_to_ndarray(matrix)
+    if arr is None or arr.ndim != 2 or arr.shape[0] != arr.shape[1] or arr.shape[0] == 0:
+        shape = None if arr is None else tuple(int(d) for d in arr.shape)
+        return {
+            "counts": [],
+            "normalized": {"true": [], "pred": [], "all": []},
+            "class_names": [],
+            "n_classes": 0,
+            "total": 0,
+            "message": f"not a square 2-D confusion matrix (shape {shape})",
+        }
+
+    counts = np.asarray(arr).astype(np.int64)
+    n = int(counts.shape[0])
+    total = int(counts.sum())
+    row_sums = counts.sum(axis=1)  # per true class
+    col_sums = counts.sum(axis=0)  # per predicted class
+
+    def _normed(divisor: np.ndarray) -> list:
+        # Element-wise count / divisor; a 0 divisor (empty row/col/matrix) -> None (undefined).
+        out: list = []
+        for i in range(n):
+            row: list = []
+            for j in range(n):
+                d = float(divisor[i, j])
+                row.append(_sanitize_finite(counts[i, j] / d) if d != 0.0 else None)
+            out.append(row)
+        return out
+
+    names = [str(c) for c in class_names] if class_names is not None else [str(i) for i in range(n)]
+    # Pad / trim to exactly N so the viewer always has one label per row/column.
+    names = (names + [str(i) for i in range(len(names), n)])[:n]
+
+    return {
+        "counts": [[int(c) for c in row] for row in counts.tolist()],
+        "normalized": {
+            "true": _normed(np.broadcast_to(row_sums.reshape(n, 1), (n, n))),
+            "pred": _normed(np.broadcast_to(col_sums.reshape(1, n), (n, n))),
+            "all": _normed(np.full((n, n), float(total))),
+        },
+        "class_names": names,
+        "n_classes": n,
+        "total": total,
+    }
+
+
+def _is_square_2d(value: Any) -> bool:
+    """True when ``value`` views as a square ``N×N`` (``N>=1``) numeric array — confusion-matrix shape."""
+    arr = _coerce_to_ndarray(value)
+    return arr is not None and arr.ndim == 2 and arr.shape[0] == arr.shape[1] and arr.shape[0] >= 1
+
+
+def confusion_matrices_payload(metrics: Any, class_names: Optional[Sequence[Any]] = None) -> List[Dict[str, Any]]:
+    """Extract EVERY confusion matrix from a metrics result and build a render payload for each.
+
+    The generic counterpart to :func:`confusion_matrix_payload`: a model evaluator emits its FULL
+    metric results (``name -> value``; scalars, vectors, AND `N×N` matrices) with NO knowledge of which
+    is a confusion matrix — this scans them and renders all CONFUSION-MATRIX-SHAPED entries (square 2-D,
+    ``_is_square_2d``, by SHAPE not name), returning one :func:`confusion_matrix_payload` per match
+    (each tagged with its metric ``name``) in dict order, or ``[]`` when none. A bare square-2D
+    ``metrics`` (not a dict) is treated as a single matrix named ``"confusion_matrix"``. This is what
+    lets FluxStudio's *Confusion Matrix* viewer render ALL matrices from one all-metrics output (there
+    can be several). ``class_names`` labels every matrix the same way (they share the class set).
+
+    Args:
+        metrics: An evaluator's metric results — a ``dict`` of ``name -> value`` (the usual form), or a
+            single ``N×N`` matrix.
+        class_names: Optional length-``N`` class labels applied to each matrix; defaults to indices.
+    """
+    items = list(metrics.items()) if isinstance(metrics, dict) else [("confusion_matrix", metrics)]
+    out: List[Dict[str, Any]] = []
+    for name, value in items:
+        if _is_square_2d(value):
+            payload = confusion_matrix_payload(value, class_names=class_names)
+            payload["name"] = str(name)
+            out.append(payload)
+    return out
+
+
+def _sanitize_finite(x: float) -> Optional[float]:
+    """A finite float rounded for compactness, or ``None`` for ``NaN``/``±inf`` (JSON-safe)."""
+    v = float(x)
+    return round(v, 6) if np.isfinite(v) else None
+
+
 # --------------------------------------------------------------------------- #
 # Text → image rendering — draw text onto an image (or a fresh canvas).
 # --------------------------------------------------------------------------- #
@@ -607,6 +714,8 @@ __all__ = [
     "select_channel",
     "channel_count",
     "array_histogram",
+    "confusion_matrix_payload",
+    "confusion_matrices_payload",
     "draw_text",
     "TextPosition",
     "TEXT_POSITIONS",

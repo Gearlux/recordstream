@@ -6,6 +6,7 @@ optional flip → resize), and ``value_to_image`` / ``sample_to_image`` back it
 waivefront (``RenderOverlaysOp``) and is tested there.
 """
 
+import json
 from typing import get_args
 
 import numpy as np
@@ -23,6 +24,8 @@ from dataflux.ops.image import (
     _apply_colormap,
     array_histogram,
     channel_count,
+    confusion_matrices_payload,
+    confusion_matrix_payload,
     draw_text,
     sample_to_image,
     select_channel,
@@ -355,6 +358,96 @@ def test_array_histogram_large_array_does_not_raise(arr: np.ndarray) -> None:
     hist = array_histogram(arr, bins=256)
     assert len(hist["counts"]) == 256 and len(hist["bin_edges"]) == 257
     assert sum(hist["counts"]) == hist["count"] == finite.size  # every value still counted
+
+
+# --------------------------------------------------------------------------- #
+# confusion_matrix_payload — the math behind FluxStudio's Confusion Matrix viewer.
+# --------------------------------------------------------------------------- #
+
+
+def test_confusion_matrix_payload_counts_and_class_names() -> None:
+    m = np.array([[50, 2, 1], [3, 47, 0], [0, 1, 49]])
+    p = confusion_matrix_payload(m, class_names=["cat", "dog", "fox"])
+    assert p["n_classes"] == 3 and p["total"] == 153
+    assert p["counts"] == [[50, 2, 1], [3, 47, 0], [0, 1, 49]]
+    assert p["class_names"] == ["cat", "dog", "fox"]
+
+
+def test_confusion_matrix_payload_normalizations() -> None:
+    p = confusion_matrix_payload([[8, 2], [0, 10]])
+    # true = row-normalized (each true-class row sums to 1)
+    assert p["normalized"]["true"] == [[0.8, 0.2], [0.0, 1.0]]
+    # pred = column-normalized (each predicted-class column sums to 1)
+    assert p["normalized"]["pred"] == [
+        [1.0, pytest.approx(0.166667, abs=1e-5)],
+        [0.0, pytest.approx(0.833333, abs=1e-5)],
+    ]
+    # all = total-normalized
+    assert p["normalized"]["all"][0][0] == pytest.approx(8 / 20)
+
+
+def test_confusion_matrix_payload_zero_row_is_none_not_nan() -> None:
+    # A class with no samples (empty row) normalizes to None (undefined), never 0/0 = NaN.
+    p = confusion_matrix_payload([[0, 0], [1, 3]])
+    assert p["normalized"]["true"][0] == [None, None]
+    assert json.dumps(p, allow_nan=False)  # JSON-safe: no bare NaN tokens
+
+
+def test_confusion_matrix_payload_defaults_to_index_labels() -> None:
+    p = confusion_matrix_payload([[1, 0], [0, 1]])
+    assert p["class_names"] == ["0", "1"]
+
+
+def test_confusion_matrix_payload_pads_or_trims_class_names_to_n() -> None:
+    assert confusion_matrix_payload([[1, 0], [0, 1]], class_names=["only"])["class_names"] == ["only", "1"]
+    assert confusion_matrix_payload([[1, 0], [0, 1]], class_names=["a", "b", "c"])["class_names"] == ["a", "b"]
+
+
+def test_confusion_matrix_payload_non_square_is_well_formed() -> None:
+    p = confusion_matrix_payload(np.zeros((2, 3)))
+    assert p["n_classes"] == 0 and "message" in p
+    p2 = confusion_matrix_payload("not a matrix")
+    assert p2["n_classes"] == 0
+
+
+def test_confusion_matrix_payload_accepts_torch_tensor() -> None:
+    p = confusion_matrix_payload(torch.tensor([[5, 1], [0, 4]]))
+    assert p["counts"] == [[5, 1], [0, 4]] and p["n_classes"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# confusion_matrices_payload — extract EVERY confusion matrix from a metrics result.
+# --------------------------------------------------------------------------- #
+
+
+def test_confusion_matrices_payload_extracts_all_square_2d_entries() -> None:
+    # A full metrics dict: scalars + a 1-D vector + TWO confusion matrices. Only the square-2D
+    # entries are extracted, in dict order, each tagged with its metric name.
+    metrics = {
+        "test/acc": 0.93,
+        "test/cm_a": [[5, 1], [0, 4]],
+        "test/per_class": [0.9, 0.8],  # 1-D vector — NOT a confusion matrix
+        "test/cm_b": [[10, 2, 1], [0, 9, 1], [1, 0, 8]],
+    }
+    payloads = confusion_matrices_payload(metrics, class_names=["a", "b", "c"])
+    assert [(p["name"], p["n_classes"]) for p in payloads] == [("test/cm_a", 2), ("test/cm_b", 3)]
+    # class_names are trimmed per matrix (cm_a has only 2 classes).
+    assert payloads[0]["class_names"] == ["a", "b"]
+    assert json.dumps(payloads, allow_nan=False)  # JSON-safe
+
+
+def test_confusion_matrices_payload_none_when_no_square_metric() -> None:
+    assert confusion_matrices_payload({"acc": 0.9, "vec": [1, 2, 3]}) == []
+
+
+def test_confusion_matrices_payload_bare_matrix_is_one_named_default() -> None:
+    payloads = confusion_matrices_payload([[1, 0], [0, 1]])
+    assert [p["name"] for p in payloads] == ["confusion_matrix"]
+
+
+def test_confusion_matrices_payload_accepts_tensor_values() -> None:
+    payloads = confusion_matrices_payload({"cm": torch.tensor([[5, 1], [0, 4]])})
+    assert payloads[0]["name"] == "cm" and payloads[0]["counts"] == [[5, 1], [0, 4]]
 
 
 # ---------------------------------------------------------------------------
