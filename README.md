@@ -2,7 +2,7 @@
 
 **DataFlux** is a high-performance, functional data processing engine built for modern Machine Learning pipelines. It provides a clean, fluent API for streaming and transforming data from any source while maintaining strict compatibility with PyTorch and Hugging Face.
 
-Part of the **Modular Quartet**: `LogFlow`, `Confluid`, `Liquify`, and `DataFlux`.
+Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquify`, and `DataFlux`.
 
 ## 🚀 Key Features
 

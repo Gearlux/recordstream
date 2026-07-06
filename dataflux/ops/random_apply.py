@@ -12,7 +12,7 @@ import random
 from typing import Optional, cast
 
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.sample import Sample
 

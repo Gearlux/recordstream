@@ -5,7 +5,7 @@ import h5py
 import numpy as np
 import torch
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.sample import Sample
 from dataflux.storage.base import DataSink, DataSource, Storage, to_numpy

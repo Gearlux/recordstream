@@ -27,7 +27,7 @@ from typing import (
 )
 
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.discovery import get_callable_path, resolve_callable
 from dataflux.sample import Sample

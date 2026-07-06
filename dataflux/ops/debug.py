@@ -3,7 +3,7 @@
 from typing import Any, Literal, Optional
 
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.sample import Sample
 
@@ -60,13 +60,13 @@ class PrintSampleOp:
 
     A pipeline probe: emits a compact description of the sample — ``input`` / ``target`` shape+dtype
     plus a length-capped value preview (large arrays elided), and the ``metadata`` (values
-    summarised the same way) — to the LogFlow logger (the LOG file + console) and, by default, to stdout via
+    summarised the same way) — to the Loggair logger (the LOG file + console) and, by default, to stdout via
     ``print`` (so it shows in a terminal / the FluxStudio node output panel regardless of log
     level). The sample is returned UNCHANGED.
 
     Args:
         label: A prefix identifying this probe in the output (e.g. "after-impairments").
-        level: LogFlow level for the logged line — "trace" or "debug" (per-sample output is
+        level: Loggair level for the logged line — "trace" or "debug" (per-sample output is
             diagnostic, so info/warning are deliberately not offered; use ``to_console`` to see it).
         include_data: Include an ``input`` / ``target`` shape+dtype + value preview.
         include_metadata: Include the sample's metadata (values summarised).

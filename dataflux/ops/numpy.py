@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 import numpy as np
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.sample import Sample
 from dataflux.typespec import ArrayType, PythonType, SampleType, UnionType

@@ -23,7 +23,7 @@ from confluid import configurable
 from confluid import load as _confluid_load
 from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.projection import ProjectionField
 from dataflux.sample import FEATURES_KEY, SPEC_KEY, TYPE_KEYS, Sample
@@ -481,7 +481,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
             return
         _check_ops_materialized(self.ops)
 
-        # We use 'spawn' to be consistent with LogFlow and prevent CI deadlocks
+        # We use 'spawn' to be consistent with Loggair and prevent CI deadlocks
         ctx = multiprocessing.get_context("spawn")
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, get_args
 import numpy as np
 import torch
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 from PIL import Image, ImageDraw
 
 from dataflux.sample import Sample

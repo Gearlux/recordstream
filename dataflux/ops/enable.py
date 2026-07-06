@@ -9,7 +9,7 @@ through any ops — so it lives in core dataflux, not a domain package.
 from typing import List, Optional, Tuple
 
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.sample import Sample
 

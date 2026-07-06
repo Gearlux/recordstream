@@ -10,7 +10,7 @@ so it lives in core dataflux.
 from typing import Any
 
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from dataflux.sample import Sample
 
