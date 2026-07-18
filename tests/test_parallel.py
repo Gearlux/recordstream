@@ -2,7 +2,7 @@ import time
 
 import numpy as np
 
-from dataflux.core import Flux
+from sampleflux.core import Flux
 
 
 def heavy_op(x: np.ndarray) -> np.ndarray:

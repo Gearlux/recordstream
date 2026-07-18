@@ -3,8 +3,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from dataflux.core import Flux
-from dataflux.sample import Sample
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
 
 
 def test_basic_flux() -> None:
@@ -71,7 +71,7 @@ def test_wrapped_op_all() -> None:
 
 
 def test_filter_op() -> None:
-    from dataflux.core import FilterOp
+    from sampleflux.core import FilterOp
 
     op = FilterOp(lambda s: bool(s.input > 5))
     s1 = Sample(input=10)
@@ -112,7 +112,7 @@ def test_wrapped_op_fallback() -> None:
 
 
 def test_worker_task_none() -> None:
-    from dataflux.core import _worker_task
+    from sampleflux.core import _worker_task
 
     # hits line 83 by using two ops, first returning None
     assert _worker_task(Sample(input=1), [lambda s: None, lambda s: s]) is None

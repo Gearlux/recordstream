@@ -1,17 +1,17 @@
-"""Tests for the target movers / encoders (``dataflux.ops.target``)."""
+"""Tests for the target movers / encoders (``sampleflux.ops.target``)."""
 
 import numpy as np
 import pytest
 from PIL import Image
 
-from dataflux.ops.target import (
+from sampleflux.ops.target import (
     CocoToTorchVisionDetectionOp,
     DecodeTargetOp,
     EncodeTargetOp,
     MasksToDetectionBoxesOp,
     MetadataToTargetOp,
 )
-from dataflux.sample import Sample
+from sampleflux.sample import Sample
 
 
 # --------------------------------------------------------------------------- #

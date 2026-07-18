@@ -1,5 +1,5 @@
 [project]
-name = "data-flux"
+name = "sampleflux"
 version = "0.1.0"
 description = "Clean, functional data pipelines for ML research and production."
 authors = [{ name = "Taidal", email = "info@gearlux.ai" }]
@@ -45,54 +45,61 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # CONFLUID-CONFIGURABLE DISCOVERY
-# Sources / ops live in separate submodules that `dataflux/__init__.py`
+# Sources / ops live in separate submodules that `sampleflux/__init__.py`
 # does not eagerly import. Listing them here makes navigaitor discover
 # every ``@configurable`` on bootstrap without hardcoding the list.
 [project.entry-points."confluid.configurables"]
-dataflux = "dataflux"
-dataflux-core = "dataflux.core"
-dataflux-sources = "dataflux.sources"
-dataflux-ops-parallel = "dataflux.ops.parallel"
-dataflux-ops-tee = "dataflux.ops.tee"
-dataflux-ops-enable = "dataflux.ops.enable"
-dataflux-ops-random-apply = "dataflux.ops.random_apply"
+sampleflux = "sampleflux"
+sampleflux-core = "sampleflux.core"
+sampleflux-sources = "sampleflux.sources"
+sampleflux-ops-parallel = "sampleflux.ops.parallel"
+sampleflux-ops-tee = "sampleflux.ops.tee"
+sampleflux-ops-enable = "sampleflux.ops.enable"
+sampleflux-ops-random-apply = "sampleflux.ops.random_apply"
 # ConfigureOp (per-sample parameter injection — the helios Configure pattern); entry-point
 # changes need an editable reinstall before FluxStudio/navigaitor discovery sees the module.
-dataflux-ops-configure = "dataflux.ops.configure"
-dataflux-ops-formula = "dataflux.ops.formula"
+sampleflux-ops-configure = "sampleflux.ops.configure"
+sampleflux-ops-formula = "sampleflux.ops.formula"
 # CaptureOutputOp (records an op's @output value into metadata — the capture half of
 # FluxStudio's op-@output -> param wiring, paired with ConfigureOp(UnstashInputOp)).
-dataflux-ops-capture = "dataflux.ops.capture"
-dataflux-ops-transform-chain = "dataflux.ops.transform_chain"
-dataflux-ops-sink = "dataflux.ops.sink"
-dataflux-ops-stash = "dataflux.ops.stash"
-dataflux-ops-numpy = "dataflux.ops.numpy"
-dataflux-ops-torch = "dataflux.ops.torch"
-dataflux-ops-copy = "dataflux.ops.copy"
-dataflux-ops-swap = "dataflux.ops.swap"
-dataflux-ops-target = "dataflux.ops.target"
-dataflux-ops-image = "dataflux.ops.image"
+sampleflux-ops-capture = "sampleflux.ops.capture"
+sampleflux-ops-transform-chain = "sampleflux.ops.transform_chain"
+# Context ops (Save/Use/Drop/Apply/Capture/Mix) — the graph-plane building blocks lowered from flow: docs
+sampleflux-ops-context = "sampleflux.ops.context"
+# The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
+sampleflux-flow = "sampleflux.flow"
+# SigMF recordings (SigMFSink <-> SigMFSource) + the queryable-metadata view source
+sampleflux-storage-sigmf = "sampleflux.storage.sigmf"
+sampleflux-storage-query = "sampleflux.storage.query"
+sampleflux-ops-sink = "sampleflux.ops.sink"
+sampleflux-ops-stash = "sampleflux.ops.stash"
+sampleflux-ops-numpy = "sampleflux.ops.numpy"
+sampleflux-ops-torch = "sampleflux.ops.torch"
+sampleflux-ops-copy = "sampleflux.ops.copy"
+sampleflux-ops-swap = "sampleflux.ops.swap"
+sampleflux-ops-target = "sampleflux.ops.target"
+sampleflux-ops-image = "sampleflux.ops.image"
 # DropMetadataOp (strip metadata keys — e.g. the __taidal_stash_* snapshots) + PrintSampleOp
 # (log/print a per-sample summary). Entry-point changes need an editable reinstall before
 # FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
-dataflux-ops-metadata = "dataflux.ops.metadata"
-dataflux-ops-debug = "dataflux.ops.debug"
+sampleflux-ops-metadata = "sampleflux.ops.metadata"
+sampleflux-ops-debug = "sampleflux.ops.debug"
 # Storage SINKS (HDF5Sink / ZarrGroupSink / ZarrBatchSink / DirectorySink) carry
 # category="sink" so FluxStudio surfaces them as DatasetProcessor sink nodes. They live under
-# dataflux.storage.* (NOT re-exported from the package root), and scan_module does not recurse
+# sampleflux.storage.* (NOT re-exported from the package root), and scan_module does not recurse
 # submodules, so each storage module needs its own entry point. The matching SOURCES in these
 # modules stay uncategorised, so the positive {op,source,engine,sink} allowlist surfaces only the
 # tagged sinks. (Entry-point changes need an editable reinstall — `aisland setup`, never --reinstall.)
-dataflux-storage-hdf5 = "dataflux.storage.hdf5"
-dataflux-storage-zarr = "dataflux.storage.zarr"
-dataflux-storage-directory = "dataflux.storage.directory"
+sampleflux-storage-hdf5 = "sampleflux.storage.hdf5"
+sampleflux-storage-zarr = "sampleflux.storage.zarr"
+sampleflux-storage-directory = "sampleflux.storage.directory"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dataflux*"]
+include = ["sampleflux*"]
 
 [tool.setuptools.package-data]
-dataflux = ["py.typed"]
+sampleflux = ["py.typed"]
 
 [tool.black]
 line-length = 120

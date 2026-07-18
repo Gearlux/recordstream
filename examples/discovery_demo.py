@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from dataflux.discovery import scan_module
+from sampleflux.discovery import scan_module
 
 
 def main() -> None:

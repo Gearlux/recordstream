@@ -2,10 +2,10 @@ from pathlib import Path
 
 import numpy as np
 
-from dataflux.core import Flux
-from dataflux.sample import Sample
-from dataflux.storage.directory import DirectorySink
-from dataflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
+from sampleflux.storage.directory import DirectorySink
+from sampleflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
 
 
 def main() -> None:

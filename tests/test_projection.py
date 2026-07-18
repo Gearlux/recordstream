@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import torch
 
-from dataflux.core import Flux
-from dataflux.projection import (
+from sampleflux.core import Flux
+from sampleflux.projection import (
     _FIELDS,
     INPUT,
     TARGET,
@@ -20,7 +20,7 @@ from dataflux.projection import (
     num_classes,
     project,
 )
-from dataflux.sample import Sample
+from sampleflux.sample import Sample
 
 # --------------------------------------------------------------------------- #
 # ProjectionField is a closed Literal a UI / form-spec can enumerate

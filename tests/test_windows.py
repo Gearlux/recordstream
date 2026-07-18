@@ -1,4 +1,4 @@
-"""Tests for :mod:`dataflux.windows` — the window functions + spectral unit-scaling math.
+"""Tests for :mod:`sampleflux.windows` — the window functions + spectral unit-scaling math.
 
 Pins (1) the closed Literals match their runtime tuples, (2) the pure-numpy windows match
 scipy (when available) and have the right correction constants (Hann coherent gain 0.5 / ENBW
@@ -12,8 +12,8 @@ from typing import cast, get_args
 import numpy as np
 import pytest
 
-from dataflux import windows as W
-from dataflux.windows import WindowName
+from sampleflux import windows as W
+from sampleflux.windows import WindowName
 
 
 def test_literals_match_runtime_tuples() -> None:

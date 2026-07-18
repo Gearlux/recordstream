@@ -1,13 +1,13 @@
-"""Tests for dataflux.paired.AnnotationJoinSource."""
+"""Tests for sampleflux.paired.AnnotationJoinSource."""
 
 from typing import Any, Dict, Iterator, Optional
 
 import confluid  # type: ignore[import-not-found]
 import pytest
 
-from dataflux.discovery import get_callable_path
-from dataflux.paired import AnnotationJoinSource
-from dataflux.sample import Sample
+from sampleflux.discovery import get_callable_path
+from sampleflux.paired import AnnotationJoinSource
+from sampleflux.sample import Sample
 
 # ---------------------------------------------------------------------------
 # Test fixtures

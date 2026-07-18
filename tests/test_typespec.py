@@ -1,13 +1,13 @@
-"""Exhaustive tests for the dataflux type-spec system (matching, inference, JSON, HF bridge)."""
+"""Exhaustive tests for the sampleflux type-spec system (matching, inference, JSON, HF bridge)."""
 
 from typing import Any, Iterable, List, Tuple, cast, get_args
 
 import numpy as np
 import pytest
 
-from dataflux.core import Flux
-from dataflux.sample import FEATURES_KEY, SPEC_KEY, Sample
-from dataflux.typespec import (
+from sampleflux.core import Flux
+from sampleflux.sample import FEATURES_KEY, SPEC_KEY, Sample
+from sampleflux.typespec import (
     _DTYPE_FAMILIES,
     AnyType,
     ArrayType,
@@ -517,9 +517,9 @@ def test_pipeline_drops_stored_type_when_op_has_no_produces() -> None:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_dataflux_op_spec_conformance() -> None:
-    import dataflux.ops.numpy as N
-    import dataflux.ops.torch as T
+def test_sampleflux_op_spec_conformance() -> None:
+    import sampleflux.ops.numpy as N
+    import sampleflux.ops.torch as T
 
     rgb = (np.random.rand(3, 8, 8) * 255).astype(np.float32)
     cases: List[Tuple[Any, Sample]] = [

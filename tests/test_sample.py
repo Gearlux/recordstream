@@ -3,7 +3,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 
-from dataflux.sample import Sample
+from sampleflux.sample import Sample
 
 
 def test_sample_from_any() -> None:
@@ -76,7 +76,7 @@ def test_describe_falls_back_to_inference_on_a_batch() -> None:
 
 
 def test_with_type_rejects_a_batch() -> None:
-    from dataflux.typespec import infer_sample_type
+    from sampleflux.typespec import infer_sample_type
 
     single = Sample(input=np.zeros((4,)), target=0, metadata={})
     typed = single.with_type(infer_sample_type(single))  # single sample: OK

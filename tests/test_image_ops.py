@@ -1,4 +1,4 @@
-"""Tests for :mod:`dataflux.ops.image` — generic value→image conversion.
+"""Tests for :mod:`sampleflux.ops.image` — generic value→image conversion.
 
 ``ConvertToImageOp`` is the generic image-conversion op (normalize → colormap →
 optional flip → resize), and ``value_to_image`` / ``sample_to_image`` back it
@@ -14,7 +14,7 @@ import pytest
 import torch
 from PIL import Image
 
-from dataflux.ops.image import (
+from sampleflux.ops.image import (
     COLORMAPS,
     TEXT_POSITIONS,
     Colormap,
@@ -31,7 +31,7 @@ from dataflux.ops.image import (
     select_channel,
     value_to_image,
 )
-from dataflux.sample import Sample
+from sampleflux.sample import Sample
 
 
 def _sample(value: object) -> Sample:

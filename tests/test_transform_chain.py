@@ -1,9 +1,9 @@
-"""Tests for :class:`dataflux.ops.transform_chain.TransformChain`."""
+"""Tests for :class:`sampleflux.ops.transform_chain.TransformChain`."""
 
 from typing import List, Optional
 
-from dataflux.ops.transform_chain import TransformChain
-from dataflux.sample import Sample
+from sampleflux.ops.transform_chain import TransformChain
+from sampleflux.sample import Sample
 
 
 def _s(v: int = 0) -> Sample:

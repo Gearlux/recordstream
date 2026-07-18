@@ -3,8 +3,8 @@ from pathlib import Path
 import confluid  # type: ignore[import-not-found]
 import numpy as np
 
-from dataflux.core import Flux
-from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
+from sampleflux.core import Flux
+from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
 
 
 # 1. Define a simple transform
@@ -29,7 +29,7 @@ def main() -> None:
 
     # 4. Serialize the Pipeline
     pipeline = Flux().map(rescale, scale=100.0)
-    print("\n--- Serialized DataFlux Pipeline ---")
+    print("\n--- Serialized SampleFlux Pipeline ---")
     yaml_state = confluid.dump(pipeline)
     print(yaml_state)
 

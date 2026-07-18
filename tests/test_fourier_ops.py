@@ -1,5 +1,5 @@
-"""Tests for the 1-D Fourier-transform ops: ``dataflux.ops.numpy.FourierOp`` and
-``dataflux.ops.torch.FourierOp``.
+"""Tests for the 1-D Fourier-transform ops: ``sampleflux.ops.numpy.FourierOp`` and
+``sampleflux.ops.torch.FourierOp``.
 
 Both compute the 1-D DFT (``numpy.fft.fft`` / ``torch.fft.fft``) of ``sample.input`` and
 ALWAYS yield a complex result — for real and complex inputs alike. The tests pin: the
@@ -13,30 +13,30 @@ import pytest
 import torch
 from pydantic import ValidationError
 
-from dataflux.ops import FftShiftOp as FlatFftShiftOp
-from dataflux.ops import FourierOp as FlatFourierOp
-from dataflux.ops import IfftShiftOp as FlatIfftShiftOp
-from dataflux.ops import InverseFourierOp as FlatInverseFourierOp
-from dataflux.ops.numpy import FftShiftOp as NpFftShiftOp
-from dataflux.ops.numpy import FourierNorm
-from dataflux.ops.numpy import FourierOp as NpFourierOp
-from dataflux.ops.numpy import IfftShiftOp as NpIfftShiftOp
-from dataflux.ops.numpy import InverseFourierOp as NpInverseFourierOp
-from dataflux.ops.numpy import SpectrumScalingOp as NpSpectrumScalingOp
-from dataflux.ops.numpy import WindowOp as NpWindowOp
-from dataflux.ops.torch import FftShiftOp as TorchFftShiftOp
-from dataflux.ops.torch import FourierOp as TorchFourierOp
-from dataflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
-from dataflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
-from dataflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
-from dataflux.ops.torch import WindowOp as TorchWindowOp
-from dataflux.sample import Sample
-from dataflux.typespec import infer_sample_type
-from dataflux.windows import WINDOW_SUM_KEY
+from sampleflux.ops import FftShiftOp as FlatFftShiftOp
+from sampleflux.ops import FourierOp as FlatFourierOp
+from sampleflux.ops import IfftShiftOp as FlatIfftShiftOp
+from sampleflux.ops import InverseFourierOp as FlatInverseFourierOp
+from sampleflux.ops.numpy import FftShiftOp as NpFftShiftOp
+from sampleflux.ops.numpy import FourierNorm
+from sampleflux.ops.numpy import FourierOp as NpFourierOp
+from sampleflux.ops.numpy import IfftShiftOp as NpIfftShiftOp
+from sampleflux.ops.numpy import InverseFourierOp as NpInverseFourierOp
+from sampleflux.ops.numpy import SpectrumScalingOp as NpSpectrumScalingOp
+from sampleflux.ops.numpy import WindowOp as NpWindowOp
+from sampleflux.ops.torch import FftShiftOp as TorchFftShiftOp
+from sampleflux.ops.torch import FourierOp as TorchFourierOp
+from sampleflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
+from sampleflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
+from sampleflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
+from sampleflux.ops.torch import WindowOp as TorchWindowOp
+from sampleflux.sample import Sample
+from sampleflux.typespec import infer_sample_type
+from sampleflux.windows import WINDOW_SUM_KEY
 
 
 def test_flat_imports_are_torch_variants() -> None:
-    """``from dataflux.ops import …`` resolves the FFT ops to their torch variants — the package's
+    """``from sampleflux.ops import …`` resolves the FFT ops to their torch variants — the package's
     documented convention that flat data-op imports default to torch (mirrors RescaleOp etc.)."""
     assert FlatFourierOp is TorchFourierOp
     assert FlatInverseFourierOp is TorchInverseFourierOp

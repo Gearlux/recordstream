@@ -5,11 +5,11 @@ import confluid
 import numpy as np
 import torch
 
-from dataflux.core import Flux
-from dataflux.sample import Sample
-from dataflux.storage.directory import DirectorySink
-from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
-from dataflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
+from sampleflux.storage.directory import DirectorySink
+from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
+from sampleflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
 
 
 def test_hdf5_storage(tmp_path: Path) -> None:
@@ -142,7 +142,7 @@ def test_directory_storage_separate(tmp_path: Path) -> None:
 
 
 def test_hdf5_to_numpy_direct() -> None:
-    from dataflux.storage.hdf5 import to_numpy
+    from sampleflux.storage.hdf5 import to_numpy
 
     # Hits line 19
     assert to_numpy(123) == 123

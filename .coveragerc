@@ -1,5 +1,5 @@
 [run]
-source = dataflux
+source = sampleflux
 omit =
     */tests/*
     */examples/*

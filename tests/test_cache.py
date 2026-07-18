@@ -8,7 +8,7 @@ from typing import Callable
 
 import pytest
 
-from dataflux.storage.cache import CacheBudgetExceeded, DiskCache
+from sampleflux.storage.cache import CacheBudgetExceeded, DiskCache
 
 
 def _write(payload: bytes) -> Callable[[Path], None]:

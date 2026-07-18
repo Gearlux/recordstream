@@ -1,4 +1,4 @@
-"""Tests for DataFlux sources: DatasetSplit (+ cached split views), RangeSource, ConcatSource."""
+"""Tests for SampleFlux sources: DatasetSplit (+ cached split views), RangeSource, ConcatSource."""
 
 import inspect
 from typing import Any, Iterator, List
@@ -6,9 +6,9 @@ from typing import Any, Iterator, List
 import confluid  # type: ignore[import-not-found]
 import pytest
 
-from dataflux.core import Flux
-from dataflux.sample import Sample
-from dataflux.sources import ConcatSource, DatasetSplit, RangeSource
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
+from sampleflux.sources import ConcatSource, DatasetSplit, RangeSource
 
 
 @confluid.configurable
@@ -345,10 +345,10 @@ my_split: !class:DatasetSplit()
   val_fraction: 0.2
   seed: 9
 
-train_set: !class:dataflux.core.Flux()
+train_set: !class:sampleflux.core.Flux()
   source: !ref:my_split.train
 
-val_set: !class:dataflux.core.Flux()
+val_set: !class:sampleflux.core.Flux()
   source: !ref:my_split.val
 """
     state: Any = confluid.load(yaml_state)
@@ -421,7 +421,7 @@ def test_concat_source_roundtrip() -> None:
 def test_hf_source_zero_arg_construction_does_no_work() -> None:
     # Per the lazy / zero-arg convention: building the source must not touch the network and
     # must succeed with no constructor arguments. Nothing is materialized until first use.
-    from dataflux.sources import HuggingFaceSource
+    from sampleflux.sources import HuggingFaceSource
 
     src = HuggingFaceSource()
     assert src._dataset is None  # nothing loaded at construction time
@@ -434,7 +434,7 @@ def test_hf_source_zero_arg_construction_does_no_work() -> None:
 def test_hf_source_dataset_without_path_raises() -> None:
     # The zero-arg constructor allows an unconfigured source, but materializing one without a
     # dataset id cannot succeed — the error surfaces lazily, at the `dataset` property, not in __init__.
-    from dataflux.sources import HuggingFaceSource
+    from sampleflux.sources import HuggingFaceSource
 
     src = HuggingFaceSource()
     with pytest.raises(ValueError, match="path is empty"):
@@ -448,7 +448,7 @@ def test_hf_source_dataset_without_path_raises() -> None:
 
 def _hf_source_with_count(count: Any, dataset_len: int = 13) -> Any:
     """Build a HuggingFaceSource and pre-seed its lazy cache so `dataset` never hits the network."""
-    from dataflux.sources import HuggingFaceSource
+    from sampleflux.sources import HuggingFaceSource
 
     src: Any = HuggingFaceSource(count=count)
     src._dataset = list(range(dataset_len))  # short-circuits the lazy load in the `dataset` property
@@ -476,7 +476,7 @@ def test_hf_source_len_positive_count_caps() -> None:
 
 
 def test_resolve_metadata_features_none_and_empty_mean_none() -> None:
-    from dataflux.sources import _resolve_metadata_features
+    from sampleflux.sources import _resolve_metadata_features
 
     cols = ["image", "label", "id", "source_file"]
     assert _resolve_metadata_features(None, cols, "image", "label") == []
@@ -484,7 +484,7 @@ def test_resolve_metadata_features_none_and_empty_mean_none() -> None:
 
 
 def test_resolve_metadata_features_explicit_list_verbatim() -> None:
-    from dataflux.sources import _resolve_metadata_features
+    from sampleflux.sources import _resolve_metadata_features
 
     cols = ["image", "label", "id", "source_file"]
     assert _resolve_metadata_features(["id"], cols, "image", "label") == ["id"]
@@ -493,7 +493,7 @@ def test_resolve_metadata_features_explicit_list_verbatim() -> None:
 
 
 def test_resolve_metadata_features_star_is_the_rest() -> None:
-    from dataflux.sources import _resolve_metadata_features
+    from sampleflux.sources import _resolve_metadata_features
 
     cols = ["image", "label", "id", "source_file"]
     # the rest = every column except input/target, order preserved
@@ -503,7 +503,7 @@ def test_resolve_metadata_features_star_is_the_rest() -> None:
 
 
 def test_resolve_metadata_features_star_plus_extras_union() -> None:
-    from dataflux.sources import _resolve_metadata_features
+    from sampleflux.sources import _resolve_metadata_features
 
     cols = ["image", "label", "id"]
     # "*" plus a name already in the rest -> no duplicate; an out-of-columns extra is appended
@@ -511,7 +511,7 @@ def test_resolve_metadata_features_star_plus_extras_union() -> None:
 
 
 def test_resolve_metadata_features_star_without_columns_degrades() -> None:
-    from dataflux.sources import _resolve_metadata_features
+    from sampleflux.sources import _resolve_metadata_features
 
     # No column_names available (e.g. a non-Dataset backing) -> "*" yields just the extras.
     assert _resolve_metadata_features(["*"], None, "image", "label") == []
@@ -534,7 +534,7 @@ def test_hf_source_iter_metadata_features_star_expands_on_real_dataset() -> None
     # End-to-end through __iter__: a dataset with extra columns + metadata_features="*" carries
     # every non-input/target column onto Sample.metadata (plus the synthetic hf_path/hf_split).
     # The "*" expansion is now lazy (resolved_metadata_features reads dataset.column_names).
-    from dataflux.sources import HuggingFaceSource
+    from sampleflux.sources import HuggingFaceSource
 
     rows = [{"image": i, "label": i % 2, "id": f"r{i}", "src": "a"} for i in range(3)]
     src = HuggingFaceSource(path="fake/ds", split="train", metadata_features=["*"])

@@ -1,4 +1,4 @@
-"""Tests for dataflux.ops: torch and numpy variants."""
+"""Tests for sampleflux.ops: torch and numpy variants."""
 
 import os
 
@@ -7,7 +7,7 @@ import pytest
 import torch
 from PIL import Image
 
-from dataflux.ops import (
+from sampleflux.ops import (
     CaptureOutputOp,
     ConfigureOp,
     CopyInputOp,
@@ -27,9 +27,9 @@ from dataflux.ops import (
     UnstashInputOp,
     UnstashTargetOp,
 )
-from dataflux.ops import numpy as np_ops
-from dataflux.ops.numpy import MaxOp, ThresholdOp
-from dataflux.sample import Sample
+from sampleflux.ops import numpy as np_ops
+from sampleflux.ops.numpy import MaxOp, ThresholdOp
+from sampleflux.sample import Sample
 
 # ---------------------------------------------------------------------------
 # ToTensorOp
@@ -931,10 +931,10 @@ class TestResolveExpression:
             np_ops.resolve_expression("{nope}", sample)
 
     def test_missing_env_var_raises(self) -> None:
-        os.environ.pop("DATAFLUX_TEST_NOPE", None)
+        os.environ.pop("SAMPLEFLUX_TEST_NOPE", None)
         sample = Sample(input=None, target=None, metadata={})
-        with pytest.raises(KeyError, match="environment variable 'DATAFLUX_TEST_NOPE'"):
-            np_ops.resolve_expression("$DATAFLUX_TEST_NOPE", sample)
+        with pytest.raises(KeyError, match="environment variable 'SAMPLEFLUX_TEST_NOPE'"):
+            np_ops.resolve_expression("$SAMPLEFLUX_TEST_NOPE", sample)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,9 +1017,9 @@ class TestThresholdOp:
         assert out.meta["threshold_low"] == -30.0
 
     def test_env_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("DATAFLUX_TEST_THRESHOLD", "1.0")
+        monkeypatch.setenv("SAMPLEFLUX_TEST_THRESHOLD", "1.0")
         arr = np.array([0.0, 1.0, 2.0])
-        out = np_ops.ThresholdOp(low_level="$DATAFLUX_TEST_THRESHOLD")(Sample(input=arr))
+        out = np_ops.ThresholdOp(low_level="$SAMPLEFLUX_TEST_THRESHOLD")(Sample(input=arr))
         np.testing.assert_array_equal(out.input, [False, False, True])
 
     def test_high_level_expression(self) -> None:
@@ -1322,7 +1322,7 @@ class TestNumpyUnsqueezeOp:
 # ---------------------------------------------------------------------------
 class TestDropMetadataOp:
     def test_literal_exclude_drops_exact_keys(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         # A pattern with no wildcards is an EXACT key match; a missing key is ignored.
         sample = Sample(input=np.zeros(2), target=None, metadata={"keep": 1, "drop_me": 2, "also": 3})
@@ -1330,14 +1330,14 @@ class TestDropMetadataOp:
         assert out.meta == {"keep": 1}
 
     def test_glob_star_drops_all_matching(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         meta = {"real": 1, "__taidal_stash_456:input": [1j], "__taidal_stash_456:target": [2j]}
         out = DropMetadataOp(exclude=["__taidal_stash*"])(Sample(input=np.zeros(2), metadata=meta))
         assert out.meta == {"real": 1}
 
     def test_glob_mid_wildcard_is_specific(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         # `__taidal_stash_456:*input` drops ONLY node 456's input stash — keeps its target and
         # other nodes' inputs.
@@ -1350,27 +1350,27 @@ class TestDropMetadataOp:
         assert out.meta == {"__taidal_stash_456:target": 2, "__taidal_stash_99:input": 3}
 
     def test_multiple_exclude_patterns_any_match(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         meta = {"a": 1, "b": 2, "__t_x": 3, "__t_y": 4}
         out = DropMetadataOp(exclude=["a", "__t_*"])(Sample(input=np.zeros(2), metadata=meta))
         assert out.meta == {"b": 2}
 
     def test_question_mark_and_set_globs(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         meta = {"img0": 1, "img1": 2, "imgX": 3, "image": 4}
         out = DropMetadataOp(exclude=["img[0-9]"])(Sample(input=np.zeros(2), metadata=meta))
         assert out.meta == {"imgX": 3, "image": 4}  # only single-digit img0/img1 dropped
 
     def test_matching_is_case_sensitive(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         out = DropMetadataOp(exclude=["key"])(Sample(input=np.zeros(2), metadata={"Key": 1, "key": 2}))
         assert out.meta == {"Key": 1}
 
     def test_include_protects_keys_from_exclude(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         # include WINS: drop every stash key EXCEPT node 456's (carved out by include).
         meta = {
@@ -1385,21 +1385,21 @@ class TestDropMetadataOp:
         assert out.meta == {"real": 1, "__taidal_stash_456:input": 2, "__taidal_stash_456:target": 3}
 
     def test_include_without_exclude_drops_nothing(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         meta = {"a": 1, "b": 2}
         out = DropMetadataOp(include=["a"])(Sample(input=np.zeros(2), metadata=meta))
         assert out.meta == {"a": 1, "b": 2}  # include only protects against exclude
 
     def test_zero_arg_is_identity_metadata(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         meta = {"a": 1, "b": 2}
         out = DropMetadataOp()(Sample(input=np.zeros(2), metadata=meta))
         assert out.meta == {"a": 1, "b": 2}
 
     def test_copy_on_write_does_not_mutate_original(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         original = {"a": 1, "drop": 2}
         out = DropMetadataOp(exclude=["drop"])(Sample(input=np.zeros(2), metadata=original))
@@ -1407,7 +1407,7 @@ class TestDropMetadataOp:
         assert out.meta == {"a": 1}
 
     def test_input_and_target_untouched(self) -> None:
-        from dataflux.ops.metadata import DropMetadataOp
+        from sampleflux.ops.metadata import DropMetadataOp
 
         arr = np.arange(3)
         out = DropMetadataOp(exclude=["x"])(Sample(input=arr, target=7, metadata={"x": 1, "y": 2}))
@@ -1420,14 +1420,14 @@ class TestDropMetadataOp:
 # ---------------------------------------------------------------------------
 class TestPrintSampleOp:
     def test_returns_sample_unchanged(self) -> None:
-        from dataflux.ops.debug import PrintSampleOp
+        from sampleflux.ops.debug import PrintSampleOp
 
         sample = Sample(input=np.zeros(3), target=1, metadata={"a": 1})
         out = PrintSampleOp(to_console=False)(sample)
         assert out is sample
 
     def test_prints_to_console(self, capsys: pytest.CaptureFixture) -> None:
-        from dataflux.ops.debug import PrintSampleOp
+        from sampleflux.ops.debug import PrintSampleOp
 
         PrintSampleOp(label="probe")(Sample(input=np.zeros((2, 3)), target=None, metadata={"k": 1}))
         captured = capsys.readouterr().out
@@ -1436,7 +1436,7 @@ class TestPrintSampleOp:
         assert "'k'" in captured  # metadata key
 
     def test_summarizes_large_array_metadata_without_dumping(self, capsys: pytest.CaptureFixture) -> None:
-        from dataflux.ops.debug import PrintSampleOp
+        from sampleflux.ops.debug import PrintSampleOp
 
         big = np.arange(100000, dtype=np.complex64)  # would flood / not be reprable in full
         PrintSampleOp(label="p")(Sample(input=np.zeros(2), metadata={"iq": big}))
@@ -1445,14 +1445,14 @@ class TestPrintSampleOp:
         assert "..." in out and "50000" not in out  # values elided, not dumped in full
 
     def test_prints_small_array_values(self, capsys: pytest.CaptureFixture) -> None:
-        from dataflux.ops.debug import PrintSampleOp
+        from sampleflux.ops.debug import PrintSampleOp
 
         PrintSampleOp(label="p")(Sample(input=np.array([1, 2, 3]), target=None, metadata={}))
         out = capsys.readouterr().out
         assert "values=[1, 2, 3]" in out  # actual values shown for a small array
 
     def test_limit_caps_emissions_but_passes_all(self, capsys: pytest.CaptureFixture) -> None:
-        from dataflux.ops.debug import PrintSampleOp
+        from sampleflux.ops.debug import PrintSampleOp
 
         op = PrintSampleOp(label="p", limit=2)
         for _ in range(5):
@@ -1461,7 +1461,7 @@ class TestPrintSampleOp:
         assert len(lines) == 2  # only the first 2 printed
 
     def test_to_console_false_is_silent_on_stdout(self, capsys: pytest.CaptureFixture) -> None:
-        from dataflux.ops.debug import PrintSampleOp
+        from sampleflux.ops.debug import PrintSampleOp
 
         PrintSampleOp(to_console=False)(Sample(input=np.zeros(1), metadata={}))
         assert capsys.readouterr().out == ""

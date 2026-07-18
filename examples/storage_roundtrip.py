@@ -16,14 +16,14 @@ from pathlib import Path
 
 import numpy as np
 
-from dataflux.core import Flux
-from dataflux.sample import Sample
-from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
-from dataflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
+from sampleflux.core import Flux
+from sampleflux.sample import Sample
+from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
+from sampleflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="dataflux-storage-demo-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="sampleflux-storage-demo-") as tmp:
         root = Path(tmp)
 
         # 1. HDF5 with an array in metadata (the segmentation-mask case).

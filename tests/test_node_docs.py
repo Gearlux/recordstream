@@ -1,4 +1,4 @@
-"""Guard: every node-facing dataflux Source/Op documents all its constructor params.
+"""Guard: every node-facing sampleflux Source/Op documents all its constructor params.
 
 These classes surface in FluxStudio (as widget tooltips) and navigaitor (as
 pydantic ``Field(description=...)`` in the form-spec) purely from their docstring
@@ -12,8 +12,8 @@ from typing import List
 import pytest
 from confluid import parse_param_docs  # type: ignore[import-not-found]
 
-from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from dataflux.ops.numpy import (
+from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from sampleflux.ops.numpy import (
     ConnectedComponentsOp,
     FftShiftOp,
     FourierOp,
@@ -24,18 +24,18 @@ from dataflux.ops.numpy import (
     ThresholdOp,
     WindowOp,
 )
-from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
-from dataflux.ops.tee import Tee
-from dataflux.ops.torch import FftShiftOp as TorchFftShiftOp
-from dataflux.ops.torch import FourierOp as TorchFourierOp
-from dataflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
-from dataflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
-from dataflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
-from dataflux.ops.torch import StandardizeOp as TorchStandardizeOp
-from dataflux.ops.torch import ToTensorOp
-from dataflux.ops.torch import WindowOp as TorchWindowOp
-from dataflux.ops.transform_chain import TransformChain
-from dataflux.sources import HuggingFaceSource
+from sampleflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
+from sampleflux.ops.tee import Tee
+from sampleflux.ops.torch import FftShiftOp as TorchFftShiftOp
+from sampleflux.ops.torch import FourierOp as TorchFourierOp
+from sampleflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
+from sampleflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
+from sampleflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
+from sampleflux.ops.torch import StandardizeOp as TorchStandardizeOp
+from sampleflux.ops.torch import ToTensorOp
+from sampleflux.ops.torch import WindowOp as TorchWindowOp
+from sampleflux.ops.transform_chain import TransformChain
+from sampleflux.sources import HuggingFaceSource
 
 _NODE_CLASSES = [
     HuggingFaceSource,

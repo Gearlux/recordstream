@@ -1,7 +1,7 @@
 import confluid  # type: ignore[import-not-found]
 import numpy as np
 
-from dataflux.core import Flux
+from sampleflux.core import Flux
 
 
 # 1. Define simple functional transformations
@@ -26,7 +26,7 @@ def main() -> None:
     # 4. Serialize the Pipeline
     # We set source=None before serialization to only serialize the "recipe"
     # and avoid serializing raw numpy data which is not YAML-safe.
-    print("\n--- Serialized DataFlux Pipeline ---")
+    print("\n--- Serialized SampleFlux Pipeline ---")
     yaml_state = ""
     try:
         pipeline.source = None

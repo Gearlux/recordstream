@@ -1,9 +1,9 @@
-"""Tests for dataflux.ops.random_apply.RandomApply."""
+"""Tests for sampleflux.ops.random_apply.RandomApply."""
 
 import pytest
 
-from dataflux.ops.random_apply import RandomApply
-from dataflux.sample import Sample
+from sampleflux.ops.random_apply import RandomApply
+from sampleflux.sample import Sample
 
 
 def _s(v: int = 0) -> Sample:

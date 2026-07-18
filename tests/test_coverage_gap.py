@@ -4,13 +4,13 @@ from typing import Any
 import numpy as np
 import pytest
 
-from dataflux.core import Flux
-from dataflux.discovery import get_callable_path, resolve_callable
-from dataflux.sample import Sample
-from dataflux.storage.base import Storage
-from dataflux.storage.directory import DirectorySink
-from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
-from dataflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
+from sampleflux.core import Flux
+from sampleflux.discovery import get_callable_path, resolve_callable
+from sampleflux.sample import Sample
+from sampleflux.storage.base import Storage
+from sampleflux.storage.directory import DirectorySink
+from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
+from sampleflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
 
 
 def test_storage_base_close() -> None:
@@ -116,7 +116,7 @@ def test_sample_from_any_empty_tuple() -> None:
 
 def test_optional_context_manager_direct() -> None:
     # hits core.py:177
-    from dataflux.core import Flux
+    from sampleflux.core import Flux
 
     f = Flux([1])
 

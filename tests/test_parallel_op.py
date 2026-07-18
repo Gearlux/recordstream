@@ -1,4 +1,4 @@
-"""Tests for :class:`dataflux.ops.parallel.Parallel`."""
+"""Tests for :class:`sampleflux.ops.parallel.Parallel`."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from typing import Iterable, Iterator, List, Optional
 
 import numpy as np
 
-from dataflux.core import Flux
-from dataflux.ops.parallel import Parallel
-from dataflux.sample import Sample
+from sampleflux.core import Flux
+from sampleflux.ops.parallel import Parallel
+from sampleflux.sample import Sample
 
 # Top-level functions/classes — workers must be able to pickle these.
 

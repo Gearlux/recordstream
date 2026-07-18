@@ -10,14 +10,14 @@ from pathlib import Path
 
 import torch
 
-from dataflux import Flux, Sample
-from dataflux.ops.torch import RescaleOp  # noqa: F401 - import registers the @configurable for !class: resolution
+from sampleflux import Flux, Sample
+from sampleflux.ops.torch import RescaleOp  # noqa: F401 - import registers the @configurable for !class: resolution
 
 OPS_YAML = """ops:
-- !class:dataflux.ops.torch.RescaleOp()
+- !class:sampleflux.ops.torch.RescaleOp()
   in_min: 0.0
   in_max: 255.0
-- !class:dataflux.ops.torch.RescaleOp()
+- !class:sampleflux.ops.torch.RescaleOp()
   in_min: 0.0
   in_max: 1.0
   out_max: 10.0

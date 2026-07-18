@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from dataflux.discovery import get_callable_path, introspect_callable, resolve_callable, scan_module
+from sampleflux.discovery import get_callable_path, introspect_callable, resolve_callable, scan_module
 
 
 def sample_func(a: int, b: str = "default") -> str:
@@ -45,7 +45,7 @@ def test_resolve_callable_errors() -> None:
 
     # Test AttributeError
     with pytest.raises(AttributeError):
-        resolve_callable("dataflux.discovery:nonexistent_func")
+        resolve_callable("sampleflux.discovery:nonexistent_func")
 
 
 def test_introspect_errors() -> None:
@@ -160,7 +160,7 @@ class ClassInScript:
     assert "ClassInScript" in names
 
     # Standard module scan
-    schemas_self = scan_module("dataflux.discovery")
+    schemas_self = scan_module("sampleflux.discovery")
     names_self = [s["name"] for s in schemas_self]
     assert "scan_module" in names_self
     assert "get_callable_path" in names_self

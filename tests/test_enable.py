@@ -1,4 +1,4 @@
-"""Tests for :class:`dataflux.ops.enable.Enable` and :class:`dataflux.ops.sink.SampleSinkOp`.
+"""Tests for :class:`sampleflux.ops.enable.Enable` and :class:`sampleflux.ops.sink.SampleSinkOp`.
 
 These modality-neutral compose helpers moved here from ``waivefront.processing`` —
 they thread any ``Sample`` through any ops and have no signal dependency.
@@ -9,9 +9,9 @@ from typing import Any, Dict, List
 import confluid
 import pytest
 
-from dataflux.ops.enable import Enable
-from dataflux.ops.sink import SampleSinkOp
-from dataflux.sample import Sample
+from sampleflux.ops.enable import Enable
+from sampleflux.ops.sink import SampleSinkOp
+from sampleflux.sample import Sample
 
 
 class _CountingOp:
@@ -164,10 +164,10 @@ def test_enable_yaml_load_with_cli_style_override(tmp_path: Any) -> None:
     """Mimic what Liquify's --visualize true override does to Fluid kwargs."""
     yaml_text = """\
 wrapper:
-  !class:dataflux.ops.enable.Enable
+  !class:sampleflux.ops.enable.Enable
   visualize: false
   ops:
-    - !class:dataflux.ops.copy.CopySampleOp {}
+    - !class:sampleflux.ops.copy.CopySampleOp {}
 """
     cfg = tmp_path / "enable.yaml"
     cfg.write_text(yaml_text)

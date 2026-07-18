@@ -1,12 +1,12 @@
-"""Tests for :class:`dataflux.labels.LabelMap` — the fittable name↔id label map."""
+"""Tests for :class:`sampleflux.labels.LabelMap` — the fittable name↔id label map."""
 
 import json
 
 import pytest
 
-from dataflux.labels import LabelMap
-from dataflux.ops.target import DecodeTargetOp, EncodeTargetOp
-from dataflux.sample import Sample
+from sampleflux.labels import LabelMap
+from sampleflux.ops.target import DecodeTargetOp, EncodeTargetOp
+from sampleflux.sample import Sample
 
 # ---------------------------------------------------------------------------
 # Construction & lazy validation
@@ -78,7 +78,7 @@ def test_from_label_names_empty_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# encode_op / decode_op produce working dataflux ops
+# encode_op / decode_op produce working sampleflux ops
 # ---------------------------------------------------------------------------
 
 

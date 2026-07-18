@@ -9,8 +9,8 @@ from typing import Any, Dict, Iterator, Optional
 
 import confluid  # type: ignore[import-not-found]
 
-from dataflux.paired import AnnotationJoinSource
-from dataflux.sample import Sample
+from sampleflux.paired import AnnotationJoinSource
+from sampleflux.sample import Sample
 
 
 @confluid.configurable
@@ -60,7 +60,7 @@ class DictStore:
 
 
 # Module-level callables so they survive Confluid YAML round-trip via
-# dataflux.discovery.resolve_callable("examples.paired_annotations:<name>").
+# sampleflux.discovery.resolve_callable("examples.paired_annotations:<name>").
 def window_key(sample: Sample) -> str:
     return f"{sample.meta['pack_id']}:win{sample.meta['window_start_sample']:08d}"
 

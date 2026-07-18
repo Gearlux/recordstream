@@ -3,8 +3,8 @@ from pathlib import Path
 
 import numpy as np
 
-from dataflux.core import Flux
-from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
+from sampleflux.core import Flux
+from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
 
 
 def heavy_rescale(data: np.ndarray, factor: float = 1.0) -> np.ndarray:

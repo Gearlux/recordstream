@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined"
-"""Discovery-category coverage for dataflux ``@configurable`` classes.
+"""Discovery-category coverage for sampleflux ``@configurable`` classes.
 
 These ``category=`` tags drive navigaitor's ``list_configurable_classes(category=...)``
 MCP tool and, downstream, the visual-editor form-spec picker (``get_node_form_spec``).
@@ -9,16 +9,16 @@ pinned here as a regression gate.
 
 from confluid.registry import get_registry
 
-from dataflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from dataflux.ops.capture import CaptureOutputOp
-from dataflux.ops.configure import ConfigureOp
-from dataflux.ops.copy import CopyInputOp
-from dataflux.ops.debug import PrintSampleOp
-from dataflux.ops.enable import Enable
-from dataflux.ops.formula import FormulaOp
-from dataflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
-from dataflux.ops.metadata import DropMetadataOp
-from dataflux.ops.numpy import (
+from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from sampleflux.ops.capture import CaptureOutputOp
+from sampleflux.ops.configure import ConfigureOp
+from sampleflux.ops.copy import CopyInputOp
+from sampleflux.ops.debug import PrintSampleOp
+from sampleflux.ops.enable import Enable
+from sampleflux.ops.formula import FormulaOp
+from sampleflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
+from sampleflux.ops.metadata import DropMetadataOp
+from sampleflux.ops.numpy import (
     FftShiftOp,
     FourierOp,
     IfftShiftOp,
@@ -29,29 +29,29 @@ from dataflux.ops.numpy import (
     ThresholdOp,
     WindowOp,
 )
-from dataflux.ops.parallel import Parallel
-from dataflux.ops.sink import SampleSinkOp
-from dataflux.ops.stash import StashTargetOp, UnstashTargetOp
-from dataflux.ops.target import (
+from sampleflux.ops.parallel import Parallel
+from sampleflux.ops.sink import SampleSinkOp
+from sampleflux.ops.stash import StashTargetOp, UnstashTargetOp
+from sampleflux.ops.target import (
     CocoToTorchVisionDetectionOp,
     DecodeTargetOp,
     EncodeTargetOp,
     MasksToDetectionBoxesOp,
     MetadataToTargetOp,
 )
-from dataflux.ops.tee import Tee
-from dataflux.ops.torch import FftShiftOp as TorchFftShiftOp
-from dataflux.ops.torch import FourierOp as TorchFourierOp
-from dataflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
-from dataflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
-from dataflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
-from dataflux.ops.torch import ToTensorOp
-from dataflux.ops.torch import WindowOp as TorchWindowOp
-from dataflux.ops.transform_chain import TransformChain
-from dataflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
-from dataflux.storage.directory import DirectorySink
-from dataflux.storage.hdf5 import HDF5Sink, HDF5Source
-from dataflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
+from sampleflux.ops.tee import Tee
+from sampleflux.ops.torch import FftShiftOp as TorchFftShiftOp
+from sampleflux.ops.torch import FourierOp as TorchFourierOp
+from sampleflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
+from sampleflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
+from sampleflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
+from sampleflux.ops.torch import ToTensorOp
+from sampleflux.ops.torch import WindowOp as TorchWindowOp
+from sampleflux.ops.transform_chain import TransformChain
+from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+from sampleflux.storage.directory import DirectorySink
+from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
+from sampleflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
 
 
 def test_engine_classes_tagged() -> None:
@@ -121,8 +121,8 @@ def test_op_classes_tagged() -> None:
 
 
 def test_storage_sink_classes_tagged() -> None:
-    """The DataFlux storage SINKS carry ``category="sink"`` so FluxStudio surfaces them as
-    ``DatasetProcessor`` sink nodes (``DATAFLUX_OBJECT:sink``). Their matching SOURCES stay
+    """The SampleFlux storage SINKS carry ``category="sink"`` so FluxStudio surfaces them as
+    ``DatasetProcessor`` sink nodes (``SAMPLEFLUX_OBJECT:sink``). Their matching SOURCES stay
     UNcategorised — they read a sink's layout back via YAML ``!class:``, they are not canvas nodes.
     (``SampleSinkOp`` is the op-FORM sink, ``category="op"`` — a different thing, asserted above.)"""
     assert HDF5Sink.__confluid_category__ == "sink"
@@ -134,7 +134,7 @@ def test_storage_sink_classes_tagged() -> None:
 
 
 def test_op_group_tags() -> None:
-    """Ops carry a path-like ``group`` (FluxStudio palette nesting: Taidal/DataFlux/Op/<group>).
+    """Ops carry a path-like ``group`` (FluxStudio palette nesting: Taidal/SampleFlux/Op/<group>).
 
     Presentation-only — orthogonal to the category that gates discovery. A renamed/dropped group
     re-files the node in the palette but never hides it; pinned so the taxonomy is a regression gate."""
