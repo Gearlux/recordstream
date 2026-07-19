@@ -126,7 +126,7 @@ class Enable:
         name, _ = self._toggle()
         return name
 
-    def __call__(self, sample: Sample) -> Sample:
+    def __call__(self, sample: Sample) -> Optional[Sample]:
         if not self.ops:
             raise ValueError("Enable requires a non-empty 'ops' list.")
         if not self.enabled:
@@ -134,14 +134,21 @@ class Enable:
         from confluid import flow
         from confluid.fluid import Fluid
 
+        # _apply_op = the engine's contract-aware chokepoint, so field-scoped ops
+        # (e.g. a pair-scoped op from the kinds grid) run under the toggle unchanged.
+        from sampleflux.core import _apply_op
+
+        current: Optional[Sample] = sample
         for i, op in enumerate(self.ops):
+            if current is None:
+                return None
             if isinstance(op, Fluid):
                 op = flow(op)
                 self.ops[i] = op
             if op is None:
                 continue
-            sample = op(sample)
-        return sample
+            current = _apply_op(current, op)
+        return current
 
     def close(self) -> None:
         """Propagate close to inner ops that own resources (e.g. SampleSinkOp)."""

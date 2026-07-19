@@ -72,6 +72,10 @@ class ConfigureOp:
             raise ValueError("ConfigureOp: 'param' (the target attribute to set) is required")
         if isinstance(self.target, Fluid):
             self.target = flow(self.target)
+        # _apply_op = the engine's contract-aware chokepoint, so field-scoped ops
+        # (e.g. a pair-scoped op from the kinds grid) work in the compute chain and as target.
+        from sampleflux.core import _apply_op
+
         current: Sample = sample
         for i, op in enumerate(self.ops):
             if isinstance(op, Fluid):
@@ -79,7 +83,7 @@ class ConfigureOp:
                 self.ops[i] = op
             if op is None:
                 continue
-            result = op(current)
+            result = _apply_op(current, op)
             if result is None:
                 return None  # the compute chain filtered the sample (FilterOp semantics)
             current = result
@@ -87,7 +91,7 @@ class ConfigureOp:
         sample.meta[self.key or self.param] = value
         target = cast(Any, self.target)
         setattr(target, self.param, value)
-        return cast(Optional[Sample], target(sample))
+        return _apply_op(sample, target)
 
     def close(self) -> None:
         """Propagate close() to inner ops that own resources."""

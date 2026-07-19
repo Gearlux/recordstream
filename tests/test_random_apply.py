@@ -19,17 +19,24 @@ def test_zero_arg_construction() -> None:
     assert RandomApply() is not None
 
 
+def _run(op: RandomApply, sample: Sample) -> Sample:
+    """Apply and narrow: these tests never exercise the drop (None) path."""
+    out = op(sample)
+    assert out is not None
+    return out
+
+
 def test_probability_zero_never_applies() -> None:
     op = RandomApply(op=_BumpOp(), probability=0.0)
     for _ in range(20):
-        out = op(_s(0))
+        out = _run(op, _s(0))
         assert out.input == 0
 
 
 def test_probability_one_always_applies() -> None:
     op = RandomApply(op=_BumpOp(), probability=1.0)
     for _ in range(20):
-        out = op(_s(0))
+        out = _run(op, _s(0))
         assert out.input == 1
 
 
@@ -61,10 +68,10 @@ def test_flows_confluid_fluid_op_lazily() -> None:
 
     fluid_op = Class(_Inner)
     op = RandomApply(op=fluid_op, probability=1.0)
-    out = op(_s(5))
+    out = _run(op, _s(5))
     assert out.input == 15
     # second call reuses the cached flowed op
-    out2 = op(_s(5))
+    out2 = _run(op, _s(5))
     assert out2.input == 15
 
 
@@ -94,8 +101,8 @@ def test_gate_reproducible_with_seed() -> None:
     s = _s(0)
     op_a = RandomApply(op=_BumpOp(), probability=0.5, random_state=7)
     op_b = RandomApply(op=_BumpOp(), probability=0.5, random_state=7)
-    results_a = [op_a(s).input for _ in range(30)]
-    results_b = [op_b(s).input for _ in range(30)]
+    results_a = [_run(op_a, s).input for _ in range(30)]
+    results_b = [_run(op_b, s).input for _ in range(30)]
     assert results_a == results_b
 
 
@@ -103,8 +110,8 @@ def test_gate_different_seeds_produce_different_sequences() -> None:
     s = _s(0)
     op_a = RandomApply(op=_BumpOp(), probability=0.5, random_state=1)
     op_b = RandomApply(op=_BumpOp(), probability=0.5, random_state=2)
-    results_a = [op_a(s).input for _ in range(50)]
-    results_b = [op_b(s).input for _ in range(50)]
+    results_a = [_run(op_a, s).input for _ in range(50)]
+    results_b = [_run(op_b, s).input for _ in range(50)]
     assert results_a != results_b
 
 

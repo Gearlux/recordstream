@@ -49,6 +49,7 @@ def test_enable_disabled_passes_sample_through_untouched() -> None:
     counter: Dict[str, int] = {"calls": 0}
     wrapped = _wrap(_CountingOp(counter), visualize=False)
     out = wrapped(_sample())
+    assert out is not None
     assert counter["calls"] == 0
     assert "counted" not in out.meta
 
@@ -57,6 +58,7 @@ def test_enable_enabled_invokes_inner_op() -> None:
     counter: Dict[str, int] = {"calls": 0}
     wrapped = _wrap(_CountingOp(counter), visualize=True)
     out = wrapped(_sample())
+    assert out is not None
     assert counter["calls"] == 1
     assert out.meta["counted"] is True
     assert wrapped.flag_name == "visualize"
@@ -103,6 +105,7 @@ def test_enable_multi_op_threads_sample_through_each() -> None:
         visualize=True,
     )
     out = wrapped(_sample())
+    assert out is not None
     assert counter_a["calls"] == 1
     assert counter_b["calls"] == 1
     assert out.meta["tags"] == ["first", "second"]

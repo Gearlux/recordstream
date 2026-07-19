@@ -179,7 +179,11 @@ class Apply:
         value = _cell_field(value, "input")
         op = cast(Any, self.op)
         setattr(op, self.param, value)
-        return cast(Optional[Sample], op(sample))
+        # _apply_op = the engine's contract-aware chokepoint, so a field-scoped wrapped op
+        # (e.g. a pair-scoped op from the kinds grid) applies exactly as in a bare ops list.
+        from sampleflux.core import _apply_op
+
+        return _apply_op(sample, op)
 
     def close(self) -> None:
         """Propagate close() to the wrapped op if it owns resources."""
@@ -236,7 +240,10 @@ class Capture:
         self.op = _flow_if_fluid(self.op)
         ctx = require("Capture")
         op = cast(Any, self.op)
-        result = op(sample)
+        # _apply_op = the engine's contract-aware chokepoint (field-scoped ops capture too).
+        from sampleflux.core import _apply_op
+
+        result = _apply_op(sample, op)
         if result is None:
             return None  # the wrapped op filtered the sample (FilterOp semantics)
         for attr, cell in items.items():

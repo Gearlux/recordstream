@@ -49,6 +49,7 @@ for sample in flux:
 | [docs/projection.md](docs/projection.md) | Field projection (`SupportsProjection`), lazy target walks, `num_classes`, the fittable `LabelMap` |
 | [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImageOp`, `NormalizeToUint8Op`), array introspection helpers |
 | [docs/configure.md](docs/configure.md) | Per-sample op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
+| [docs/augmentation.md](docs/augmentation.md) | Augmentation via albumentations / torchvision `transforms.v2` — joint input+target (mask/boxes) adapters, the generated `Alb*`/`Tv*` per-transform ops, seeding, Confluid-native YAML |
 
 ## 🧭 Scope: a modality-neutral engine
 
@@ -64,6 +65,7 @@ SampleFlux is designed to sit between your data catalog and your training loop, 
 - **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into `Sample` triplets with full metadata traceability (see [docs/sources.md](docs/sources.md)).
 - **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node, every run reproducible.
 - **PyTorch**: `Flux` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#multi-type-carriers--the-collate-registry-samplefluxcollate).
+- **Augmentation libraries**: `AlbumentationsOp` / `TorchvisionTransformOp` wrap [albumentations](https://albumentations.ai) and torchvision `transforms.v2` as ops that augment input AND target (mask / detection boxes) jointly — plus an auto-generated op per individual library transform (`AlbHorizontalFlip`, `TvColorJitter`, …), each a graph node and a Confluid `!class:` one-liner (see [docs/augmentation.md](docs/augmentation.md); torchvision via `pip install "sampleflux[vision]"`).
 
 ## 🔧 Installation
 

@@ -9,7 +9,7 @@ in core sampleflux, not a domain package.
 """
 
 import random
-from typing import Optional, cast
+from typing import Optional
 
 from confluid import configurable
 from loggair import get_logger
@@ -59,7 +59,7 @@ class RandomApply:
         self.random_state = random_state
         self._gate_rng: Optional[random.Random] = None
 
-    def __call__(self, sample: Sample) -> Sample:
+    def __call__(self, sample: Sample) -> Optional[Sample]:
         if self.op is None:
             raise ValueError("RandomApply requires 'op' to be set before calling.")
         if self._gate_rng is None:
@@ -69,9 +69,14 @@ class RandomApply:
         from confluid import flow
         from confluid.fluid import Fluid
 
+        # _apply_op is the engine's single contract-aware chokepoint — routing through it
+        # (instead of op(sample)) lets a field-scoped op (e.g. a pair-scoped op from the
+        # kinds grid) nest inside the gate exactly as it would sit in a bare ops list.
+        from sampleflux.core import _apply_op
+
         op = flow(self.op) if isinstance(self.op, Fluid) else self.op
         self.op = op  # cache the flowed op so we only flow once
-        return cast(Sample, op(sample))  # type: ignore[operator]
+        return _apply_op(sample, op)
 
 
 __all__ = ["RandomApply"]

@@ -51,13 +51,17 @@ class Parallel:
                 self.ops[i] = flow(op)
 
     def __call__(self, sample: Sample) -> Optional[Sample]:
-        # Inline fallback for non-streaming callers (e.g. Flux.__getitem__).
+        # Inline fallback for non-streaming callers (e.g. Flux.__getitem__). Routed through
+        # _apply_op — the same contract-aware chokepoint the streamed route's _worker_task
+        # uses — so field-scoped ops (e.g. a pair-scoped op from the kinds grid) behave identically.
+        from sampleflux.core import _apply_op
+
         self._materialize_ops()
         current: Optional[Sample] = sample
         for op in self.ops:
             if current is None:
                 return None
-            current = op(current)
+            current = _apply_op(current, op)
         return current
 
     def stream(self, samples: Iterable[Optional[Sample]]) -> Iterator[Optional[Sample]]:

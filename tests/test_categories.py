@@ -10,6 +10,7 @@ pinned here as a regression gate.
 from confluid.registry import get_registry
 
 from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from sampleflux.ops.albumentations import AlbumentationsOp
 from sampleflux.ops.configure import ConfigureOp
 from sampleflux.ops.copy import CopyInputOp
 from sampleflux.ops.debug import PrintSampleOp
@@ -29,6 +30,7 @@ from sampleflux.ops.target import (
     MetadataToTargetOp,
 )
 from sampleflux.ops.torch import ToTensorOp
+from sampleflux.ops.torchvision import TorchvisionTransformOp
 from sampleflux.ops.transform_chain import TransformChain
 from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
 from sampleflux.storage.directory import DirectorySink
@@ -86,6 +88,16 @@ def test_op_classes_tagged() -> None:
     assert MasksToDetectionBoxesOp.__confluid_category__ == "op"
     assert ConfigureOp.__confluid_category__ == "op"
     assert FormulaOp.__confluid_category__ == "op"
+    assert AlbumentationsOp.__confluid_category__ == "op"
+    assert TorchvisionTransformOp.__confluid_category__ == "op"
+
+
+def test_augmentation_adapters_random_tagged() -> None:
+    """The library-augmentation adapters are stochastic (the wrapped library draws its own
+    random parameters per call), so they carry ``random=True`` — the confluid mark UIs use
+    to inject cache-busting (e.g. FluxStudio's ``IS_CHANGED``)."""
+    assert AlbumentationsOp.__confluid_random__ is True
+    assert TorchvisionTransformOp.__confluid_random__ is True
 
 
 def test_storage_sink_classes_tagged() -> None:
@@ -128,6 +140,8 @@ def test_op_group_tags() -> None:
     assert ConvertToImageOp.__confluid_group__ == "image"
     assert NormalizeToUint8Op.__confluid_group__ == "image"
     assert SampleSinkOp.__confluid_group__ == "sink"
+    assert AlbumentationsOp.__confluid_group__ == "augment"
+    assert TorchvisionTransformOp.__confluid_group__ == "augment"
 
 
 def test_categories_enumerable_via_registry() -> None:
@@ -185,5 +199,6 @@ def test_groups_enumerable_via_registry() -> None:
         "CocoToTorchVisionDetectionOp",
         "MasksToDetectionBoxesOp",
     } <= registry.list_classes(group="structure")
+    assert {"AlbumentationsOp", "TorchvisionTransformOp"} <= registry.list_classes(group="augment")
     # group × category intersect, like task × role.
     assert "TransformChain" in registry.list_classes(category="op", group="compose")

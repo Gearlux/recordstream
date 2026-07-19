@@ -61,6 +61,10 @@ class TransformChain:
         from confluid import flow
         from confluid.fluid import Fluid
 
+        # _apply_op = the engine's contract-aware chokepoint, so field-scoped ops
+        # (e.g. a pair-scoped op from the kinds grid) chain exactly as in a bare ops list.
+        from sampleflux.core import _apply_op
+
         current: Optional[Sample] = sample
         for i, op in enumerate(self.ops):
             if current is None:
@@ -70,7 +74,7 @@ class TransformChain:
                 self.ops[i] = op
             if op is None:
                 continue
-            current = op(current)
+            current = _apply_op(current, op)
         return current
 
     def close(self) -> None:
