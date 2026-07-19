@@ -1,6 +1,6 @@
 """``FormulaOp`` — evaluate a math formula over ``sample.input``.
 
-The op-form of FluxStudio's canvas *Math* node: a restricted Python expression over one
+The op-form of a visual canvas *Math* node: a restricted Python expression over one
 named variable bound to the incoming ``sample.input`` (plus the stdlib ``math`` namespace
 and the scalar helpers ``abs``/``min``/``max``/``round``/``pow`` — no builtins, so
 ``__import__``/``open``/``exec`` are unavailable). Its main consumer is the ops-export's

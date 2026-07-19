@@ -6,12 +6,11 @@ from sampleflux.collate import collate, get_collate, register_collate
 from sampleflux.context import Context
 from sampleflux.core import Flux, JointFlux, WrappedOp
 from sampleflux.flow import FlowGraph, from_ops, to_ops
-from sampleflux.kinds import OpContract, SampleKind, classify_carrier, op_contract
+from sampleflux.kinds import INPUT, TARGET, Input, OpContract, SampleKind, Target, classify_carrier, op_contract
 from sampleflux.labels import LabelMap
 from sampleflux.ops import RescaleOp, StandardizeOp, ToTensorOp
-from sampleflux.paired import AnnotationJoinSource, AnnotationStore
 from sampleflux.projection import ProjectionField, SupportsProjection, iter_inputs, iter_targets, num_classes, project
-from sampleflux.sample import Sample
+from sampleflux.sample import InputMeta, Pair, Sample, TargetMeta
 from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource, SplitName
 from sampleflux.typespec import (
     AnyType,
@@ -32,8 +31,6 @@ from sampleflux.typespec import (
 )
 
 __all__ = [
-    "AnnotationJoinSource",
-    "AnnotationStore",
     "AnyType",
     "ArrayType",
     "ConcatSource",
@@ -41,7 +38,14 @@ __all__ = [
     "DatasetSplit",
     "Dim",
     "FlowGraph",
+    "INPUT",
+    "Input",
+    "InputMeta",
     "OpContract",
+    "Pair",
+    "TARGET",
+    "Target",
+    "TargetMeta",
     "SampleKind",
     "classify_carrier",
     "collate",

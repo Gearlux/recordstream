@@ -33,7 +33,7 @@ def _flow_if_fluid(value: Any) -> Any:
 def _read_output(op: Any, name: str) -> Any:
     """Read attribute ``name`` off ``op``, looking through ``target``/``op`` wrapper chains.
 
-    Mirrors ``CaptureOutputOp._read_output`` but also descends our own ``Apply.op`` slot so
+    Reads a live ``@output`` attribute through wrapper chains (incl. our own ``Apply.op`` slot) so
     ``Capture(op=Apply(op=X, …))`` reaches X's ``@output``. Returns ``_MISSING`` when absent.
     """
     cur, seen = op, set()
@@ -192,7 +192,7 @@ class Apply:
 class Capture:
     """Apply an op, then record its ``@output`` attribute(s) into Context cells.
 
-    The Context twin of ``CaptureOutputOp``: the wrapped op runs once (stochastic-correct
+    Records a wrapped op's live ``@output``: the wrapped op runs once (stochastic-correct
     — the value is read from the actual run, never recomputed) and each requested
     ``@output`` is stored as a raw cell value for a later ``Apply``/``Mix`` to read. The
     returned sample is ``op(sample)`` — transformations are kept.

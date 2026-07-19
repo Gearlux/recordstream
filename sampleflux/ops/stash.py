@@ -1,19 +1,24 @@
 """Stash / unstash ``sample.input`` / ``sample.target`` to / from ``metadata``.
 
 Use ``StashInputOp(key)`` to snapshot the current ``sample.input`` under a
-metadata key without changing ``sample.input``. Use ``UnstashInputOp(key)``
-later (e.g. inside another ``Tee`` branch) to restore that value into
-``sample.input``. ``StashTargetOp`` / ``UnstashTargetOp`` are the exact
-``sample.target`` counterparts — together the family is what lets a branchy
-canvas graph compile to ONE sequential op-list (FluxStudio's DAG→sequential
-ops-export restores the fork-point input/target between branches and
-translates a Mix-style fan-in into unstashes).
+metadata key without changing ``sample.input``; ``UnstashInputOp(key)``
+restores it later. ``StashTargetOp`` / ``UnstashTargetOp`` are the exact
+``sample.target`` counterparts.
 
-The ``Unstash*Op``\\ s default to ``copy=True`` (deepcopy) so two branches
-that both unstash the same key are independent — each gets its own array
-to mutate. Without the copy, an in-place op like ``ClipPercentilesOp``
-in the first branch would silently corrupt the stashed value seen by the
-second branch.
+Graph WIRING is the job of the context ops (``sampleflux.ops.context`` —
+``Save``/``Use``/``Mix`` over per-sample Context cells, see ``docs/graph.md``).
+The stash family remains for the two jobs cells cannot do, because the
+snapshot rides ``sample.metadata`` WITH the sample:
+
+* crossing a ``Parallel`` boundary — metadata travels through the stream
+  split/join; Context cells deliberately raise there;
+* deliberately PERSISTING a snapshot into a sink (the metadata key is
+  serialised alongside the sample unless an ``Unstash*Op`` removes it).
+
+The ``Unstash*Op``\\ s default to ``copy=True`` (deepcopy) so two readers
+of the same key are independent — each gets its own array to mutate.
+Without the copy, an in-place op like ``ClipPercentilesOp`` after the first
+restore would silently corrupt the stashed value seen by the second.
 """
 
 import copy as _copy

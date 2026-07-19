@@ -13,27 +13,10 @@ import pytest
 from confluid import parse_param_docs  # type: ignore[import-not-found]
 
 from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from sampleflux.ops.numpy import (
-    ConnectedComponentsOp,
-    FftShiftOp,
-    FourierOp,
-    IfftShiftOp,
-    InverseFourierOp,
-    SpectrumScalingOp,
-    StandardizeOp,
-    ThresholdOp,
-    WindowOp,
-)
+from sampleflux.ops.numpy import ConnectedComponentsOp, StandardizeOp, ThresholdOp
 from sampleflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
-from sampleflux.ops.tee import Tee
-from sampleflux.ops.torch import FftShiftOp as TorchFftShiftOp
-from sampleflux.ops.torch import FourierOp as TorchFourierOp
-from sampleflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
-from sampleflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
-from sampleflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
 from sampleflux.ops.torch import StandardizeOp as TorchStandardizeOp
 from sampleflux.ops.torch import ToTensorOp
-from sampleflux.ops.torch import WindowOp as TorchWindowOp
 from sampleflux.ops.transform_chain import TransformChain
 from sampleflux.sources import HuggingFaceSource
 
@@ -43,24 +26,11 @@ _NODE_CLASSES = [
     JointFlux,
     FilterOp,
     WrappedOp,
-    Tee,
     StandardizeOp,
     ThresholdOp,
     ConnectedComponentsOp,
-    FourierOp,
-    InverseFourierOp,
-    FftShiftOp,
-    IfftShiftOp,
     ToTensorOp,
     TorchStandardizeOp,
-    TorchFourierOp,
-    TorchInverseFourierOp,
-    TorchFftShiftOp,
-    TorchIfftShiftOp,
-    WindowOp,
-    SpectrumScalingOp,
-    TorchWindowOp,
-    TorchSpectrumScalingOp,
     MetadataToTargetOp,
     EncodeTargetOp,
     DecodeTargetOp,

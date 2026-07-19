@@ -2,7 +2,7 @@
 
 A **flow document** is the readable, named-step form of a graph-shaped pipeline: a
 mapping of ``step-name → op``, where a step's name is also the name later steps use to
-reference its result. It is the authoring format (humans and the FluxStudio exporter
+reference its result. It is the authoring format (humans and graph exporters
 write it); the flat context-ops form (:mod:`sampleflux.ops.context`) is the serial
 execution format the plain :class:`~sampleflux.core.Flux` engine runs. The two convert
 **bidirectionally**: :func:`to_ops` lowers a flow into a flat op list, :func:`from_ops`
@@ -493,7 +493,7 @@ def to_ops(steps: Union[Sequence[FlowStep], Dict[str, Any]], outputs: str = "") 
     """Lower a flow (parsed steps or a raw flow mapping) into a flat context-ops list.
 
     The result runs on the plain serial :class:`~sampleflux.core.Flux` engine and is the
-    serialization form FluxStudio's ``--serial`` export emits. Cell names are the step
+    serialization form a graph exporter's serial mode emits. Cell names are the step
     names (deterministic, diffable); liveness is compiled into ``drop`` flags so a
     well-formed graph leaves the Context empty. A purely linear flow lowers to the bare
     op list — zero context ops.
@@ -669,7 +669,7 @@ def from_ops(ops: Sequence[Any], outputs: str = "") -> Tuple[Dict[str, Any], str
     execution-equivalent to ``ops``.
 
     Accepts LIVE ops or confluid ``Instance``/``Class`` MARKERS interchangeably (the
-    FluxStudio exporter lifts compiled marker lists without materializing them, keeping
+    graph exporter lifts compiled marker lists without materializing them, keeping
     hoisted-constant ``!ref:``\\ s intact); a real op arrives in the flow mapping verbatim
     (marker in, marker out).
     """

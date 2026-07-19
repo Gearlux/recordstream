@@ -28,7 +28,7 @@ from loggair import get_logger
 
 from sampleflux.context import Context, activate
 from sampleflux.projection import ProjectionField
-from sampleflux.sample import FEATURES_KEY, SPEC_KEY, TYPE_KEYS, Sample
+from sampleflux.sample import FEATURES_KEY, SPEC_KEY, TYPE_KEYS, InputMeta, Pair, Sample, TargetMeta
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from sampleflux.typespec import SampleType
@@ -63,11 +63,142 @@ def _refresh_type(sample: Sample, op: Any) -> Sample:
 
 def _apply_op(sample: Sample, op: Any) -> Optional[Sample]:
     """Apply one op and refresh the stored type. The single op-application chokepoint shared by the
-    sequential, parallel (via :func:`_worker_task`), streamed, and random-access (``__getitem__``) paths."""
-    result = op(sample)
+    sequential, parallel (via :func:`_worker_task`), streamed, and random-access (``__getitem__``) paths.
+
+    The op's introspected contract (:func:`sampleflux.kinds.op_contract`) picks the BINDING:
+    a classic sample/untyped op receives the Sample verbatim (today's fast path); a
+    field-scoped op (``input`` / ``target`` / ``pair`` / ``input_meta`` / ``target_meta`` —
+    packed views or unpacked separate arguments) receives exactly its declared view and the
+    result merges back with the untouched fields preserved (:func:`_apply_view`).
+    """
+    from sampleflux.kinds import op_contract
+
+    contract = op_contract(op)
+    if contract.accepts in ("sample", "any", "value") and contract.style == "packed":
+        result = op(sample)
+        if result is None:
+            return None
+        return _refresh_type(result, op)
+    return _apply_view(sample, op, contract)
+
+
+def _view_error(op: Any, scope: str, result: Any) -> TypeError:
+    return TypeError(
+        f"{type(op).__name__}: a {scope!r}-scope op must return the matching view/tuple, a full "
+        f"Sample, or None — got {type(result).__name__}"
+    )
+
+
+# One argument of an unpacked op, bound from the sample per its declared field scope.
+_BIND_GET: Dict[str, Callable[[Sample], Any]] = {
+    "input": lambda s: s.input,
+    "target": lambda s: s.target,
+    "metadata": lambda s: s.meta,
+    "input_meta": lambda s: s.input_meta(),
+    "target_meta": lambda s: s.target_meta(),
+}
+
+
+def _apply_bindings(sample: Sample, op: Any, bindings: Tuple[str, ...]) -> Optional[Sample]:
+    """Apply an UNPACKED op — each argument bound per its declared field scope — and merge back.
+
+    Handles EVERY combination the binding resolver produces: the classic
+    ``f(input, target)`` / ``f(input, target, metadata)``, the meta forms
+    ``f(input, metadata)`` / ``f(target, metadata)``, and mixed VIEW arguments like
+    ``f(im: InputMeta, tm: TargetMeta)`` or ``f(x: Input, tm: TargetMeta)``. The result
+    must be ``None`` (drop), a full ``Sample`` (takes over), or a tuple of the SAME arity
+    — each element merged per its binding (a view/2-tuple element for a ``*_meta`` binding
+    replaces value + metadata; a bare element replaces only the value). Metadata-bearing
+    elements merge left-to-right (the LAST metadata write wins — they usually share the
+    one live dict anyway, which the op may also mutate in place).
+    """
+    args = [_BIND_GET[b](sample) for b in bindings]
+    result = op(*args)
     if result is None:
         return None
-    return _refresh_type(result, op)
+    if isinstance(result, Sample):
+        return _refresh_type(result, op)
+    # A NAMED view is itself a tuple — returning ONE view from a multi-binding op would be
+    # silently misread as two elements, so it only counts as the whole result at arity 1.
+    is_single_view = isinstance(result, (InputMeta, TargetMeta, Pair))
+    if (is_single_view and len(bindings) != 1) or not (isinstance(result, tuple) and len(result) == len(bindings)):
+        raise TypeError(
+            f"{type(op).__name__}: an unpacked op bound as {bindings!r} must return a tuple of the "
+            f"same arity, a full Sample, or None — got {type(result).__name__}"
+        )
+    updates: Dict[str, Any] = {}
+    for binding, element in zip(bindings, result):
+        if binding in ("input", "target", "metadata"):
+            updates[binding] = element
+        else:  # input_meta / target_meta
+            field = "input" if binding == "input_meta" else "target"
+            if isinstance(element, tuple) and len(element) == 2:
+                updates[field] = element[0]
+                updates["metadata"] = element[1]
+            else:  # bare value: only the field changes (in-place meta mutation is already live)
+                updates[field] = element
+    return _refresh_type(sample._replace(**updates), op)
+
+
+def _apply_view(sample: Sample, op: Any, contract: Any) -> Optional[Sample]:
+    """Bind a field-scoped op's declared view from ``sample``, apply, and merge the result back.
+
+    Unpacked ops route through :func:`_apply_bindings` (per-argument scopes). Packed
+    single-view scopes (``None`` always drops; a returned ``Sample`` always takes over;
+    metadata dicts are handed live, so in-place mutation propagates):
+
+    - ``input`` / ``target`` — the bare value in, the new value out (other fields kept);
+    - ``metadata`` — the dict in, the (new) dict out;
+    - ``pair`` — a `Pair` in (a plain-tuple-annotated op indexes it identically), a
+      2-tuple out replaces input+target (metadata kept);
+    - ``input_meta`` / ``target_meta`` — the named view in; a view/2-tuple out replaces
+      value + metadata; a bare value out replaces only the value.
+    """
+    if contract.style == "unpacked" and contract.bindings:
+        return _apply_bindings(sample, op, contract.bindings)
+    scope = contract.accepts
+
+    if scope == "input" or scope == "target":
+        field = scope
+        result = op(getattr(sample, field))
+        if result is None:
+            return None
+        return _refresh_type(sample._replace(**{field: result}), op)
+
+    if scope == "metadata":
+        result = op(sample.meta)
+        if result is None:
+            return None
+        if isinstance(result, Sample):
+            return _refresh_type(result, op)
+        if isinstance(result, dict):
+            return _refresh_type(sample._replace(metadata=result), op)
+        raise _view_error(op, scope, result)
+
+    if scope == "pair":
+        result = op(Pair(sample.input, sample.target))
+        if result is None:
+            return None
+        if isinstance(result, Sample):
+            return _refresh_type(result, op)
+        if isinstance(result, tuple) and len(result) == 2:
+            return _refresh_type(sample._replace(input=result[0], target=result[1]), op)
+        raise _view_error(op, scope, result)
+
+    if scope in ("input_meta", "target_meta"):
+        field = "input" if scope == "input_meta" else "target"
+        result = op(sample.input_meta() if scope == "input_meta" else sample.target_meta())
+        if result is None:
+            return None
+        if isinstance(result, Sample):
+            return _refresh_type(result, op)
+        if isinstance(result, tuple) and len(result) == 2:
+            return _refresh_type(sample._replace(**{field: result[0], "metadata": result[1]}), op)
+        return _refresh_type(sample._replace(**{field: result}), op)
+
+    # A packed "sample"-scope op took the _apply_op fast path; anything else is defensive.
+    result = op(sample)  # pragma: no cover
+    return None if result is None else _refresh_type(result, op)  # pragma: no cover
 
 
 def _describe_deferred_source(source: Any) -> str:
@@ -185,34 +316,37 @@ class _Carried(NamedTuple):
 
 
 def _apply_op_native(carrier: Any, op: Any) -> Any:
-    """Apply one op to a NATIVE carrier (Sample / metadata-free pair / bare value).
+    """Apply one op to a NATIVE carrier (Sample / pair / bare value / a field view).
 
-    The op's introspected contract (:func:`sampleflux.kinds.op_contract`) picks the
-    adaptation:
+    Adaptation rules (the op's contract via :func:`sampleflux.kinds.op_contract`):
 
-    - a **pair-op** on a Sample carrier receives ``(input, target)`` and its returned
-      pair merges back via ``_replace`` (metadata preserved);
-    - a **sample-op** on a pair/value carrier receives a PROMOTED Sample view
-      (``Sample.from_any`` — promotion is one-way and sticky, so op-written metadata is
-      never dropped);
-    - an **any-op** receives the carrier verbatim (untyped ops behave exactly as today).
+    - a **Sample** carrier routes through :func:`_apply_op` (which binds every scope);
+    - an **any-op** receives the carrier verbatim (untyped ops behave exactly as today);
+    - two NATIVE fast lanes keep metadata-free data metadata-free: a pair-scope op on a
+      pair carrier (result stays a pair) and an input-scope op on a bare value (result
+      stays a bare value);
+    - everything else PROMOTES the carrier to a Sample view (``Sample.from_any`` — view
+      types like ``InputMeta`` coerce field-correctly) — promotion is one-way and sticky,
+      so op-written metadata is never dropped.
     """
-    from sampleflux.kinds import op_contract
+    from sampleflux.kinds import classify_carrier, op_contract
 
     contract = op_contract(op)
     if isinstance(carrier, Sample):
-        if contract.accepts == "pair":
-            result = op(carrier.to_pair())
-            if result is None:
-                return None
-            if isinstance(result, tuple) and len(result) == 2:
-                return carrier._replace(input=result[0], target=result[1])
-            return result
         return _apply_op(carrier, op)
-    if contract.accepts == "sample":
-        return _apply_op(Sample.from_any(carrier), op)  # promotion is sticky
-    result = op(carrier)
-    return result
+    if contract.accepts == "any":
+        return op(carrier)
+    kind = classify_carrier(carrier)
+    if contract.accepts == "pair" and kind == "pair":
+        result = op(carrier[0], carrier[1]) if contract.style == "unpacked" else op(tuple(carrier))
+        if result is None:
+            return None
+        if isinstance(result, (Sample, tuple)):
+            return result
+        raise _view_error(op, "pair", result)
+    if contract.accepts == "input" and kind == "value":
+        return op(carrier)
+    return _apply_op(Sample.from_any(carrier), op)  # promotion is sticky
 
 
 def _expand(op: Any, carrier: Any) -> List[Any]:
@@ -392,10 +526,10 @@ class Flux(torch.utils.data.Dataset[Sample]):
 
     @classmethod
     def from_ops_yaml(cls, path: str, source: Optional[Iterable[Any]] = None) -> "Flux":
-        """Attach an ops-only Confluid YAML (e.g. exported from FluxStudio) to ``source``.
+        """Attach an ops-only Confluid YAML (e.g. one exported by a pipeline-authoring tool) to ``source``.
 
         ``path`` is the ``{ops: [!class:...()]}`` document produced by
-        :func:`fluxstudio.export.export_ops_yaml` (the ``fluxstudio export`` CLI or the
+        an external graph exporter's ops-export (the CLI or the
         canvas Export button). It also accepts an inline YAML string (``confluid.load``
         handles both).
 

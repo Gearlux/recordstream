@@ -20,19 +20,19 @@ class DropMetadataOp:
     A key is DROPPED when it matches an ``exclude`` pattern AND does NOT match any ``include``
     pattern — so ``include`` PROTECTS keys and takes priority over ``exclude`` (the rsync /
     gitignore include-wins model). Strips bookkeeping you don't want a downstream sink to
-    serialise — e.g. the internal ``__taidal_stash_*`` snapshots FluxStudio's DAG -> sequential
-    export leaves on the metadata bus (a stashed complex signal). The replacement metadata is a
+    serialise — e.g. a bulky ``Stash*Op`` snapshot (a stashed complex signal) kept on the
+    metadata bus for a ``Parallel`` crossing. The replacement metadata is a
     fresh dict (copy-on-write); ``input`` / ``target`` are untouched. Single-sample only (reads
     ``sample.meta``), like ``CopyMetadataOp`` — drop keys before collation.
 
     Args:
         exclude: Glob patterns (``fnmatch``: ``*`` = any run, ``?`` = one char, ``[seq]`` = a set)
             for keys to REMOVE. A pattern with NO wildcards matches that key exactly. Case-sensitive.
-            E.g. ``__taidal_stash*`` removes every auto-stash snapshot; with no ``exclude`` nothing
+            E.g. ``spec_*`` removes every spec-prefixed snapshot; with no ``exclude`` nothing
             is dropped.
         include: Glob patterns for keys to KEEP even when they match ``exclude`` — higher priority,
-            so it carves exceptions out of ``exclude``. E.g. ``exclude=["__taidal_stash*"]`` +
-            ``include=["__taidal_stash_456:*"]`` drops every stash key EXCEPT node 456's. ``include``
+            so it carves exceptions out of ``exclude``. E.g. ``exclude=["spec_*"]`` +
+            ``include=["spec_keep"]`` drops every ``spec_*`` key EXCEPT the protected one. ``include``
             only ever protects against ``exclude`` (with no ``exclude`` it has no effect).
     """
 

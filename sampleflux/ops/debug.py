@@ -61,7 +61,7 @@ class PrintSampleOp:
     A pipeline probe: emits a compact description of the sample — ``input`` / ``target`` shape+dtype
     plus a length-capped value preview (large arrays elided), and the ``metadata`` (values
     summarised the same way) — to the Loggair logger (the LOG file + console) and, by default, to stdout via
-    ``print`` (so it shows in a terminal / the FluxStudio node output panel regardless of log
+    ``print`` (so it shows in a terminal / a GUI node output panel regardless of log
     level). The sample is returned UNCHANGED.
 
     Args:

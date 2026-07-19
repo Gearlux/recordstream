@@ -11,7 +11,7 @@ correct.
 
 Note:
     Do not nest a ``Parallel`` op inside another ``Parallel.ops`` — workers
-    must not themselves spawn workers. ``Tee``, ``Enable``, and any
+    must not themselves spawn workers. ``TransformChain``, ``Enable``, and any
     pickle-safe per-sample op are fine inside.
 """
 
@@ -45,7 +45,7 @@ class Parallel:
 
     def _materialize_ops(self) -> None:
         # Confluid post-construction paradigm leaves nested ops as Fluid
-        # markers; resolve them in-place on first use, mirroring Tee.
+        # markers; resolve them in-place on first use, mirroring TransformChain.
         for i, op in enumerate(self.ops):
             if isinstance(op, Fluid):
                 self.ops[i] = flow(op)

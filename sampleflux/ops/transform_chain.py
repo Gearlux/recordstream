@@ -1,15 +1,15 @@
 """``TransformChain`` — group a sequence of ops into a single named unit.
 
-A compose-group op (alongside ``Enable`` / ``Tee`` / ``Parallel``):
+A compose-group op (alongside ``Enable`` / ``Parallel``):
 wrap an ordered list of ``Sample → Sample`` callables so they appear as
-one node in FluxStudio (dynamic ``op_0``, ``op_1``, … ``SAMPLEFLUX_OP``
+one node on a visual canvas (dynamic ``op_0``, ``op_1``, … ``SAMPLEFLUX_OP``
 inputs instead of N wired ``SAMPLEFLUX_SAMPLE`` connections) and one named
 block in a Confluid YAML.
 
 Unlike ``Enable`` there is no boolean gate — the chain always fires.
 Unlike ``Parallel`` there is no worker pool — ops run sequentially in the
 calling thread.  If any op returns ``None`` the chain stops early and
-propagates ``None`` (consistent with ``FilterOp`` / ``Tee`` semantics).
+propagates ``None`` (consistent with ``FilterOp`` semantics).
 """
 
 from typing import List, Optional
@@ -27,7 +27,7 @@ class TransformChain:
     """Apply a fixed sequence of ops to every sample, always.
 
     Wrap a list of ops into one named unit so they appear as a single node
-    in FluxStudio (dynamic ``op_0``, ``op_1``, … ``SAMPLEFLUX_OP`` inputs)
+    on a visual canvas (dynamic ``op_0``, ``op_1``, … ``SAMPLEFLUX_OP`` inputs)
     and one block in Confluid YAML instead of N separate connections.
 
     If any op in the chain returns ``None`` the remaining ops are skipped

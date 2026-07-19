@@ -23,7 +23,7 @@ mandate; these are values, not data ops) describing one slot:
 value the producer can emit is acceptable to the consumer. Two flavours share the leaf logic:
 
 * ``accepts`` — *strict*; used by the runtime check where the producer is a concrete inferred type.
-* ``compatible`` — *permissive*; used at edit-time (FluxStudio canvas) and for discovery filtering:
+* ``compatible`` — *permissive*; used at edit-time (a visual canvas) and for discovery filtering:
   ``Any``/unknown on **either** side ⇒ compatible (honours "if not defined, assume Any"), and an
   unbounded producer axis against a bounded consumer axis is a soft-pass (the runtime check still
   catches an actual out-of-range value).
@@ -35,7 +35,7 @@ string; and :meth:`SampleType.from_hf_features` / :meth:`SampleType.to_hf_featur
 ``datasets.Features`` we already depend on (used for the concrete per-sample stored type).
 
 Everything is JSON round-trippable (``to_dict`` / :func:`type_from_dict` / :func:`sampletype_from_dict`)
-so specs ride the discovery manifest and can be re-implemented by FluxStudio's JS connection-validator.
+so specs ride the discovery manifest and can be re-implemented by a GUI connection-validator.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 TypeSpec = Union["AnyType", "ArrayType", "PythonType", "UnionType", "MappingType", "ListType"]
 
 # Closed enumerations for the small, fixed string sets the type system uses — declared as ``Literal``
-# rather than bare ``str`` so authors get a typo-checked value and UIs / the FluxStudio connection-
+# rather than bare ``str`` so authors get a typo-checked value and UIs / a GUI connection-
 # validator enumerate the choices straight from the annotation (``typing.get_args(...)``); the
 # workspace "prefer closed ``Literal``s over bare strings" mandate. Both are *deliberately closed* —
 # extend the Literal when adding real support (e.g. a ``"jax"`` framework), don't widen to ``str``.
@@ -131,7 +131,7 @@ _DTYPE_FAMILIES: Dict[str, FrozenSet[str]] = {
 }
 
 #: A concrete dtype name — a closed ``Literal`` (not bare ``str``) so an authored ``ACCEPTS`` /
-#: ``PRODUCES`` dtype is typo-checked and UIs / the FluxStudio connection-validator enumerate the
+#: ``PRODUCES`` dtype is typo-checked and UIs / a GUI connection-validator enumerate the
 #: choices via ``typing.get_args(Dtype)``. These ARE the union of the family members above (pinned
 #: equal in ``tests/test_typespec.py`` so the two can't drift). Authoring uses canonical lowercase
 #: names; aliases / casing (``"double"``, ``"FLOAT32"``) and genuinely exotic, platform-dependent

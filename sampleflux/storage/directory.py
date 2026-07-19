@@ -8,7 +8,7 @@ from sampleflux.sample import Sample
 from sampleflux.storage.base import DataSink, Storage
 
 
-# category="sink": surfaced as a FluxStudio sink node (SAMPLEFLUX_OBJECT:sink → DatasetProcessor.sink).
+# category="sink": surfaced by visual editors as a sink node docking into a DatasetProcessor's sink slot.
 @confluid.configurable(category="sink")
 class DirectorySink(Storage, DataSink):
     """

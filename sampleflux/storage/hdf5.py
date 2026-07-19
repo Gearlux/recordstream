@@ -77,7 +77,7 @@ class HDF5Source(Storage, DataSource):
         yield from scan_hdf5_metadata(self.path)
 
 
-# category="sink": surfaced as a FluxStudio sink node (SAMPLEFLUX_OBJECT:sink → DatasetProcessor.sink).
+# category="sink": surfaced by visual editors as a sink node docking into a DatasetProcessor's sink slot.
 @configurable(category="sink")
 class HDF5Sink(Storage, DataSink):
     """High-performance HDF5 data sink focused on Sample triplets."""

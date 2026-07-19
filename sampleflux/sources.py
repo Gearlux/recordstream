@@ -20,7 +20,7 @@ _SPLIT_NAMES = get_args(SplitName)
 # input/target features" — the full-traceability option, kept OPT-IN (``None`` / ``[]`` still = no
 # extra metadata) so existing configs are unaffected. Resolved against the loaded dataset's
 # ``column_names`` at construction. Accepted bare (``"*"``) or as the one-element list (``["*"]``);
-# FluxStudio's metadata picker offers it as a selectable "*" entry.
+# Visual editors offer it as a selectable "*" entry in a metadata picker.
 METADATA_ALL_FEATURES = "*"
 
 
@@ -411,7 +411,7 @@ class ConcatSource:
     The indexable counterpart to :class:`sampleflux.core.JointFlux` (which is iteration-only):
     ``len`` is the sum of the parts and ``source[i]`` maps a global index onto the owning
     sub-source, so a ``ConcatSource`` can itself be wrapped by :class:`DatasetSplit` /
-    :class:`RangeSource`. (Distinct from :class:`sampleflux.paired.AnnotationJoinSource`, which
+    :class:`RangeSource`. (Distinct from :class:`waivefront.paired.AnnotationJoinSource`, which
     *column-joins* annotations onto samples — this one *concatenates* sequences end to end.)
 
     Each sub-source must implement ``__len__`` and ``__getitem__``.

@@ -2,11 +2,11 @@
 
 This is the single home for "turn an arbitrary value into an image": the
 :class:`ConvertToImageOp` op plus the library functions
-(:func:`value_to_image` / :func:`sample_to_image`) that back it and FluxStudio's
+(:func:`value_to_image` / :func:`sample_to_image`) that back it and the GUI
 sample preview. It lives in sampleflux (not waivefront) because the conversion is
 fully generic — a 2-D map, a CHW tensor, a PIL image, a boolean mask all render
 the same way regardless of domain — so every project (waivefront's spectrogram
-render, any image dataset preview, FluxStudio nodes) reuses ONE implementation.
+render, any image dataset preview, GUI viewer nodes) reuses ONE implementation.
 
 Domain-specific rendering stays in the consuming package: waivefront's
 ``RenderOverlaysOp`` draws signal-region rectangles on top of the PIL image this
@@ -35,9 +35,9 @@ logger = get_logger("sampleflux.ops.image")
 
 # Closed set of supported matplotlib colormaps — the SINGLE source of truth for every colormap knob
 # across the workspace (``value_to_image`` / ``sample_to_image`` / ``ConvertToImageOp`` and, via
-# re-export, waivefront's renderers) AND for FluxStudio's colormap dropdown (which reads ``COLORMAPS``).
+# re-export, waivefront's renderers) AND for GUI colormap dropdowns (which read ``COLORMAPS``).
 # A closed ``Literal`` (never a bare ``str``) makes the choice self-documenting and machine-
-# introspectable: the FluxStudio palette, navigaitor's form-spec, and MCP tool schemas enumerate the
+# introspectable: visual-editor palettes, navigaitor's form-spec, and MCP tool schemas enumerate the
 # options straight from the annotation via ``typing.get_args`` instead of hard-coding a parallel list
 # that silently drifts. ``"gray"`` is the greyscale path (special-cased in ``_apply_colormap``); every
 # other name resolves through ``matplotlib.colormaps[name]``. Per the workspace "closed Literal"
@@ -148,7 +148,7 @@ def value_to_image(value: Any, colormap: Colormap = "viridis", max_size: int = 5
     """Render an arbitrary value (a Sample's ``input`` OR ``target``) to an ``(H, W, 3)`` uint8 RGB image.
 
     A generic, modality-agnostic preview usable from any SampleFlux pipeline (and
-    by FluxStudio's sample extractor, which renders the selected field). Handles:
+    by a GUI sample extractor, which renders the selected field). Handles:
 
     * ``PIL.Image`` — converted to RGB;
     * ``torch.Tensor`` — detached to numpy (CHW collapsed to HWC below);
@@ -189,12 +189,12 @@ def sample_to_image(sample: Sample, colormap: Colormap = "viridis", max_size: in
 # --------------------------------------------------------------------------- #
 # Array introspection helpers — channel selection + histogram.
 #
-# These back FluxStudio's "Array / Tensor Histogram" viewer node (and are usable
+# These back GUI "Array / Tensor Histogram" viewer nodes (and are usable
 # from any pipeline / notebook): a generic, modality-agnostic way to look at the
 # RAW numeric values of an array/tensor — pick a channel, render it, and bin its
 # values. Pure functions (NOT @configurable ops): they measure/derive, they don't
 # transform a Sample, so they're library helpers like value_to_image — not canvas
-# nodes. They live here (not in the FluxStudio node) so the computation is reusable
+# nodes. They live here (not in the GUI node) so the computation is reusable
 # and unit-tested, per the workspace "rendering/analysis lives in sampleflux" mandate.
 # --------------------------------------------------------------------------- #
 
@@ -238,7 +238,7 @@ def _channel_axis(shape: Tuple[int, ...]) -> int:
 
     Deliberately distinct from the other two channel heuristics in this workspace, each scoped to a
     narrower job: :func:`_render_rgb`'s ``{1,3,4}``-membership test is RGB-render-specific (it only
-    recognises 1/3/4-channel *images*), and ``fluxstudio.nodes.SampleExtractorNode._as_2d`` is
+    recognises 1/3/4-channel *images*), and a GUI extractor's float-only mask rule is
     mask-specific (float-only). For a general N-channel feature map (e.g. an 8-channel tensor) the
     smallest-axis rule is the most defensible default; documented here so the three never look like an
     accidental disagreement.
@@ -363,7 +363,7 @@ def confusion_matrix_payload(
 ) -> Dict[str, Any]:
     """Structure a confusion matrix + class names into a JSON-safe payload for a GUI viewer.
 
-    Backs FluxStudio's *Confusion Matrix* viewer node (``fluxstudio.nodes.ConfusionMatrixViewerNode``).
+    Backs GUI *Confusion Matrix* viewer nodes.
     The MATH that lives here is the three normalizations (the viewer toggles between them WITHOUT a
     re-run — the JS only colours + labels + hovers): ``true`` (each row / actual-class sums to 1),
     ``pred`` (each column / predicted-class sums to 1) and ``all`` (the whole matrix sums to 1). Every
@@ -440,7 +440,7 @@ def confusion_matrices_payload(metrics: Any, class_names: Optional[Sequence[Any]
     ``_is_square_2d``, by SHAPE not name), returning one :func:`confusion_matrix_payload` per match
     (each tagged with its metric ``name``) in dict order, or ``[]`` when none. A bare square-2D
     ``metrics`` (not a dict) is treated as a single matrix named ``"confusion_matrix"``. This is what
-    lets FluxStudio's *Confusion Matrix* viewer render ALL matrices from one all-metrics output (there
+    lets a GUI *Confusion Matrix* viewer render ALL matrices from one all-metrics output (there
     can be several). ``class_names`` labels every matrix the same way (they share the class set).
 
     Args:
@@ -469,7 +469,7 @@ def _sanitize_finite(x: float) -> Optional[float]:
 # --------------------------------------------------------------------------- #
 
 # Closed 9-grid set of text anchor positions (a closed Literal per the workspace mandate, so the
-# choice is a dropdown in FluxStudio / navigaitor enumerated from one source of truth).
+# choice is a dropdown in GUIs / navigaitor enumerated from one source of truth).
 TextPosition = Literal[
     "top-left",
     "top",
@@ -532,7 +532,7 @@ def draw_text(
 ) -> np.ndarray:
     """Render ``text`` onto ``image`` (or a fresh ``background`` canvas) → an ``(H, W, 3)`` uint8 RGB array.
 
-    The single, modality-agnostic "draw text on an image" renderer (FluxStudio's *Draw Text to Image*
+    The single, modality-agnostic "draw text on an image" renderer (a GUI *Draw Text to Image*
     node is thin glue over it). When ``image`` is ``None`` a blank ``(height, width)`` canvas of color
     ``background`` is created; otherwise the value is coerced to an RGB image (via :func:`_render_rgb`,
     so PIL / ndarray / tensor / 2-D maps all work) and drawn on a copy. The text is word-wrapped to the

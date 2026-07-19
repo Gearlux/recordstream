@@ -53,23 +53,18 @@ sampleflux = "sampleflux"
 sampleflux-core = "sampleflux.core"
 sampleflux-sources = "sampleflux.sources"
 sampleflux-ops-parallel = "sampleflux.ops.parallel"
-sampleflux-ops-tee = "sampleflux.ops.tee"
 sampleflux-ops-enable = "sampleflux.ops.enable"
 sampleflux-ops-random-apply = "sampleflux.ops.random_apply"
 # ConfigureOp (per-sample parameter injection — the helios Configure pattern); entry-point
 # changes need an editable reinstall before FluxStudio/navigaitor discovery sees the module.
 sampleflux-ops-configure = "sampleflux.ops.configure"
 sampleflux-ops-formula = "sampleflux.ops.formula"
-# CaptureOutputOp (records an op's @output value into metadata — the capture half of
-# FluxStudio's op-@output -> param wiring, paired with ConfigureOp(UnstashInputOp)).
-sampleflux-ops-capture = "sampleflux.ops.capture"
 sampleflux-ops-transform-chain = "sampleflux.ops.transform_chain"
 # Context ops (Save/Use/Drop/Apply/Capture/Mix) — the graph-plane building blocks lowered from flow: docs
 sampleflux-ops-context = "sampleflux.ops.context"
 # The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
 sampleflux-flow = "sampleflux.flow"
-# SigMF recordings (SigMFSink <-> SigMFSource) + the queryable-metadata view source
-sampleflux-storage-sigmf = "sampleflux.storage.sigmf"
+# The queryable-metadata scan protocol + MetadataFilterSource view source
 sampleflux-storage-query = "sampleflux.storage.query"
 sampleflux-ops-sink = "sampleflux.ops.sink"
 sampleflux-ops-stash = "sampleflux.ops.stash"

@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from loggair import get_logger
 
 from sampleflux.kinds import classify_carrier
-from sampleflux.sample import Sample
+from sampleflux.sample import InputMeta, Sample, TargetMeta
 
 logger = get_logger(__name__)
 
@@ -125,3 +125,15 @@ def pair_collate(items: Sequence[Any]) -> Tuple[Any, Any]:
 def value_collate(items: Sequence[Any]) -> Any:
     """Default value collate: the bare values stacked."""
     return _stack(list(items))
+
+
+@register_collate("input_meta")
+def input_meta_collate(items: Sequence[Any]) -> InputMeta:
+    """Default InputMeta collate: stacked inputs + the per-item metadata dicts as a list."""
+    return InputMeta(_stack([item.input for item in items]), [dict(item.metadata) for item in items])
+
+
+@register_collate("target_meta")
+def target_meta_collate(items: Sequence[Any]) -> TargetMeta:
+    """Default TargetMeta collate: stacked targets + the per-item metadata dicts as a list."""
+    return TargetMeta(_stack([item.target for item in items]), [dict(item.metadata) for item in items])

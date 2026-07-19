@@ -12,7 +12,7 @@ wire pipeline pieces without any hand-written tool definitions (the workspace's
 * **Discovery** (callable -> JSON schema): :func:`introspect_callable` reflects
   a single callable into a schema (signature + docstring + the ``ACCEPTS`` /
   ``PRODUCES`` typespec contract), and :func:`scan_module` does the same for
-  every callable *defined in* a module. FluxStudio reads these to auto-generate
+  every callable *defined in* a module. visual editors read these to auto-generate
   ComfyUI nodes and their property panels; navigaitor builds its MCP form-spec
   from the same data.
 """
@@ -109,7 +109,7 @@ def introspect_callable(func: Callable) -> Dict[str, Any]:
     ``*args`` / ``**kwargs``), plus the declared ``ACCEPTS`` / ``PRODUCES``
     typespec contract when present.
 
-    Use: FluxStudio reads this to render a node and its property-panel widgets,
+    Use: a visual editor reads this to render a node and its property-panel widgets,
     and it feeds navigaitor's MCP form-spec.
     """
     try:
@@ -154,7 +154,7 @@ def scan_module(path_or_name: Union[str, Path]) -> List[Dict[str, Any]]:
     module — names merely imported into it are filtered out by checking
     ``member.__module__ == mod_name``.
 
-    Use: the entry point for whole-module discovery — FluxStudio's ``bridge``
+    Use: the entry point for whole-module discovery — a visual editor's bridge
     calls this to auto-generate one node per source/op, fulfilling the
     "never require manual tool definitions" mandate.
     """

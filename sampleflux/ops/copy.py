@@ -1,9 +1,9 @@
 """Defensive deepcopy ops.
 
 Use these when a downstream op mutates ``sample.input`` / ``sample.target``
-in place and you want subsequent branches (or external references) to see
-the pre-mutation value. ``Tee`` shares a single ``Sample`` across all
-branches by design, so isolation is opt-in via these ops.
+in place and you want later readers (or external references) to see the
+pre-mutation value — e.g. before handing a sample to an in-place library
+call, or to decouple a snapshot from the live stream.
 """
 
 import copy

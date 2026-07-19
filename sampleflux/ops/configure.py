@@ -9,7 +9,7 @@ op (post-construction configuration — the confluid paradigm), then ``target`` 
 to the ORIGINAL sample.
 
 Modality-neutral — it threads any ``Sample`` through any ops — so it lives in core
-sampleflux (compose group, alongside ``Tee`` / ``Enable`` / ``RandomApply``).
+sampleflux (compose group, alongside ``TransformChain`` / ``Enable`` / ``RandomApply``).
 """
 
 from typing import Any, List, Optional, cast
@@ -31,7 +31,7 @@ class ConfigureOp:
     attribute of ``target``, then ``target`` is applied to the original sample.
 
     Confluid ``!class:`` / ``!lazy:`` markers in ``ops`` / ``target`` are flowed lazily at
-    first call (like ``Tee``), so a ``ConfigureOp()`` built from YAML costs nothing.
+    first call (like ``TransformChain``), so a ``ConfigureOp()`` built from YAML costs nothing.
 
     YAML — a per-sample threshold (the helios ``Configure(TimeInSamples, CropToSize)``
     shape, here deriving ``ThresholdOp.low_level`` from the sample's own statistics):

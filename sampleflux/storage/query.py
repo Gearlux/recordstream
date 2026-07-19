@@ -4,10 +4,10 @@ Two pieces (mirroring the ``sampleflux.projection`` protocol-plus-fallback desig
 
 - :class:`SupportsMetadataScan` — a source opts in by implementing
   ``iter_metadata() -> Iterator[(key, metadata_dict)]`` that reads ONLY the metadata
-  (HDF5 attrs, Zarr ``.zattrs``, a SigMF ``.sigmf-meta`` JSON) — never the data arrays.
+  (HDF5 attrs, Zarr ``.zattrs``, a sidecar JSON) — never the data arrays.
   Free-function scanners for the shipped sources live here (``scan_hdf5_metadata`` /
-  ``scan_zarr_metadata``); ``SigMFSource.iter_metadata`` implements the protocol
-  directly.
+  ``scan_zarr_metadata``); any external storage source can implement the protocol
+  directly (it is structural — no import of this module required).
 - :class:`MetadataFilterSource` — a view source (``category="source"``) yielding only
   the samples whose metadata passes a predicate: the YAML-friendly ``where`` expression
   (the same restricted-eval namespace as ``FormulaOp`` — metadata keys become variables)

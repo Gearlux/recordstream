@@ -20,6 +20,39 @@ TYPE_KEYS = (FEATURES_KEY, SPEC_KEY)
 Metadata = Union[Dict[str, Any], List[Dict[str, Any]]]
 
 
+# The named field VIEWS of a Sample — the closed vocabulary of what a transform can
+# process (the taxonomy `sampleflux.kinds` introspects and a visual editor can surface as
+# socket types). A view is a real runtime NamedTuple, so an op annotated with one
+# receives an object with named fields; the engine binds the view from the flowing
+# carrier and merges the result back (untouched fields preserved).
+class Pair(NamedTuple):
+    """The classic metadata-free AI pair ``(input, target)`` — a named 2-tuple view."""
+
+    input: Any
+    target: Any = None
+
+
+class InputMeta(NamedTuple):
+    """The ``(input, metadata)`` view — a transform that reads/writes the input WITH its metadata.
+
+    ``metadata`` follows the same single-vs-batch duality as ``Sample.metadata``: one dict
+    per item, a list of dicts after collation.
+    """
+
+    input: Any
+    metadata: Metadata = {}
+
+
+class TargetMeta(NamedTuple):
+    """The ``(target, metadata)`` view — a transform that reads/writes the target WITH its metadata.
+
+    ``metadata`` follows the same single-vs-batch duality as ``Sample.metadata``.
+    """
+
+    target: Any
+    metadata: Metadata = {}
+
+
 # Standardized Sample: (input, target, metadata)
 # This allows SampleFlux to handle complex pipelines while remaining
 # compatible with simple PyTorch/HF (input, target) pairs.
@@ -34,6 +67,14 @@ class Sample(NamedTuple):
     def to_pair(self) -> Tuple[Any, Any]:
         """The metadata-free ``(input, target)`` view (the native-engine pair carrier)."""
         return (self.input, self.target)
+
+    def input_meta(self) -> "InputMeta":
+        """The ``(input, metadata)`` view — the SAME metadata dict (mutation propagates)."""
+        return InputMeta(self.input, self.meta)
+
+    def target_meta(self) -> "TargetMeta":
+        """The ``(target, metadata)`` view — the SAME metadata dict (mutation propagates)."""
+        return TargetMeta(self.target, self.meta)
 
     @property
     def is_batched(self) -> bool:
@@ -102,9 +143,20 @@ class Sample(NamedTuple):
 
     @classmethod
     def from_any(cls, obj: Any) -> "Sample":
-        """Coerce raw data from various sources into a Sample."""
+        """Coerce raw data from various sources into a Sample.
+
+        The named field VIEWS are recognised BEFORE the generic tuple rule — an
+        ``InputMeta``/``TargetMeta``/``Pair`` IS a tuple, and positional coercion would
+        silently misread ``(input, metadata)`` as ``(input, target)``.
+        """
         if isinstance(obj, cls):
             return obj
+        if isinstance(obj, InputMeta):
+            return cls(obj.input, None, obj.metadata)
+        if isinstance(obj, TargetMeta):
+            return cls(None, obj.target, obj.metadata)
+        if isinstance(obj, Pair):
+            return cls(obj.input, obj.target, {})
         if isinstance(obj, tuple):
             if len(obj) >= 3:
                 return cls(obj[0], obj[1], obj[2] or {})

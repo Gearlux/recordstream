@@ -1,6 +1,6 @@
 """``Enable`` — toggle one or more ops on/off via a single named CLI flag.
 
-A compose-group op (alongside ``Tee`` / ``Parallel``): wrap an inner op-list
+A compose-group op (alongside ``TransformChain`` / ``Parallel``): wrap an inner op-list
 so the whole chain can be switched on or off from one boolean attribute whose
 name becomes the CLI flag. Modality-neutral — it threads any ``Sample``
 through any ops — so it lives in core sampleflux, not a domain package.

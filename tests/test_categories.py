@@ -10,7 +10,6 @@ pinned here as a regression gate.
 from confluid.registry import get_registry
 
 from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from sampleflux.ops.capture import CaptureOutputOp
 from sampleflux.ops.configure import ConfigureOp
 from sampleflux.ops.copy import CopyInputOp
 from sampleflux.ops.debug import PrintSampleOp
@@ -18,17 +17,7 @@ from sampleflux.ops.enable import Enable
 from sampleflux.ops.formula import FormulaOp
 from sampleflux.ops.image import ConvertToImageOp, NormalizeToUint8Op
 from sampleflux.ops.metadata import DropMetadataOp
-from sampleflux.ops.numpy import (
-    FftShiftOp,
-    FourierOp,
-    IfftShiftOp,
-    InverseFourierOp,
-    RescaleOp,
-    SpectrumScalingOp,
-    StandardizeOp,
-    ThresholdOp,
-    WindowOp,
-)
+from sampleflux.ops.numpy import RescaleOp, StandardizeOp, ThresholdOp
 from sampleflux.ops.parallel import Parallel
 from sampleflux.ops.sink import SampleSinkOp
 from sampleflux.ops.stash import StashTargetOp, UnstashTargetOp
@@ -39,14 +28,7 @@ from sampleflux.ops.target import (
     MasksToDetectionBoxesOp,
     MetadataToTargetOp,
 )
-from sampleflux.ops.tee import Tee
-from sampleflux.ops.torch import FftShiftOp as TorchFftShiftOp
-from sampleflux.ops.torch import FourierOp as TorchFourierOp
-from sampleflux.ops.torch import IfftShiftOp as TorchIfftShiftOp
-from sampleflux.ops.torch import InverseFourierOp as TorchInverseFourierOp
-from sampleflux.ops.torch import SpectrumScalingOp as TorchSpectrumScalingOp
 from sampleflux.ops.torch import ToTensorOp
-from sampleflux.ops.torch import WindowOp as TorchWindowOp
 from sampleflux.ops.transform_chain import TransformChain
 from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
 from sampleflux.storage.directory import DirectorySink
@@ -94,19 +76,6 @@ def test_op_classes_tagged() -> None:
     assert RescaleOp.__confluid_category__ == "op"
     assert StandardizeOp.__confluid_category__ == "op"
     assert ThresholdOp.__confluid_category__ == "op"
-    assert FourierOp.__confluid_category__ == "op"
-    assert TorchFourierOp.__confluid_category__ == "op"
-    assert InverseFourierOp.__confluid_category__ == "op"
-    assert TorchInverseFourierOp.__confluid_category__ == "op"
-    assert FftShiftOp.__confluid_category__ == "op"
-    assert TorchFftShiftOp.__confluid_category__ == "op"
-    assert IfftShiftOp.__confluid_category__ == "op"
-    assert TorchIfftShiftOp.__confluid_category__ == "op"
-    assert WindowOp.__confluid_category__ == "op"
-    assert TorchWindowOp.__confluid_category__ == "op"
-    assert SpectrumScalingOp.__confluid_category__ == "op"
-    assert TorchSpectrumScalingOp.__confluid_category__ == "op"
-    assert Tee.__confluid_category__ == "op"
     assert Enable.__confluid_category__ == "op"
     assert TransformChain.__confluid_category__ == "op"
     assert SampleSinkOp.__confluid_category__ == "op"
@@ -117,7 +86,6 @@ def test_op_classes_tagged() -> None:
     assert MasksToDetectionBoxesOp.__confluid_category__ == "op"
     assert ConfigureOp.__confluid_category__ == "op"
     assert FormulaOp.__confluid_category__ == "op"
-    assert CaptureOutputOp.__confluid_category__ == "op"
 
 
 def test_storage_sink_classes_tagged() -> None:
@@ -141,19 +109,7 @@ def test_op_group_tags() -> None:
     assert RescaleOp.__confluid_group__ == "numpy"
     assert StandardizeOp.__confluid_group__ == "numpy"
     assert ThresholdOp.__confluid_group__ == "numpy"
-    assert FourierOp.__confluid_group__ == "numpy"
-    assert InverseFourierOp.__confluid_group__ == "numpy"
-    assert FftShiftOp.__confluid_group__ == "numpy"
-    assert IfftShiftOp.__confluid_group__ == "numpy"
     assert ToTensorOp.__confluid_group__ == "torch"
-    assert TorchFourierOp.__confluid_group__ == "torch"
-    assert TorchInverseFourierOp.__confluid_group__ == "torch"
-    assert TorchFftShiftOp.__confluid_group__ == "torch"
-    assert TorchIfftShiftOp.__confluid_group__ == "torch"
-    assert WindowOp.__confluid_group__ == "numpy"
-    assert SpectrumScalingOp.__confluid_group__ == "numpy"
-    assert TorchWindowOp.__confluid_group__ == "torch"
-    assert TorchSpectrumScalingOp.__confluid_group__ == "torch"
     assert CopyInputOp.__confluid_group__ == "structure"
     assert DropMetadataOp.__confluid_group__ == "structure"
     assert PrintSampleOp.__confluid_group__ == "debug"
@@ -164,13 +120,11 @@ def test_op_group_tags() -> None:
     assert DecodeTargetOp.__confluid_group__ == "structure"
     assert CocoToTorchVisionDetectionOp.__confluid_group__ == "structure"
     assert MasksToDetectionBoxesOp.__confluid_group__ == "structure"
-    assert Tee.__confluid_group__ == "compose"
     assert Parallel.__confluid_group__ == "compose"
     assert Enable.__confluid_group__ == "compose"
     assert TransformChain.__confluid_group__ == "compose"
     assert ConfigureOp.__confluid_group__ == "compose"
     assert FormulaOp.__confluid_group__ == "compose"
-    assert CaptureOutputOp.__confluid_group__ == "compose"
     assert ConvertToImageOp.__confluid_group__ == "image"
     assert NormalizeToUint8Op.__confluid_group__ == "image"
     assert SampleSinkOp.__confluid_group__ == "sink"
@@ -195,11 +149,6 @@ def test_categories_enumerable_via_registry() -> None:
         "RescaleOp",
         "StandardizeOp",
         "ThresholdOp",
-        "FourierOp",
-        "InverseFourierOp",
-        "FftShiftOp",
-        "IfftShiftOp",
-        "Tee",
         "Enable",
         "SampleSinkOp",
         "MetadataToTargetOp",
@@ -222,18 +171,12 @@ def test_groups_enumerable_via_registry() -> None:
         "RescaleOp",
         "StandardizeOp",
         "ThresholdOp",
-        "FourierOp",
-        "InverseFourierOp",
-        "FftShiftOp",
-        "IfftShiftOp",
     } <= registry.list_classes(group="numpy")
     # The FFT ops exist in BOTH framework groups (a numpy + a torch variant under the one name,
     # exactly like RescaleOp/StandardizeOp), so they surface under the torch group too.
-    assert {"ToTensorOp", "FourierOp", "InverseFourierOp", "FftShiftOp", "IfftShiftOp"} <= registry.list_classes(
-        group="torch"
-    )
+    assert {"ToTensorOp"} <= registry.list_classes(group="torch")
     assert {"ConvertToImageOp", "NormalizeToUint8Op"} <= registry.list_classes(group="image")
-    assert {"Tee", "Parallel", "Enable", "TransformChain"} <= registry.list_classes(group="compose")
+    assert {"Parallel", "Enable", "TransformChain"} <= registry.list_classes(group="compose")
     assert {"SampleSinkOp"} <= registry.list_classes(group="sink")
     assert {
         "MetadataToTargetOp",
@@ -243,4 +186,4 @@ def test_groups_enumerable_via_registry() -> None:
         "MasksToDetectionBoxesOp",
     } <= registry.list_classes(group="structure")
     # group × category intersect, like task × role.
-    assert "Tee" in registry.list_classes(category="op", group="compose")
+    assert "TransformChain" in registry.list_classes(category="op", group="compose")

@@ -1,6 +1,6 @@
 """``RandomApply`` — apply an op with a given probability.
 
-A compose-group op (alongside ``Enable`` / ``Tee`` / ``Parallel``):
+A compose-group op (alongside ``Enable`` / ``TransformChain`` / ``Parallel``):
 wrap any single ``Sample → Sample`` op so it fires only *p* fraction of
 the time. Samples that are skipped pass through unchanged.
 
