@@ -24,7 +24,7 @@ extra. Container transforms (``Compose`` / ``RandomApply`` / ``RandomChoice`` /
 ``RandomOrder``) are deliberately NOT generated — chaining ops is native SampleFlux.
 """
 
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from loggair import get_logger
 
@@ -32,6 +32,17 @@ from sampleflux.ops._augment_bridge import generate_transform_ops
 from sampleflux.ops.torchvision import TorchvisionTransformOp
 
 logger = get_logger(__name__)
+
+
+def __getattr__(name: str) -> Any:
+    # Generated names live in module globals; this fallback only fires for genuinely
+    # missing ones — and tells mypy the dynamic attributes exist (module-__getattr__ rule).
+    raise AttributeError(
+        f"module {__name__!r} has no generated op {name!r} — torchvision may be missing "
+        '(install via `pip install "sampleflux[vision]"`) or the transform may not exist '
+        "in the installed version."
+    )
+
 
 #: v2 names not generated: containers (native chaining) + the deprecated v1 shim ToTensor.
 _EXCLUDED = frozenset({"Compose", "RandomApply", "RandomChoice", "RandomOrder", "ToTensor", "Transform"})

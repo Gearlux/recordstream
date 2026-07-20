@@ -40,7 +40,7 @@ _SEED_DOC = "    seed: Compose seed for deterministic draws. ``None`` = non-dete
 
 def _param_specs(transform_cls: type) -> List[inspect.Parameter]:
     """The transform constructor's named parameters (``self`` and variadics dropped)."""
-    sig = inspect.signature(transform_cls.__init__)
+    sig = inspect.signature(transform_cls.__init__)  # type: ignore[misc]
     return [
         p
         for n, p in sig.parameters.items()
@@ -96,12 +96,12 @@ def _make_op(
         if unknown:
             raise TypeError(f"{op_name}: unexpected parameters {sorted(unknown)}")
         if seed_param:
-            base.__init__(self, target=kwargs.get("target", "none"), seed=kwargs.get("seed"))
+            base.__init__(self, target=kwargs.get("target", "none"), seed=kwargs.get("seed"))  # type: ignore[misc]
         else:
-            base.__init__(self, target=kwargs.get("target", "none"))
+            base.__init__(self, target=kwargs.get("target", "none"))  # type: ignore[misc]
         for pname in pnames:
             setattr(self, pname, kwargs.get(pname, defaults[pname]))
-        self._params_key: Optional[tuple] = None
+        self._params_key = None
 
     # Synthesized signature/annotations: static introspection (to_pydantic / FluxStudio
     # widgets / parse_param_docs) sees the transform's real parameters, keyword-only, with
@@ -133,7 +133,7 @@ def _make_op(
             kwargs[pname] = value
         return transform_cls(**kwargs)
 
-    base_pipeline = base.pipeline.fget
+    base_pipeline = base.pipeline.fget  # type: ignore[attr-defined]
 
     def pipeline(self: Any) -> Any:
         # Rebuild the wrapped transform when any mirrored param changed (post-construction

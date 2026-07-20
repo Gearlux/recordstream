@@ -24,7 +24,7 @@ generated — chaining ops is native SampleFlux (``ops:`` lists, ``TransformChai
 ``AlbumentationsOp(transform=...)``.
 """
 
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from loggair import get_logger
 
@@ -32,6 +32,15 @@ from sampleflux.ops._augment_bridge import generate_transform_ops
 from sampleflux.ops.albumentations import AlbumentationsOp
 
 logger = get_logger(__name__)
+
+
+def __getattr__(name: str) -> Any:
+    # Generated names live in module globals; this fallback only fires for genuinely
+    # missing ones — and tells mypy the dynamic attributes exist (module-__getattr__ rule).
+    raise AttributeError(
+        f"module {__name__!r} has no generated op {name!r} — "
+        "the albumentations transform may not exist in the installed version."
+    )
 
 
 def _library_classes() -> List[Tuple[str, type]]:
