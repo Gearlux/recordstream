@@ -26,6 +26,10 @@ from confluid import configurable
 from loggair import get_logger
 from PIL import Image, ImageDraw
 
+from sampleflux.bag.items import Image as ImageItem
+from sampleflux.bag.items import NDArrayItem, item_data
+from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.transform import Transform
 from sampleflux.sample import Sample
 from sampleflux.typespec import ArrayType as _ArrayType
 from sampleflux.typespec import PythonType, SampleType, UnionType
@@ -704,9 +708,92 @@ class NormalizeToUint8Op:
         return sample._replace(input=self.normalize_to_uint8(arr, self.vmin, self.vmax))
 
 
+@configurable(category="op", group="image")
+class ConvertToImage(Transform):
+    """Typed twin of :class:`ConvertToImageOp` — an array-bearing field → an ``Image`` item.
+
+    The typed-bag counterpart of :class:`ConvertToImageOp`: instead of rendering
+    ``sample.input`` into a PIL image in place, it reads an array-bearing field from a
+    :class:`~sampleflux.TypedSample` and writes a fresh :class:`~sampleflux.Image` item
+    (HWC ``uint8`` RGB) under ``output``, tagged with the ``input`` role (it is the
+    pipeline's working image). Any other field passes through untouched.
+
+    Rendering is byte-identical to the legacy op — it reuses the SAME
+    :func:`value_to_image` core (:func:`_render_rgb` → optional flip → resize): a 2-D map is
+    colormapped, a 3-D array treated as an image, a boolean mask becomes 0/255, floats are
+    min-max normalized. Sizing matches the legacy op:
+
+    * ``width`` and ``height`` both > 0 → resize to exactly that raster;
+    * otherwise → bound the longest side by ``max_size``, preserving aspect.
+
+    Unlike the legacy op it does NOT publish ``image_width_px`` / ``image_height_px`` — the
+    ``Image`` item's array SHAPE carries the pixel dimensions, so a downstream consumer
+    (e.g. a back-projection) reads them straight off the payload; there is no shared
+    metadata dict to publish into in the typed model.
+
+    Args:
+        colormap: Colormap applied to 2-D maps — a supported ``Colormap`` name (``"gray"`` = greyscale).
+        width: Exact output width in pixels; resize to ``(width, height)`` when both width and height are > 0.
+        height: Exact output height in pixels; resize to ``(width, height)`` when both width and height are > 0.
+        max_size: When ``width``/``height`` aren't both set, bound the longest side to this many pixels (aspect kept).
+        flip_vertical: Mirror the image top-to-bottom (e.g. spectrogram row 0 = f_min → display f_max at the top).
+        field: Name of the source field to render; blank (default) picks the first array-bearing item in the bag.
+        output: Name of the field the ``Image`` item is written to (added if new); its role is set to ``input``.
+    """
+
+    handles = (NDArrayItem,)
+    consumes = (NDArrayItem,)
+    produces = (ImageItem,)
+
+    def __init__(
+        self,
+        colormap: Colormap = "gray",
+        width: int = 0,
+        height: int = 0,
+        max_size: int = 512,
+        flip_vertical: bool = False,
+        field: str = "",
+        output: str = "image",
+    ) -> None:
+        super().__init__()
+        self.colormap: Colormap = colormap
+        self.width = int(width)
+        self.height = int(height)
+        self.max_size = int(max_size)
+        self.flip_vertical = bool(flip_vertical)
+        self.field = field
+        self.output = output
+
+    def _find_source(self, sample: TypedSample) -> Any:
+        """Resolve the payload to render (``self.field`` or the first array-bearing item)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(f"ConvertToImage: field {self.field!r} not in sample (fields: {list(sample.keys())})")
+            return item_data(sample[self.field])
+        for _key, item in sample.items():
+            arr = _coerce_to_ndarray(item_data(item))
+            if arr is not None and arr.ndim in (2, 3):
+                return item_data(item)
+        raise ValueError(f"ConvertToImage: no array-bearing field in sample (fields: {list(sample.keys())})")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        rgb = _render_rgb(self._find_source(sample), self.colormap)
+        if self.flip_vertical:
+            rgb = rgb[::-1, :, :]
+        if self.width > 0 and self.height > 0:
+            out_arr = np.array(
+                Image.fromarray(rgb).resize((self.width, self.height), resample=Image.Resampling.BILINEAR)
+            )
+        else:
+            out_arr = _bound_longest_side(rgb, self.max_size)
+        out = sample.replace_field(self.output, ImageItem(out_arr, layout="HWC"))
+        return out.set_role(self.output, "input")
+
+
 __all__ = [
     "Colormap",
     "COLORMAPS",
+    "ConvertToImage",
     "ConvertToImageOp",
     "NormalizeToUint8Op",
     "value_to_image",

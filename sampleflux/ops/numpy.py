@@ -7,6 +7,9 @@ import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
+from sampleflux.bag.items import Mask, NDArrayItem, Regions, item_data
+from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.transform import Transform
 from sampleflux.sample import Sample
 from sampleflux.typespec import ArrayType, PythonType, SampleType, UnionType
 
@@ -430,6 +433,85 @@ class ThresholdOp:
         return sample._replace(input=mask)
 
 
+@configurable(category="op", group="numpy")
+class Threshold(Transform):
+    """Typed twin of :class:`ThresholdOp` — an array-bearing field → a boolean ``Mask`` item.
+
+    The typed-bag counterpart of :class:`ThresholdOp`: it reads the array at ``field`` (blank =
+    the first array-bearing item in the bag) and thresholds it into a boolean mask with the SAME
+    bound / comparison / expression math — this twin REUSES the legacy op verbatim, so the booleans
+    are identical — writing a :class:`~sampleflux.Mask` item under ``output`` tagged ``aux`` (a
+    threshold mask is an intermediate that a later op — e.g. :class:`ConnectedComponents` —
+    consumes, not a model input or target). Any other field passes through untouched.
+
+    Which mask is produced depends on which bounds are set, and the comparison for each is picked
+    by ``low_op`` / ``high_op`` (see :class:`ThresholdOp` for the full presence-driven rules and
+    the open-vs-closed interval semantics). At least one of ``low_level`` / ``high_level`` MUST be
+    set; passing neither raises ``ValueError`` when applied (the zero-arg default stays
+    constructible per the lazy-init convention).
+
+    Each bound is a numeric literal or a ``resolve_expression`` string — ``5.5`` / ``"5.5"``
+    (literal) or ``"$REF_SNR"`` (environment variable). NOTE: ``{meta_key}`` expressions have no
+    typed metadata source in the bag model (an item owns its own metadata; there is no shared
+    sample dict), so only literals and ``$ENV`` resolve here — a ``{key}`` bound raises ``KeyError``.
+
+    Args:
+        low_level: Lower bound (numeric literal or ``$ENV`` expression) compared with ``low_op`` when set;
+            ``None`` disables the lower bound.
+        high_level: Upper bound (numeric literal or ``$ENV`` expression) compared with ``high_op`` when set;
+            ``None`` disables the upper bound.
+        low_op: Lower-bound comparison — ``">"`` (strict, default) or ``">="`` (inclusive).
+        high_op: Upper-bound comparison — ``"<"`` (strict, default) or ``"<="`` (inclusive).
+        field: Name of the array field to threshold; blank (default) picks the first array-bearing item.
+        output: Name of the field the boolean ``Mask`` item is written to (added if new; role ``aux``).
+    """
+
+    handles = (NDArrayItem,)
+    consumes = (NDArrayItem,)
+    produces = (Mask,)
+
+    def __init__(
+        self,
+        low_level: Optional[Union[float, int, str]] = None,
+        high_level: Optional[Union[float, int, str]] = None,
+        low_op: LowComparison = ">",
+        high_op: HighComparison = "<",
+        field: str = "",
+        output: str = "mask",
+    ) -> None:
+        super().__init__()
+        self.low_level = low_level
+        self.high_level = high_level
+        self.low_op = low_op
+        self.high_op = high_op
+        self.field = field
+        self.output = output
+
+    def _find_array(self, sample: TypedSample) -> np.ndarray:
+        """Resolve the array to threshold (``self.field`` or the first array-bearing item)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(f"Threshold: field {self.field!r} not in sample (fields: {list(sample.keys())})")
+            data = item_data(sample[self.field])
+            if not isinstance(data, np.ndarray):
+                raise TypeError(f"Threshold: field {self.field!r} payload is {type(data).__name__}, expected an array")
+            return data
+        for _key, item in sample.items():
+            data = item_data(item)
+            if isinstance(data, np.ndarray):
+                return data
+        raise ValueError(f"Threshold: no array-bearing field in sample (fields: {list(sample.keys())})")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        arr = self._find_array(sample)
+        # Reuse the legacy op's threshold math VERBATIM on a shim Sample so the booleans are
+        # identical; the shim's empty metadata is why only literals / $ENV bounds resolve here.
+        legacy = ThresholdOp(self.low_level, self.high_level, self.low_op, self.high_op)
+        mask = legacy(Sample(input=arr, target=None, metadata={})).input
+        out = sample.replace_field(self.output, Mask(mask))
+        return out.set_role(self.output, "aux")
+
+
 def connected_component_bboxes(
     mask: np.ndarray, min_area_bins: int = 1, connectivity: int = 4
 ) -> List[Tuple[int, int, int, int]]:
@@ -654,3 +736,83 @@ class ConnectedComponentsOp:
         # validates min_area_bins / connectivity and raises the scipy ImportError.
         bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
         return sample._replace(input=bboxes)
+
+
+@configurable(category="op", group="numpy")
+class ConnectedComponents(Transform):
+    """Typed twin of :class:`ConnectedComponentsOp` — a boolean ``Mask`` → a ``Regions`` item.
+
+    The typed-bag counterpart of :class:`ConnectedComponentsOp`: it reads the
+    :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the bag, else the first
+    array-bearing item) as a 2-D boolean array and labels its connected ``True`` regions into
+    ``(row_min, row_max, col_min, col_max)`` inclusive bin-box tuples via the SAME shared
+    :func:`connected_component_bboxes` helper the legacy op uses (so the numbers are identical),
+    writing them as a :class:`~sampleflux.Regions` item under ``output``. That field is tagged
+    ``aux``: these are RAW detections (thresholded blobs), NOT model predictions — the ``pred``
+    role is reserved for a detector's output. Any other field passes through untouched.
+
+    The ``Regions.boxes`` list holds ``(row_min, row_max, col_min, col_max)`` tuples — the exact
+    generic bin-box format (row bounds first, then column bounds; inclusive) a downstream
+    back-projection reads to map bins to a signal / world coordinate frame. Components smaller than
+    ``min_area_bins`` are dropped; ``connectivity`` selects the 4- or 8-neighborhood. Requires
+    ``scipy`` (``pip install sampleflux[vision]``).
+
+    Args:
+        min_area_bins: Minimum component area in bins; smaller connected regions are dropped (``>= 1``).
+        connectivity: Pixel neighborhood — ``4`` (orthogonal only) or ``8`` (orthogonal + diagonal).
+        field: Name of the ``Mask`` field to label; blank (default) picks the first ``Mask`` (else first array).
+        output: Name of the field the ``Regions`` item is written to (added if new; role ``aux``).
+    """
+
+    handles = (Mask,)
+    consumes = (Mask,)
+    produces = (Regions,)
+
+    def __init__(
+        self,
+        min_area_bins: int = 1,
+        connectivity: int = 4,
+        field: str = "",
+        output: str = "boxes",
+    ) -> None:
+        super().__init__()
+        self.min_area_bins = int(min_area_bins)
+        self.connectivity = int(connectivity)
+        self.field = field
+        self.output = output
+
+    def _find_mask(self, sample: TypedSample) -> np.ndarray:
+        """Resolve the mask to label (``self.field``, else the first ``Mask``, else the first array)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(
+                    f"ConnectedComponents: field {self.field!r} not in sample (fields: {list(sample.keys())})"
+                )
+            data = item_data(sample[self.field])
+        else:
+            data = None
+            for _key, item in sample.items():
+                if isinstance(item, Mask):
+                    data = item_data(item)
+                    break
+            if data is None:
+                for _key, item in sample.items():
+                    payload = item_data(item)
+                    if isinstance(payload, np.ndarray):
+                        data = payload
+                        break
+            if data is None:
+                raise ValueError(
+                    f"ConnectedComponents: no Mask or array-bearing field in sample (fields: {list(sample.keys())})"
+                )
+        if not isinstance(data, np.ndarray):
+            raise TypeError(f"ConnectedComponents expects an np.ndarray mask, got {type(data).__name__}")
+        if data.ndim != 2:
+            raise ValueError(f"ConnectedComponents expects a 2-D mask; got shape {data.shape}")
+        return data
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        mask = self._find_mask(sample)
+        bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
+        out = sample.replace_field(self.output, Regions(boxes=list(bboxes)))
+        return out.set_role(self.output, "aux")

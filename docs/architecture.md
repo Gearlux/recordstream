@@ -434,3 +434,100 @@ out = Pipeline([
   decorator). The rename rationale is pinned here and in the module docstrings.
 - **Promoting this from PoC to the default model** is a workspace-wide decision that would re-scope
   the classic-engine mandates and port every consumer — out of scope for the proof of concept.
+
+---
+
+## Native typed transforms that change a field's TYPE (`ConvertToImage`/`Threshold`/`ConnectedComponents`, 2026-07-22)
+
+### Context
+
+Two shapes of typed transform exist. The first is the augmentation shape the base `Transform`
+was built for: it `handles` an item type and, per handled field, applies a registered kernel that
+returns *the same type* (a flip returns a flipped `Image`), so `image`, `mask`, and `boxes` move
+together and library transforms (torchvision v2 / albumentations) drop in through the adapter
+coercion registry. The workspace deliberately ships **no** native transforms of that shape —
+libraries cover it.
+
+But a running detection/segmentation front-end needs a different shape: **read one field, write a
+field of a DIFFERENT type**. Turning a numeric array into a displayable image, thresholding an
+array into a boolean mask, and labelling that mask into a set of bin boxes are each a *type
+change* (`array → Image`, `array → Mask`, `Mask → Regions`), not an in-place per-type edit. No
+library provides them, and the legacy classic-engine ops that do (`ConvertToImageOp`,
+`ThresholdOp`, `ConnectedComponentsOp`) operate on the `Sample(input, target, metadata)` triple,
+which the typed world does not carry. Without typed equivalents a `TypedSample` pipeline could not
+reach `Regions` from a raw array — the critical path for typed detection was blocked.
+
+### Decision
+
+Add native typed **twins** that subclass `Transform` and OVERRIDE `__call__` (rather than register
+a kernel), reading one field and writing a different-typed item — the same shape the domain
+package's `Spectrogram` twin (`Signal → Spectrogram`) already established:
+
+- A twin declares `handles` / `consumes` / `produces` **truthfully** as graph metadata (e.g.
+  `ConnectedComponents`: `consumes=(Mask,)`, `produces=(Regions,)`), but does its work in
+  `__call__`, not through the kernel-dispatch loop — kernel dispatch is for same-type per-field
+  edits, and a type change has one input field and one output field.
+- The source field is resolved by a small `_find_*` helper: an explicit `field=` name, else the
+  first item of the natural type (a `Mask` for `ConnectedComponents`) or the first array-bearing
+  item — every miss raises a `ValueError` naming the sample's fields.
+- The output is written with `sample.replace_field(output, item)` + `sample.set_role(output, role)`
+  (copy-on-write), and the role is chosen semantically: the working image is `input`, a threshold
+  mask and raw connected-component boxes are `aux` (intermediates, and specifically NOT `pred` —
+  that role is reserved for a detector's output).
+- Each twin **reuses its legacy op's math verbatim** so the numbers are pinned identical:
+  `ConvertToImage` calls the shared `_render_rgb`/`_bound_longest_side` render core;
+  `ConnectedComponents` calls the shared `connected_component_bboxes` helper; `Threshold`
+  delegates to a legacy `ThresholdOp` instance run on a shim `Sample`. The twins are STRICTLY
+  ADDITIVE — the legacy ops are untouched, because many consumers still use them via the `Sample`
+  path.
+
+The generic connected-components output format is a hard contract: `Regions.boxes` is a list of
+`(row_min, row_max, col_min, col_max)` inclusive integer tuples (**row bounds first, then column
+bounds**). A downstream back-projection reads exactly that order to map bins to a world / signal
+coordinate frame, so the tuple order is load-bearing, not incidental.
+
+### Consequences
+
+- A `TypedSample` carrying a raw 2-D array runs `ConvertToImage → Threshold → ConnectedComponents`
+  end-to-end and arrives at a `Regions` field with no legacy `Sample` anywhere — the typed
+  detection/segmentation front-end is unblocked.
+- Parity is free and provable: because each twin reuses the legacy math, a twin's output is
+  byte-identical to a legacy run on the equivalent `Sample` (pinned in
+  `tests/test_typed_generic_ops.py`).
+- `ConvertToImage` does NOT republish `image_width_px` / `image_height_px` (the legacy op wrote
+  them into the shared metadata dict). The `Image` item's array SHAPE carries the pixel
+  dimensions, and the typed model has no shared dict to write into — a consumer reads the dims off
+  the payload.
+- `Threshold`'s `{meta_key}` expression grammar has no typed home (an item owns its own metadata;
+  there is no shared sample dict), so only numeric literals and `$ENV` bounds resolve in the twin;
+  a `{key}` bound raises loudly. Literal dB thresholds — the critical path — are unaffected.
+- The twins carry `category="op"` + `group="image"`/`"numpy"`, so they are discoverable exactly
+  like the legacy ops (their modules were already entry-pointed; a class added to a registered
+  module needs no new entry point).
+
+### Example
+
+```python
+from sampleflux import TypedSample, Mask
+from sampleflux.ops.image import ConvertToImage
+from sampleflux.ops.numpy import Threshold, ConnectedComponents
+
+sample = TypedSample({"spec": Mask(db_spectrogram)})            # a raw 2-D array item
+sample = ConvertToImage()(sample)                               # + Image field (role "input")
+sample = Threshold(field="spec", low_level=-30.0)(sample)       # + Mask field (role "aux")
+sample = ConnectedComponents(field="mask")(sample)              # + Regions field (role "aux")
+
+sample["boxes"].boxes  # [(row_min, row_max, col_min, col_max), ...] — the pinned bin-box contract
+```
+
+### What you may change (and where it's documented)
+
+- **A twin's source-field resolution or output role** — keep the `_find_*` → `replace_field` →
+  `set_role` shape and a loud `ValueError` on a miss; `aux` vs `pred` is a semantic choice
+  (raw detections are `aux`).
+- **The `(row_min, row_max, col_min, col_max)` bin-box order is a contract** — a back-projection
+  depends on it; changing it is an architectural change that must update this record and every
+  consumer.
+- **Do not modify the legacy ops or reimplement their math in a twin** — a twin reuses the legacy
+  math so parity is guaranteed; the twins are additive and the legacy `Sample`-path consumers must
+  keep working.

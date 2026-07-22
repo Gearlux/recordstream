@@ -169,12 +169,16 @@ class Regions:
         scores: Optional per-box confidence scores.
         canvas: Optional ``(H, W)`` reference frame — the coordinate system boxes live in,
             so a geometric transform (flip / resize) has a self-contained frame.
+        extras: Auxiliary PER-BOX parallel arrays and region-set measurements keyed by name
+            (e.g. per-box durations/bandwidths/power readings) — item-scoped metadata that
+            travels WITH the boxes it describes.
     """
 
     boxes: List[Any] = field(default_factory=list)
     labels: Optional[List[Any]] = None
     scores: Optional[List[Any]] = None
     canvas: Optional[Tuple[int, int]] = None
+    extras: Dict[str, Any] = field(default_factory=dict)
 
 
 @register_item
