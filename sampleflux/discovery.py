@@ -12,9 +12,16 @@ wire pipeline pieces without any hand-written tool definitions (the workspace's
 * **Discovery** (callable -> JSON schema): :func:`introspect_callable` reflects
   a single callable into a schema (signature + docstring + the ``ACCEPTS`` /
   ``PRODUCES`` typespec contract), and :func:`scan_module` does the same for
-  every callable *defined in* a module. visual editors read these to auto-generate
-  ComfyUI nodes and their property panels; navigaitor builds its MCP form-spec
-  from the same data.
+  every callable *defined in* a module — a visual editor's node bridge reads
+  these to auto-generate canvas nodes and their property panels.
+
+The serialization half doubles as the workspace's generic string-callable hook
+pattern (:class:`~sampleflux.core.WrappedOp` stores its ``f`` this way; consuming
+packages reuse it for their own dotted-path hooks). Curated discovery (MCP
+form-specs, option pickers) builds on the Confluid registry instead — which
+registers classes AND builder functions, but only opt-in by name; this module is
+the registration-free complement (reflect over ANY callable, no curation, plus
+the callable→string dump direction the registry doesn't offer).
 """
 
 import importlib
@@ -109,8 +116,7 @@ def introspect_callable(func: Callable) -> Dict[str, Any]:
     ``*args`` / ``**kwargs``), plus the declared ``ACCEPTS`` / ``PRODUCES``
     typespec contract when present.
 
-    Use: a visual editor reads this to render a node and its property-panel widgets,
-    and it feeds navigaitor's MCP form-spec.
+    Use: a visual editor reads this to render a node and its property-panel widgets.
     """
     try:
         sig = inspect.signature(func)

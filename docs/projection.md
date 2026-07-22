@@ -37,7 +37,7 @@ from sampleflux import LabelMap, Flux
 lm = LabelMap.fit(iter_targets(train_source))   # {"bird": 0, "cat": 1, "dog": 2}
 lm.num_classes        # 3
 lm.label_names        # ["bird", "cat", "dog"]  (id -> name)
-lm.save("class_names.json")                     # marainer's class_names.json format
+lm.save("class_names.json")                     # {"class_names": [...], "num_classes": N}
 
 encoded = Flux(source=train_source, ops=[lm.encode_op()])   # targets are now ints
 

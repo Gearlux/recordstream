@@ -82,7 +82,7 @@ def yolo_collate(items): ...
 loader = DataLoader(flux, collate_fn=get_collate("yolo"))
 ```
 
-Defaults: `"sample"` (stacked input/target + list-form batched metadata — the `is_batched` convention), `"pair"` (`(stacked_inputs, stacked_targets)`), `"value"`, and the view forms `"input_meta"`/`"target_meta"`. Consumer collates (classification/segmentation/detection) register additively and keep their own conventions.
+Defaults: `"sample"` (stacked input/target + list-form batched metadata — the `is_batched` convention), `"pair"` (`(stacked_inputs, stacked_targets)`), `"value"`, and the view forms `"input_meta"`/`"target_meta"`. Consumer collates (classification/segmentation/detection) register additively and keep their own conventions. The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path; the full rationale is recorded in [architecture.md](architecture.md#batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17).
 
 ## 1→N expanding ops (iterable-only pipelines)
 
