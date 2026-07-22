@@ -4,6 +4,10 @@ import numpy as np
 import torch
 from confluid import configurable
 
+from sampleflux.bag.items import Image as ImageItem
+from sampleflux.bag.items import NDArrayItem, item_data
+from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.transform import Transform
 from sampleflux.sample import Sample
 from sampleflux.typespec import ArrayType, PythonType, SampleType, UnionType
 
@@ -209,3 +213,77 @@ class StandardizeOp:
         tensor = (tensor - mean_t) / std_t
 
         return sample._replace(input=tensor)
+
+
+@configurable(category="op", group="torch")
+class ToTensor(Transform):
+    """Typed twin of :class:`ToTensorOp` — an array-bearing field → a CHW-float ``Image`` item.
+
+    The typed-bag counterpart of :class:`ToTensorOp`: it reads the payload of an array-bearing
+    field (blank ``field`` picks the first array/PIL-bearing item — typically the
+    :class:`~sampleflux.Image` a :class:`~sampleflux.ops.image.ConvertToImage` produced), runs the
+    SAME HWC→CHW transpose + ``normalize`` conversion (this twin REUSES the legacy op verbatim on a
+    shim ``Sample``, so the numbers are identical), and writes a CHW-layout :class:`~sampleflux.Image`
+    back. By default it REPLACES the resolved field in place (``output`` blank), so the field's role
+    is preserved — the model's working image tensor stays the ``input`` it already was; set
+    ``output`` to write a NEW field (tagged ``input``) instead. Any other field passes through
+    untouched.
+
+    IMPORTANT — payload dtype. A :class:`~sampleflux.NDArrayItem` (which ``Image`` is) coerces its
+    payload through ``np.asarray`` on construction, so it CANNOT hold a live ``torch.Tensor``: the
+    stored payload is a CHW ``float32`` **numpy** array whose values are byte-identical to the legacy
+    ``ToTensorOp`` tensor (``legacy.input.numpy()``). The typed collate (``typed_collate``) stacks
+    these field payloads with ``np.stack`` into a batched CHW-float array; the numpy→``torch.Tensor``
+    conversion happens at the collate / model boundary (exactly as for any numpy-backed dataset). A
+    torch-``Tensor``-subclass item that would let a field carry a live tensor is the documented
+    follow-up (see ``sampleflux.bag.items`` — "torch payloads ride in wrapper items in the PoC").
+
+    Args:
+        normalize: When ``True`` (default), scale integer pixel inputs into the ``[0, 1]`` float range.
+        mode: Optional PIL mode to convert a PIL payload to (e.g. ``"RGB"`` forces 3 channels); ``None`` = as-is.
+        field: Name of the source field to tensorize; blank (default) picks the first array/PIL-bearing item.
+        output: Field the CHW ``Image`` is written to; blank (default) replaces the source field in place
+            (role preserved). A non-blank name writes a new field tagged ``input``.
+    """
+
+    handles = (NDArrayItem,)
+    consumes = (NDArrayItem,)
+    produces = (ImageItem,)
+
+    def __init__(
+        self,
+        normalize: bool = True,
+        mode: Optional[str] = None,
+        field: str = "",
+        output: str = "",
+    ) -> None:
+        super().__init__()
+        self.normalize = bool(normalize)
+        self.mode = mode
+        self.field = field
+        self.output = output
+
+    def _find_field(self, sample: TypedSample) -> str:
+        """Resolve the KEY of the field to tensorize (``self.field`` or the first array/PIL item)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(f"ToTensor: field {self.field!r} not in sample (fields: {list(sample.keys())})")
+            return self.field
+        for key, item in sample.items():
+            data = item_data(item)
+            if isinstance(data, np.ndarray) or hasattr(data, "convert"):
+                return key
+        raise ValueError(f"ToTensor: no array-bearing field in sample (fields: {list(sample.keys())})")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        key = self._find_field(sample)
+        data = item_data(sample[key])
+        # Reuse the legacy op's conversion VERBATIM on a shim Sample so the CHW / normalization
+        # values are identical; NDArrayItem then coerces the tensor to a CHW float32 numpy payload.
+        tensor = ToTensorOp(self.normalize, self.mode)(Sample(input=data, target=None, metadata={})).input
+        arr = tensor.detach().cpu().numpy()
+        out_key = self.output or key
+        out = sample.replace_field(out_key, ImageItem(arr, layout="CHW"))
+        if self.output:
+            out = out.set_role(out_key, "input")
+        return out

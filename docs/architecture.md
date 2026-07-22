@@ -531,3 +531,79 @@ sample["boxes"].boxes  # [(row_min, row_max, col_min, col_max), ...] — the pin
 - **Do not modify the legacy ops or reimplement their math in a twin** — a twin reuses the legacy
   math so parity is guaranteed; the twins are additive and the legacy `Sample`-path consumers must
   keep working.
+
+## A typed field cannot hold a live torch tensor — `ToTensor` stores CHW-float numpy (`ToTensor`/`EncodeTarget`/`DecodeTarget`/`MetadataToTarget`, 2026-07-22)
+
+### Context
+
+The typed detection twins above reach `Regions`; a typed CLASSIFICATION front-end needs the other
+two shapes: turn the working image into the model's **input tensor**, and turn the class-name label
+into the encoded **target id**. The legacy ops that do this (`ToTensorOp`, `MetadataToTargetOp`,
+`EncodeTargetOp` / `DecodeTargetOp`) operate on the `Sample(input, target, metadata)` triple. Two
+facts of the typed model shape the twins: (1) there is NO shared metadata dict — the label already
+rides a `Label` field that owns its metadata; (2) an array item is an `np.ndarray` SUBCLASS whose
+`__new__` runs `np.asarray(data)`, so **a field payload is coerced to numpy** — an `Image` cannot
+hold a live `torch.Tensor` (verified: `item_data(Image(tensor))` is an `ndarray`), and a bare tensor
+stored directly as a field value has no registered item type, so `typed_collate` / the storage codec
+(`bag.io.encode_item`) cannot serialize it.
+
+### Decision
+
+Add native typed twins subclassing `Transform` and overriding `__call__` (the same shape as the
+detection twins), each reusing its legacy op VERBATIM on a shim `Sample` for byte-parity:
+
+- **`ToTensor`** (`ops/torch.py`, `group="torch"`) resolves an array-bearing field (explicit `field`
+  or the first array/PIL item), runs `ToTensorOp` (HWC→CHW + `normalize`), and writes an `Image`
+  with `layout="CHW"`. Because `NDArrayItem` coerces the payload, the stored value is a CHW `float32`
+  **numpy** array whose values equal `ToTensorOp(...).input.numpy()` — NOT a live tensor. By default
+  it REPLACES the source field in place so the field's `input` role is preserved (`output` writes a
+  new field tagged `input` instead). `typed_collate` stacks these payloads with `np.stack`; the
+  numpy→tensor conversion is the collate / model boundary's job, exactly as for any numpy dataset. A
+  Tensor-subclass item that would let a field carry a live tensor is the documented follow-up
+  (`bag/items.py` PoC note + root TASKS.md).
+- **`EncodeTarget` / `DecodeTarget`** (`ops/target.py`, `group="structure"`) resolve a `Label` field,
+  map its `.value` through the config-pinned `mapping` by delegating to `EncodeTargetOp` /
+  `DecodeTargetOp` (so the non-empty-mapping validation AND the shared `_lookup` are byte-identical),
+  and write a new `Label` (carrying the source label's `classes`) tagged `target`. In place by
+  default (`output` blank).
+- **`MetadataToTarget`** is provided for PARITY / config-compat but is largely REDUNDANT in the typed
+  model: a source emits the label directly as a `Label` field already tagged `target`, so no
+  metadata→target move is needed. The twin reads a field's natural value (a `Label`'s `.value`, else
+  its array payload) or a named attribute (`key=`) and writes a target `Label` — the escape hatch for
+  a label that rode as another item's attribute.
+
+### Consequences
+
+- A `TypedSample` carrying an HWC `Image` (role input) + a name `Label` (role target) runs
+  `ToTensor → EncodeTarget` into a CHW-float input field + an int-id target field, with no legacy
+  `Sample` anywhere — the typed classification front-end is unblocked.
+- The model-input payload is CHW-float **numpy**, not a live `torch.Tensor`; a consumer / trainer
+  tensorizes at the collate or forward boundary. This is a deliberate PoC limitation, not a bug —
+  it disappears when the Tensor-subclass item lands.
+- The twins carry `category="op"` + the legacy `group`, so they are discoverable like the legacy ops
+  (their modules — `sampleflux-ops-torch` / `sampleflux-ops-target` — are already entry-pointed; a
+  class added to a registered module needs no new entry point).
+
+### Example
+
+```python
+from sampleflux import TypedSample, Image, Label
+from sampleflux.ops.torch import ToTensor
+from sampleflux.ops.target import EncodeTarget
+
+sample = TypedSample(
+    {"image": Image(hwc_uint8), "class": Label("cat")},
+    roles={"image": "input", "class": "target"},
+)
+sample = ToTensor(field="image")(sample)                 # image -> CHW float32 Image (role input, in place)
+sample = EncodeTarget(mapping={"cat": 0, "dog": 1}, field="class")(sample)  # class -> Label(0) (role target)
+```
+
+### What you may change (and where it's documented)
+
+- **The Tensor-subclass item follow-up** — once a field can carry a live tensor, `ToTensor` should
+  store it directly; update this record and the `bag/items.py` PoC note together.
+- **`ToTensor`'s replace-in-place default vs a new output field** — keep role preservation (in place)
+  as the default; a new `output` field is tagged `input`.
+- **Do not modify the legacy ops or reimplement their math in a twin** — the twins delegate to the
+  legacy ops for byte-parity and are strictly additive.

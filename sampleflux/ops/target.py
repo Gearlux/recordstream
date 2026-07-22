@@ -26,6 +26,9 @@ from typing import Any, Dict, Literal, Optional
 
 from confluid import configurable
 
+from sampleflux.bag.items import Label, item_data
+from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.transform import Transform
 from sampleflux.sample import Sample
 
 #: COCO / HuggingFace bounding-box layouts (all in absolute pixels). Closed set so a typo
@@ -300,10 +303,216 @@ class MasksToDetectionBoxesOp:
         return sample._replace(target={"boxes": boxes_t, "labels": labels_t})
 
 
+@configurable(category="op", group="structure")
+class MetadataToTarget(Transform):
+    """Typed twin of :class:`MetadataToTargetOp` — promote a field / attr value into a target ``Label``.
+
+    The typed-bag counterpart of :class:`MetadataToTargetOp`. The legacy op copies
+    ``metadata[key]`` onto ``sample.target``, but the typed model has NO shared metadata dict — every
+    item OWNS its metadata, and the supervised label already rides a :class:`~sampleflux.Label` field.
+    So this twin reads a value from a SOURCE field (``field``; blank picks the first ``Label``, else
+    the first field) — either the field's natural value (a ``Label``'s ``.value``, otherwise the
+    item's array payload) or, when ``key`` is set, the named ATTRIBUTE of the source item — and writes
+    a fresh :class:`~sampleflux.Label` under ``output`` tagged ``target``.
+
+    REDUNDANCY. In a typical typed classification pipeline the source emits the label directly as a
+    ``Label`` field already tagged ``target``, so this op is usually a NO-OP-ish re-home and is NOT
+    needed. It is provided for parity / config-compat with the legacy ``metadata → target`` step and
+    for the case where a label rode as another item's attribute (``key=``) and must become a
+    dedicated target ``Label``.
+
+    Args:
+        field: Source field to read; blank (default) picks the first ``Label`` field, else the first field.
+        key: Optional attribute name to read off the source item (e.g. a carried label attr); blank
+            (default) reads the item's natural value (a ``Label``'s ``.value``, else its array payload).
+        output: Field the target ``Label`` is written to (added if new); its role is set to ``target``.
+    """
+
+    handles = (Label,)
+    consumes = (Label,)
+    produces = (Label,)
+
+    def __init__(self, field: str = "", key: str = "", output: str = "target") -> None:
+        super().__init__()
+        self.field = str(field)
+        self.key = str(key)
+        self.output = str(output)
+
+    def _find_source(self, sample: TypedSample) -> str:
+        """Resolve the KEY of the source field (``self.field``, else first ``Label``, else first field)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(
+                    f"MetadataToTarget: field {self.field!r} not in sample (fields: {list(sample.keys())})"
+                )
+            return self.field
+        for key, _item in sample.items_of_type(Label):
+            return key
+        for key in sample.keys():
+            return key
+        raise ValueError("MetadataToTarget: sample is empty — no source field to read")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        key = self._find_source(sample)
+        item = sample[key]
+        if self.key:
+            if not hasattr(item, self.key):
+                raise AttributeError(
+                    f"MetadataToTarget: field {key!r} ({type(item).__name__}) has no attribute {self.key!r}"
+                )
+            value = getattr(item, self.key)
+        elif isinstance(item, Label):
+            value = item.value
+        else:
+            value = item_data(item)
+        out = sample.replace_field(self.output, Label(value))
+        return out.set_role(self.output, "target")
+
+
+@configurable(category="op", group="structure")
+class EncodeTarget(Transform):
+    """Typed twin of :class:`EncodeTargetOp` — a class-NAME ``Label`` → a class-ID ``Label`` (role ``target``).
+
+    The typed-bag counterpart of :class:`EncodeTargetOp`: it reads a :class:`~sampleflux.Label` field
+    (``field``; blank picks the first ``Label``) whose ``.value`` is a raw class name and maps it to
+    its class id through the config-pinned ``mapping`` — the declarative ``LabelEncoder`` analogue.
+    This twin REUSES the legacy ``EncodeTargetOp`` verbatim (its non-empty-mapping validation AND its
+    shared ``_lookup`` logic), so the encoded value is byte-identical. The result is a new
+    :class:`~sampleflux.Label` (carrying the source label's ``classes`` vocabulary) written under
+    ``output`` — blank (default) replaces the source field in place — tagged ``target``.
+
+    Pinning the mapping (rather than fitting it) keeps train / eval / predict on one identical
+    label→id ordering. The non-empty-mapping requirement is validated LAZILY when the op runs (the
+    zero-arg default stays constructible per the lazy-init convention).
+
+    Args:
+        mapping: Lookup from raw label name → class id, e.g. ``{"DJI AVATA2": 2, ...}``. Must be non-empty.
+        ignore_unknown: When ``False`` (default), raise on a label missing from ``mapping``; when
+            ``True``, substitute ``default``.
+        default: Value written for an unknown label when ``ignore_unknown=True`` (default ``0``).
+        field: ``Label`` field to encode; blank (default) picks the first ``Label`` field.
+        output: Field the encoded ``Label`` is written to; blank (default) replaces the source field
+            in place. Its role is set to ``target``.
+    """
+
+    handles = (Label,)
+    consumes = (Label,)
+    produces = (Label,)
+
+    def __init__(
+        self,
+        mapping: Optional[Dict[Any, Any]] = None,
+        ignore_unknown: bool = False,
+        default: Any = 0,
+        field: str = "",
+        output: str = "",
+    ) -> None:
+        super().__init__()
+        # Lazy / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
+        self.mapping = dict(mapping) if mapping else {}
+        self.ignore_unknown = bool(ignore_unknown)
+        self.default = default
+        self.field = str(field)
+        self.output = str(output)
+
+    def _find_label(self, sample: TypedSample) -> str:
+        """Resolve the KEY of the ``Label`` field to encode (``self.field`` or the first ``Label``)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(f"EncodeTarget: field {self.field!r} not in sample (fields: {list(sample.keys())})")
+            item = sample[self.field]
+            if not isinstance(item, Label):
+                raise TypeError(f"EncodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label")
+            return self.field
+        for key, _item in sample.items_of_type(Label):
+            return key
+        raise ValueError(f"EncodeTarget: no Label field in sample (fields: {list(sample.keys())})")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        key = self._find_label(sample)
+        label = sample[key]
+        # Reuse the legacy op VERBATIM (non-empty validation + shared _lookup) for byte-parity.
+        encoded = EncodeTargetOp(self.mapping, self.ignore_unknown, self.default)(
+            Sample(input=None, target=label.value, metadata={})
+        ).target
+        out_key = self.output or key
+        out = sample.replace_field(out_key, Label(encoded, classes=label.classes))
+        return out.set_role(out_key, "target")
+
+
+@configurable(category="op", group="structure")
+class DecodeTarget(Transform):
+    """Typed twin of :class:`DecodeTargetOp` — a class-ID ``Label`` → a class-NAME ``Label`` (inverse of encode).
+
+    The typed-bag counterpart of :class:`DecodeTargetOp`: it reads a :class:`~sampleflux.Label` field
+    (``field``; blank picks the first ``Label``) whose ``.value`` is an encoded class id and maps it
+    back to its label name through ``mapping`` — the readback half used in prediction / reporting.
+    This twin REUSES the legacy ``DecodeTargetOp`` verbatim, so the decoded value is byte-identical.
+    The result is a new :class:`~sampleflux.Label` (carrying the source label's ``classes``) written
+    under ``output`` — blank (default) replaces the source field in place — tagged ``target``.
+
+    Args:
+        mapping: Lookup from class id → label name, e.g. ``{2: "DJI AVATA2", ...}``. Must be non-empty.
+        ignore_unknown: When ``False`` (default), raise on an id missing from ``mapping``; when
+            ``True``, substitute ``default``.
+        default: Value written for an unknown id when ``ignore_unknown=True`` (default ``None``).
+        field: ``Label`` field to decode; blank (default) picks the first ``Label`` field.
+        output: Field the decoded ``Label`` is written to; blank (default) replaces the source field
+            in place. Its role is set to ``target``.
+    """
+
+    handles = (Label,)
+    consumes = (Label,)
+    produces = (Label,)
+
+    def __init__(
+        self,
+        mapping: Optional[Dict[Any, Any]] = None,
+        ignore_unknown: bool = False,
+        default: Any = None,
+        field: str = "",
+        output: str = "",
+    ) -> None:
+        super().__init__()
+        # Lazy / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
+        self.mapping = dict(mapping) if mapping else {}
+        self.ignore_unknown = bool(ignore_unknown)
+        self.default = default
+        self.field = str(field)
+        self.output = str(output)
+
+    def _find_label(self, sample: TypedSample) -> str:
+        """Resolve the KEY of the ``Label`` field to decode (``self.field`` or the first ``Label``)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(f"DecodeTarget: field {self.field!r} not in sample (fields: {list(sample.keys())})")
+            item = sample[self.field]
+            if not isinstance(item, Label):
+                raise TypeError(f"DecodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label")
+            return self.field
+        for key, _item in sample.items_of_type(Label):
+            return key
+        raise ValueError(f"DecodeTarget: no Label field in sample (fields: {list(sample.keys())})")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        key = self._find_label(sample)
+        label = sample[key]
+        # Reuse the legacy op VERBATIM (non-empty validation + shared _lookup) for byte-parity.
+        decoded = DecodeTargetOp(self.mapping, self.ignore_unknown, self.default)(
+            Sample(input=None, target=label.value, metadata={})
+        ).target
+        out_key = self.output or key
+        out = sample.replace_field(out_key, Label(decoded, classes=label.classes))
+        return out.set_role(out_key, "target")
+
+
 __all__ = [
     "MetadataToTargetOp",
     "EncodeTargetOp",
     "DecodeTargetOp",
     "CocoToTorchVisionDetectionOp",
     "MasksToDetectionBoxesOp",
+    "MetadataToTarget",
+    "EncodeTarget",
+    "DecodeTarget",
 ]
