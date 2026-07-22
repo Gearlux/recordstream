@@ -96,6 +96,7 @@ __all__ = [
     "typed",
     "accepts",
     "compatible",
+    "infer_field_types",
     "infer_type",
     "infer_sample_type",
     "canonical_dtype",
@@ -717,6 +718,27 @@ def infer_type(value: Any) -> TypeSpec:
 def infer_sample_type(sample: "Sample") -> SampleType:
     """Infer the :class:`SampleType` of a live sample (duck-typed: reads ``.input`` / ``.target``)."""
     return SampleType(input=infer_type(sample.input), target=infer_type(sample.target))
+
+
+def infer_field_types(sample: Any) -> Dict[str, TypeSpec]:
+    """Per-field type inference for a typed bag: ``{field key: TypeSpec of the item's payload}``.
+
+    The typed-bag analogue of :func:`infer_sample_type` — one spec per NAMED field instead of
+    the fixed input/target pair. The spec describes the item's PAYLOAD (via
+    :func:`~sampleflux.bag.items.item_data`, so an array item and a data-bearing wrapper both
+    report their array); a payload-less structured item reports its Python type. Visual
+    editors use this to type per-field sockets and pickers.
+    """
+    from sampleflux.bag.items import item_data
+    from sampleflux.bag.sample import TypedSample
+
+    if not isinstance(sample, TypedSample):
+        raise TypeError(f"infer_field_types: expected a TypedSample, got {type(sample).__name__}")
+    specs: Dict[str, TypeSpec] = {}
+    for key, item in sample.items():
+        payload = item_data(item)
+        specs[key] = PythonType(type(item).__qualname__) if payload is item else infer_type(payload)
+    return specs
 
 
 # --------------------------------------------------------------------------------------------------

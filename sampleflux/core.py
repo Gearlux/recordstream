@@ -26,6 +26,7 @@ from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
+from sampleflux.bag.sample import TypedSample
 from sampleflux.context import Context, activate
 from sampleflux.projection import ProjectionField
 from sampleflux.sample import FEATURES_KEY, SPEC_KEY, TYPE_KEYS, InputMeta, Pair, Sample, TargetMeta
@@ -61,6 +62,18 @@ def _refresh_type(sample: Sample, op: Any) -> Sample:
     return sample._replace(metadata={k: v for k, v in sample.meta.items() if k not in TYPE_KEYS})
 
 
+def _as_carrier(item: Any, native: bool) -> Any:
+    """The stream carrier for a raw source item.
+
+    A :class:`TypedSample` passes VERBATIM on every route — the typed carrier is
+    first-class and is never coerced into the legacy triple. ``native`` mode keeps any
+    other carrier as-is (pair/value lanes); the default coerces to the legacy ``Sample``.
+    """
+    if native or isinstance(item, TypedSample):
+        return item
+    return Sample.from_any(item)
+
+
 def _apply_op(sample: Sample, op: Any) -> Optional[Sample]:
     """Apply one op and refresh the stored type. The single op-application chokepoint shared by the
     sequential, parallel (via :func:`_worker_task`), streamed, and random-access (``__getitem__``) paths.
@@ -72,6 +85,11 @@ def _apply_op(sample: Sample, op: Any) -> Optional[Sample]:
     result merges back with the untouched fields preserved (:func:`_apply_view`).
     """
     from sampleflux.kinds import op_contract
+
+    if isinstance(sample, TypedSample):
+        # The TYPED carrier: transforms take the whole bag verbatim — the kinds field-scope
+        # binding and the reserved-key stored-type refresh are legacy-Sample concepts.
+        return op(sample)
 
     contract = op_contract(op)
     if contract.accepts in ("sample", "any", "value") and contract.style == "packed":
@@ -244,6 +262,17 @@ def _check_ops_materialized(ops: List[Any]) -> None:
 class FilterOp:
     """Configurable filter operation.
 
+    The op form of :meth:`Flux.filter` — a predicate gate over the stream: the sample
+    passes when the predicate returns ``True`` and is dropped otherwise (``__call__``
+    returns ``None``, which every engine route treats as "skip this sample").
+
+    Example::
+
+        keep_loud = FilterOp(p=lambda s: float(s.input.max()) > 0.1)
+        flux = Flux(source=src, ops=[keep_loud])
+        # equivalently, via the fluent API (which constructs this op):
+        flux = Flux(source=src).filter(lambda s: float(s.input.max()) > 0.1)
+
     Args:
         p: Predicate ``Sample -> bool``; the sample passes through when it returns ``True``, else is dropped.
             Defaults to ``None`` (zero-arg construction); a predicate must be set before the op runs.
@@ -262,6 +291,20 @@ class FilterOp:
 @configurable
 class WrappedOp:
     """Configurable transformation wrapper with smart mapping.
+
+    The op form of :meth:`Flux.map` — lifts a plain function over one Sample slot. The
+    callable is ALWAYS stored as its importable ``module:function`` path (via
+    :mod:`sampleflux.discovery`), so the op pickles across ``spawn`` workers and
+    serializes into Confluid YAML verbatim; the live function resolves lazily on first
+    call.
+
+    Example::
+
+        op = WrappedOp(f="numpy:sqrt", s="input")   # dotted path — resolved lazily
+        flux = Flux(source=src, ops=[op])
+        # equivalently, from a live callable via the fluent API (which constructs
+        # this op and stores np.sqrt as the string "numpy:sqrt"):
+        flux = Flux(source=src).map(np.sqrt)
 
     Args:
         f: The wrapped callable, or its importable ``module:function`` path (stored as a string for serialization).
@@ -331,6 +374,8 @@ def _apply_op_native(carrier: Any, op: Any) -> Any:
     """
     from sampleflux.kinds import classify_carrier, op_contract
 
+    if isinstance(carrier, TypedSample):
+        return op(carrier)  # the typed carrier is applied verbatim, never promoted
     contract = op_contract(op)
     if isinstance(carrier, Sample):
         return _apply_op(carrier, op)
@@ -436,6 +481,19 @@ class JointFlux:
     """
     Aggregates multiple Flux streams into a single joint stream.
     Each sub-flux maintains its own unique transformation chain.
+
+    The iteration-only fan-in engine behind :meth:`Flux.joint`: each sub-flux applies
+    its OWN op chain, so differently-processed streams concatenate lazily without
+    materialization. For an indexable (random-access) concatenation of raw sources,
+    use ``ConcatSource`` instead.
+
+    Example::
+
+        clean = Flux(source=day_one, ops=[normalize])
+        augmented = Flux(source=day_two, ops=[normalize, augment])
+        both = JointFlux(fluxes=[clean, augmented])   # len == len(clean) + len(augmented)
+        # or wrapped back into an engine (equivalent fluent form):
+        flux = Flux.joint([clean, augmented])         # == Flux(source=JointFlux([...]))
 
     Args:
         fluxes: The Flux streams to concatenate; iteration walks them in order and length is their sum.
@@ -594,7 +652,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
             return len(source)
         return 0
 
-    def __getitem__(self, index: int) -> Sample:
+    def __getitem__(self, index: int) -> Any:
         """Random access: get the i-th sample with ops applied.
 
         Supports three source shapes:
@@ -633,7 +691,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
                 "it in ``list(...)`` before handing it to Flux."
             )
         _check_ops_materialized(self.ops)
-        sample: Any = raw if self.native else Sample.from_any(raw)
+        sample: Any = _as_carrier(raw, self.native)
         with activate(Context()):
             for op in self.ops:
                 result = _apply_op_native(sample, op) if self.native else _apply_op(sample, op)
@@ -744,7 +802,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
 
         def to_carried() -> Iterator[Optional[_Carried]]:
             for item in source:
-                yield _Carried(item if self.native else Sample.from_any(item), Context())
+                yield _Carried(_as_carrier(item, self.native), Context())
 
         def per_sample(stream: Iterator[Optional[_Carried]], op: Any) -> Iterator[Optional[_Carried]]:
             from sampleflux.kinds import op_contract
@@ -799,7 +857,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
             return
         _check_ops_materialized(self.ops)
         for item in source:
-            sample = item if self.native else Sample.from_any(item)
+            sample = _as_carrier(item, self.native)
             yield from _worker_task_multi(sample, self.ops, native=self.native)
 
     def _iter_parallel(self) -> Iterator[Sample]:
@@ -815,7 +873,7 @@ class Flux(torch.utils.data.Dataset[Sample]):
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
             futures = []
             for item in source:
-                sample = item if self.native else Sample.from_any(item)
+                sample = _as_carrier(item, self.native)
                 futures.append(executor.submit(_worker_task_multi, sample, self.ops, self.native))
 
             for future in futures:

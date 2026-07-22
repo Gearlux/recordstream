@@ -8,6 +8,11 @@ this registry gives them ONE addressable home without changing any of them — c
 ``register_collate`` their task collates additively, and callers dispatch by key or by
 the DETECTED carrier kind (:func:`sampleflux.kinds.classify_carrier`).
 
+The string keys primarily serve AI-callable (MCP) tool surfaces, which pass
+JSON-serializable names — never function objects — and enumerate the legal values via
+:func:`registered_collates`; in Python (and in YAML via a dotted ``!ref:`` to the
+function), passing a collate function directly remains the normal path.
+
 Defaults registered here:
 
 - ``"sample"`` — stacks ``input``/``target`` (torch-first, numpy fallback, else kept as a
@@ -75,11 +80,17 @@ def collate(items: Sequence[Any], key: Optional[str] = None) -> Any:
     """Collate ``items`` into one batched carrier.
 
     ``key`` picks a registered collate explicitly; omitted, the DETECTED kind of the
-    first item dispatches (``sample`` / ``pair`` / ``value``). An empty batch raises.
+    first item dispatches — a ``TypedSample`` batch routes to ``"typed"``, everything
+    else through the classic carrier classifier (``sample`` / ``pair`` / ``value``).
+    An empty batch raises.
     """
+    from sampleflux.bag.sample import TypedSample
+
     if not items:
         raise ValueError("collate: cannot collate an empty batch")
-    return get_collate(key or classify_carrier(items[0]))(items)
+    if key is None:
+        key = "typed" if isinstance(items[0], TypedSample) else classify_carrier(items[0])
+    return get_collate(key)(items)
 
 
 def _stack(values: List[Any]) -> Any:
@@ -137,3 +148,41 @@ def input_meta_collate(items: Sequence[Any]) -> InputMeta:
 def target_meta_collate(items: Sequence[Any]) -> TargetMeta:
     """Default TargetMeta collate: stacked targets + the per-item metadata dicts as a list."""
     return TargetMeta(_stack([item.target for item in items]), [dict(item.metadata) for item in items])
+
+
+@register_collate("typed")
+def typed_collate(items: Sequence[Any]) -> Any:
+    """The typed-bag collate: N ``TypedSample``\\ s → ONE batched ``TypedSample``.
+
+    Per field (union of keys is NOT taken — every sample must carry the same fields, a
+    mismatch raises): payloads are stacked via :func:`_stack` (torch → stacked tensor,
+    numpy → stacked array, else a list) and each declared item attr becomes a LIST of
+    per-item values. Array items come back as the SAME item type over the stacked payload;
+    wrapper items likewise (attrs as lists). Roles are preserved. This single convention
+    replaces both classic batch shapes (the list-form batched metadata and the
+    ``{"per_sample": [...]}`` dict-nest) — trainers read ``primary(batch)`` /
+    ``batch.targets()``.
+    """
+    from sampleflux.bag.io import EncodedItem, decode_item, encode_item
+    from sampleflux.bag.sample import TypedSample
+
+    if not items:
+        raise ValueError("typed_collate: cannot collate an empty batch")
+    first = items[0]
+    if not isinstance(first, TypedSample):
+        raise TypeError(f"typed_collate: expected TypedSample items, got {type(first).__name__}")
+    keys = list(first.keys())
+    for i, sample in enumerate(items):
+        if not isinstance(sample, TypedSample) or list(sample.keys()) != keys:
+            raise ValueError(
+                f"typed_collate: item {i} fields {list(sample.keys()) if isinstance(sample, TypedSample) else '?'} "
+                f"do not match the batch fields {keys} — collate requires a homogeneous batch."
+            )
+    fields: Dict[str, Any] = {}
+    for key in keys:
+        encoded = [encode_item(sample[key]) for sample in items]
+        type_name = encoded[0].type_name
+        stacked_payload = _stack([e.payload for e in encoded]) if encoded[0].payload is not None else None
+        batched_attrs = {name: [e.attrs.get(name) for e in encoded] for name in encoded[0].attrs}
+        fields[key] = decode_item(EncodedItem(type_name=type_name, payload=stacked_payload, attrs=batched_attrs))
+    return TypedSample(fields, {key: first.role_of(key) for key in keys})

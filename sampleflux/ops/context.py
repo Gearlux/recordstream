@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, cast
 from confluid import configurable, flow
 from confluid.fluid import Fluid
 
+from sampleflux.bag.sample import TypedSample, primary
 from sampleflux.context import require
 from sampleflux.sample import Sample
 
@@ -46,8 +47,16 @@ def _read_output(op: Any, name: str) -> Any:
     return _MISSING
 
 
-def _cell_field(value: Any, field: str) -> Any:
-    """A cell's contribution to a Sample field: the Sample's own field, or the raw value verbatim."""
+def _cell_field(value: Any, field: str, key: str = "") -> Any:
+    """A cell's contribution to a value slot.
+
+    A legacy ``Sample`` cell contributes its named field; a ``TypedSample`` cell
+    contributes the ``key``-named item when ``key`` is given, else its PRIMARY input-role
+    item (:func:`~sampleflux.bag.sample.primary` — the sanctioned "the input" accessor);
+    a raw cell value is used verbatim.
+    """
+    if isinstance(value, TypedSample):
+        return value[key] if key else primary(value)[1]
     if isinstance(value, Sample):
         return getattr(value, field)
     return value
@@ -96,7 +105,7 @@ class Use:
         self.name = str(name)
         self.drop = bool(drop)
 
-    def __call__(self, sample: Sample) -> Sample:
+    def __call__(self, sample: Any) -> Any:
         if not self.name:
             raise ValueError("Use: 'name' (the context cell to read) is required")
         ctx = require("Use")
@@ -105,6 +114,8 @@ class Use:
             ctx.delete(self.name)
         else:
             value = deepcopy(value)
+        if isinstance(value, TypedSample):
+            return value  # the typed carrier passes through verbatim (never coerced)
         return Sample.from_any(value)
 
 
@@ -148,6 +159,7 @@ class Apply:
         op: The op to configure and apply; required at call time, validated lazily.
         param: Attribute name on ``op`` to set with the cell value; required at call time.
         source: Context cell holding the value; required at call time, validated lazily.
+        key: For a TypedSample cell — the named field to contribute. Blank (default) = the primary input field.
         drop: When True, free the source cell after reading it.
     """
 
@@ -156,15 +168,17 @@ class Apply:
         op: Optional[object] = None,
         param: str = "",
         source: str = "",
+        key: str = "",
         drop: bool = False,
     ) -> None:
         # Lazy / zero-arg: store config only; op/param/source are validated at first call.
         self.op = op
         self.param = str(param)
         self.source = str(source)
+        self.key = str(key)
         self.drop = bool(drop)
 
-    def __call__(self, sample: Sample) -> Optional[Sample]:
+    def __call__(self, sample: Any) -> Optional[Any]:
         if self.op is None:
             raise ValueError("Apply: an 'op' to configure and apply is required")
         if not self.param:
@@ -176,7 +190,7 @@ class Apply:
         value = ctx.get(self.source)
         if self.drop:
             ctx.delete(self.source)
-        value = _cell_field(value, "input")
+        value = _cell_field(value, "input", key=self.key)
         op = cast(Any, self.op)
         setattr(op, self.param, value)
         # _apply_op = the engine's contract-aware chokepoint, so a field-scoped wrapped op
@@ -321,3 +335,54 @@ class Mix:
             ctx.delete(cell_name)
 
         return Sample(input=mixed_input, target=mixed_target, metadata=metadata)
+
+
+@configurable(category="op", group="structure")
+class MergeFields:
+    """Typed fan-in: UNION the named cells' fields into the incoming :class:`TypedSample`.
+
+    The typed replacement for :class:`Mix`'s metadata dict-merge: each source cell (a
+    ``TypedSample`` saved by an earlier branch) contributes its FIELDS and ROLES, united in
+    listed order with last-write-wins on a key collision (the deterministic slot-order rule;
+    avoid a deliberate collision by renaming on the producing branch —
+    ``sampleflux.ops.structure.RenameField``). ``keys`` selects a subset of a source's
+    fields before the union.
+
+    Args:
+        sources: Context cells (earlier branch results) to union into the incoming sample, in order.
+        keys: Restrict the union to these field keys across all sources. Empty (default) = every field.
+        drop: Context cells to free after merging (defaults to none).
+    """
+
+    def __init__(
+        self,
+        sources: Optional[List[str]] = None,
+        keys: Optional[List[str]] = None,
+        drop: Optional[List[str]] = None,
+    ) -> None:
+        # Lazy / zero-arg: store config only; cells are resolved at first call.
+        self.sources = list(sources) if sources else []
+        self.keys = list(keys) if keys else []
+        self.drop = list(drop) if drop else []
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        if not self.sources:
+            raise ValueError("MergeFields: 'sources' (the context cells to union) is required")
+        if not isinstance(sample, TypedSample):
+            raise TypeError(
+                f"MergeFields: the incoming carrier is {type(sample).__name__}, expected TypedSample — "
+                "typed fan-in unions named fields (legacy Sample fan-in is Mix)."
+            )
+        ctx = require("MergeFields")
+        merged = sample
+        for cell_name in self.sources:
+            value = ctx.get(cell_name)
+            if not isinstance(value, TypedSample):
+                raise TypeError(f"MergeFields: cell {cell_name!r} holds {type(value).__name__}, expected a TypedSample")
+            if self.keys:
+                keep = [k for k in self.keys if k in value]
+                value = TypedSample({k: value[k] for k in keep}, {k: value.role_of(k) for k in keep})
+            merged = TypedSample.merge(merged, value)
+        for cell_name in self.drop:
+            ctx.delete(cell_name)
+        return merged

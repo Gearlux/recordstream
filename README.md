@@ -50,6 +50,8 @@ for sample in flux:
 | [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImageOp`, `NormalizeToUint8Op`), array introspection helpers |
 | [docs/configure.md](docs/configure.md) | Per-sample op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
 | [docs/augmentation.md](docs/augmentation.md) | Augmentation via albumentations / torchvision `transforms.v2` — joint input+target (mask/boxes) adapters, the generated `Alb*`/`Tv*` per-transform ops, seeding, Confluid-native YAML |
+| [docs/typed-model.md](docs/typed-model.md) | **Experimental** — the typed-bag model (`sampleflux.bag`): a named bag of typed items (each owning its metadata), type-dispatched transforms, torchvision/albumentations adapters, custom item types |
+| [docs/architecture.md](docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
 
 ## 🧭 Scope: a modality-neutral engine
 

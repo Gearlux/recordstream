@@ -1,5 +1,6 @@
+import json
 from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import Any, Dict, Iterator, Optional, Union
 
 import h5py
 import numpy as np
@@ -7,10 +8,37 @@ import torch
 from confluid import configurable
 from loggair import get_logger
 
+from sampleflux.bag.io import EncodedItem, decode_item, encode_item
+from sampleflux.bag.sample import TypedSample
 from sampleflux.sample import Sample
-from sampleflux.storage.base import DataSink, DataSource, Storage, to_numpy
+from sampleflux.storage.base import TYPED_FORMAT, DataSink, DataSource, Storage, restore_attrs, split_attrs, to_numpy
 
 logger = get_logger("sampleflux.storage.hdf5")
+
+#: Reserved field-group attr names in the typed layout (never item attrs).
+_TYPE_ATTR = "__item_type__"
+_ROLE_ATTR = "__role__"
+_ORDER_ATTR = "__field_order__"
+
+
+def _read_typed_sample(group: h5py.Group) -> TypedSample:
+    """Decode one ``sNNNNNN`` sample group of the typed field-group layout."""
+    order = json.loads(group.attrs[_ORDER_ATTR])
+    fields: Dict[str, Any] = {}
+    roles: Dict[str, Any] = {}
+    for name in order:
+        fgrp = group[name]
+        plain = {k: v for k, v in fgrp.attrs.items() if k not in (_TYPE_ATTR, _ROLE_ATTR)}
+        arrays: Dict[str, Any] = {}
+        agrp = fgrp.get("attrs")
+        if isinstance(agrp, h5py.Group):
+            for key, dset in agrp.items():
+                arrays[key] = dset[()]
+        payload = fgrp["data"][()] if "data" in fgrp else None
+        attrs = restore_attrs(dict(plain), arrays)
+        fields[name] = decode_item(EncodedItem(type_name=str(fgrp.attrs[_TYPE_ATTR]), payload=payload, attrs=attrs))
+        roles[name] = str(fgrp.attrs[_ROLE_ATTR])
+    return TypedSample(fields, roles)
 
 
 @configurable
@@ -40,9 +68,20 @@ class HDF5Source(Storage, DataSource):
             self._file.close()
             self._file = None
 
-    def __iter__(self) -> Iterator[Sample]:
+    @property
+    def is_typed(self) -> bool:
+        """True when the file carries the typed field-group layout (``sampleflux_format`` root attr)."""
+        self.open()
+        return self._file is not None and self._file.attrs.get("sampleflux_format") == TYPED_FORMAT
+
+    def __iter__(self) -> Iterator[Any]:
         self.open()
         if self._file is None:
+            return
+
+        if self.is_typed:
+            for name in sorted(k for k in self._file.keys() if k.startswith("s")):
+                yield _read_typed_sample(self._file[name])
             return
 
         prefixes = sorted([k.split("_data")[0] for k in self._file.keys() if k.endswith("_data")])
@@ -64,6 +103,8 @@ class HDF5Source(Storage, DataSource):
         self.open()
         if self._file is None:
             return 0
+        if self.is_typed:
+            return len([k for k in self._file.keys() if k.startswith("s")])
         return len([k for k in self._file.keys() if k.endswith("_data")])
 
     def iter_metadata(self) -> "Iterator[tuple[str, dict]]":
@@ -108,10 +149,19 @@ class HDF5Sink(Storage, DataSink):
             self._file.close()
             self._file = None
 
-    def write(self, sample: Sample) -> None:
+    def write(self, sample: Any) -> None:
         self.open()
         if self._file is None:
             return
+
+        if isinstance(sample, TypedSample):
+            self._write_typed(sample)
+            return
+        if self._file.attrs.get("sampleflux_format") == TYPED_FORMAT:
+            raise TypeError(
+                "HDF5Sink: this file carries the typed field-group layout — cannot append a legacy "
+                "Sample to it (one carrier per file)."
+            )
 
         prefix = f"{self._counter:05d}"
 
@@ -153,6 +203,50 @@ class HDF5Sink(Storage, DataSink):
 
             self._file.create_dataset(f"{prefix}_target", data=target_data, **t_kwargs)
 
+        self._counter += 1
+
+    def _write_typed(self, sample: TypedSample) -> None:
+        """One sample in the typed field-group layout — see ``docs/typed-model.md`` (storage).
+
+        Layout: root attr ``sampleflux_format = "typedsample-v1"``; per sample a group
+        ``sNNNNNN`` (attr ``__field_order__`` preserves insertion order) holding one subgroup
+        per FIELD with attrs ``__item_type__``/``__role__`` + the item's plain attrs, the
+        payload as ``data``, and array-valued attrs as datasets under ``attrs/``. Every item
+        serializes through the :mod:`sampleflux.bag.io` codec, so externally-registered item
+        types round-trip with no storage edits.
+        """
+        assert self._file is not None
+        if self._counter == 0 and "sampleflux_format" not in self._file.attrs:
+            if any(k.endswith("_data") for k in self._file.keys()):
+                raise TypeError(
+                    "HDF5Sink: this file carries the legacy Sample layout — cannot append a "
+                    "TypedSample to it (one carrier per file)."
+                )
+            self._file.attrs["sampleflux_format"] = TYPED_FORMAT
+        elif self._file.attrs.get("sampleflux_format") != TYPED_FORMAT:
+            raise TypeError(
+                "HDF5Sink: this file carries the legacy Sample layout — cannot append a "
+                "TypedSample to it (one carrier per file)."
+            )
+
+        group = self._file.create_group(f"s{self._counter:06d}")
+        group.attrs[_ORDER_ATTR] = json.dumps(list(sample.keys()))
+        for key, item in sample.items():
+            encoded = encode_item(item)
+            fgrp = group.create_group(key)
+            fgrp.attrs[_TYPE_ATTR] = encoded.type_name
+            fgrp.attrs[_ROLE_ATTR] = sample.role_of(key)
+            plain, arrays = split_attrs(encoded.attrs)
+            for name, value in plain.items():
+                fgrp.attrs[name] = value
+            if encoded.payload is not None:
+                payload = np.asarray(to_numpy(encoded.payload))
+                kwargs = {"compression": self.compression} if self.compression and payload.ndim > 0 else {}
+                fgrp.create_dataset("data", data=payload, **kwargs)
+            for name, value in arrays.items():
+                arr = np.asarray(value)
+                kwargs = {"compression": self.compression} if self.compression and arr.ndim > 0 else {}
+                fgrp.create_dataset(f"attrs/{name}", data=arr, **kwargs)
         self._counter += 1
 
     def flush(self) -> None:

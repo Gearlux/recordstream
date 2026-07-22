@@ -1,13 +1,42 @@
+import json
 from pathlib import Path
-from typing import Iterator, List, Optional, Union, cast
+from typing import Any, Dict, Iterator, List, Optional, Union, cast
 
 import confluid
 import numpy as np
 import torch
 import zarr
 
+from sampleflux.bag.io import EncodedItem, decode_item, encode_item
+from sampleflux.bag.sample import TypedSample
 from sampleflux.sample import Sample
-from sampleflux.storage.base import DataSink, DataSource, Storage, to_numpy
+from sampleflux.storage.base import TYPED_FORMAT, DataSink, DataSource, Storage, restore_attrs, split_attrs, to_numpy
+
+#: Reserved field-group attr names in the typed layout (never item attrs).
+_TYPE_ATTR = "__item_type__"
+_ROLE_ATTR = "__role__"
+_ORDER_ATTR = "__field_order__"
+
+
+def _read_typed_group(grp: "zarr.Group") -> TypedSample:
+    """Decode one ``sample_NNNNNN`` group of the typed field-group layout."""
+    order = json.loads(str(grp.attrs[_ORDER_ATTR]))
+    fields: Dict[str, Any] = {}
+    roles: Dict[str, Any] = {}
+    for name in order:
+        fgrp = cast(zarr.Group, grp[name])
+        fattrs = dict(fgrp.attrs)
+        plain = {k: v for k, v in fattrs.items() if k not in (_TYPE_ATTR, _ROLE_ATTR)}
+        arrays: Dict[str, Any] = {}
+        if "attrs" in fgrp:
+            agrp = cast(zarr.Group, fgrp["attrs"])
+            for key in agrp.array_keys():
+                arrays[key] = np.asarray(cast(zarr.Array, agrp[key])[:])
+        payload = np.asarray(cast(zarr.Array, fgrp["data"])[:]) if "data" in fgrp.array_keys() else None
+        attrs = restore_attrs(plain, arrays)
+        fields[name] = decode_item(EncodedItem(type_name=str(fattrs[_TYPE_ATTR]), payload=payload, attrs=attrs))
+        roles[name] = str(fattrs[_ROLE_ATTR])
+    return TypedSample(fields, roles)
 
 
 # category="sink": surfaced by visual editors as a sink node docking into a DatasetProcessor's sink slot.
@@ -33,10 +62,20 @@ class ZarrGroupSink(Storage, DataSink):
                 pass
         return self
 
-    def write(self, sample: Sample) -> None:
+    def write(self, sample: Any) -> None:
         self.open()
         if self._root is None:
             raise RuntimeError("Zarr group not open")
+
+        if isinstance(sample, TypedSample):
+            self._write_typed(sample)
+            return
+        if self._root.attrs.get("sampleflux_format") == TYPED_FORMAT:
+            raise TypeError(
+                "ZarrGroupSink: this store carries the typed field-group layout — cannot append a "
+                "legacy Sample to it (one carrier per store)."
+            )
+
         # Use require_group to handle existing nodes safely
         name = f"sample_{self._counter:06d}"
         grp = self._root.require_group(name)
@@ -53,6 +92,35 @@ class ZarrGroupSink(Storage, DataSink):
         if sample.meta:
             grp.attrs.update(sample.meta)
 
+        self._counter += 1
+
+    def _write_typed(self, sample: TypedSample) -> None:
+        """One sample in the typed field-group layout (the Zarr twin of HDF5Sink._write_typed)."""
+        assert self._root is not None
+        existing_format = self._root.attrs.get("sampleflux_format")
+        if existing_format is None:
+            if any(True for _ in self._root.group_keys()) and self._counter == 0:
+                raise TypeError(
+                    "ZarrGroupSink: this store carries the legacy Sample layout — cannot append a "
+                    "TypedSample to it (one carrier per store)."
+                )
+            self._root.attrs["sampleflux_format"] = TYPED_FORMAT
+        elif existing_format != TYPED_FORMAT:
+            raise TypeError(f"ZarrGroupSink: unknown store format {existing_format!r}")
+
+        grp = self._root.require_group(f"sample_{self._counter:06d}")
+        grp.attrs[_ORDER_ATTR] = json.dumps(list(sample.keys()))
+        for key, item in sample.items():
+            encoded = encode_item(item)
+            fgrp = grp.require_group(key)
+            fgrp.attrs[_TYPE_ATTR] = encoded.type_name
+            fgrp.attrs[_ROLE_ATTR] = sample.role_of(key)
+            plain, arrays = split_attrs(encoded.attrs)
+            fgrp.attrs.update(plain)
+            if encoded.payload is not None:
+                fgrp.create_array("data", data=np.asarray(to_numpy(encoded.payload)), overwrite=True)
+            for name, value in arrays.items():
+                fgrp.create_array(f"attrs/{name}", data=np.asarray(value), overwrite=True)
         self._counter += 1
 
     def flush(self) -> None:
@@ -94,9 +162,19 @@ class ZarrGroupSource(Storage, DataSource):
     def close(self) -> None:
         self._root = None
 
-    def __iter__(self) -> Iterator[Sample]:
+    @property
+    def is_typed(self) -> bool:
+        """True when the store carries the typed field-group layout (``sampleflux_format`` root attr)."""
+        self.open()
+        return self._root is not None and self._root.attrs.get("sampleflux_format") == TYPED_FORMAT
+
+    def __iter__(self) -> Iterator[Any]:
         self.open()
         if self._root is None:
+            return
+        if self.is_typed:
+            for name in sorted(self._root.group_keys()):
+                yield _read_typed_group(cast(zarr.Group, self._root[name]))
             return
         for name in sorted(self._root.group_keys()):
             grp = cast(zarr.Group, self._root[name])
@@ -155,10 +233,39 @@ class ZarrBatchSink(Storage, DataSink):
             )
         return self
 
-    def write(self, sample: Sample) -> None:
+    def write(self, sample: Any) -> None:
         self.open()
         if self._data_arr is None:
             raise RuntimeError("Zarr array not open")
+
+        if isinstance(sample, TypedSample):
+            # The batch sink stores ONE uniform array: the PRIMARY input field's payload per
+            # row, plus a one-time item template (type/field/attrs of the FIRST sample) so the
+            # source can rebuild typed rows. Uniform-batch by design — per-sample attr
+            # variation does not fit a single stacked array; use ZarrGroupSink for that.
+            from sampleflux.bag.sample import primary
+
+            key, item = primary(sample)
+            encoded = encode_item(item)
+            if "sampleflux_format" not in self._data_arr.attrs:
+                plain, arrays = split_attrs(encoded.attrs)
+                if arrays:
+                    raise TypeError(
+                        "ZarrBatchSink: array-valued item attrs do not fit the single-array batch "
+                        "layout — use ZarrGroupSink."
+                    )
+                self._data_arr.attrs.update(
+                    {"sampleflux_format": TYPED_FORMAT, _TYPE_ATTR: encoded.type_name, "__field__": key, **plain}
+                )
+            self._data_arr.append([np.asarray(to_numpy(encoded.payload))], axis=0)
+            self._counter += 1
+            return
+        if self._data_arr.attrs.get("sampleflux_format") == TYPED_FORMAT:
+            raise TypeError(
+                "ZarrBatchSink: this store carries the typed layout — cannot append a legacy "
+                "Sample to it (one carrier per store)."
+            )
+
         # Append to the primary array
         # Zarr handles the resizing and chunking internally
         self._data_arr.append([sample.input], axis=0)
@@ -198,9 +305,23 @@ class ZarrBatchSource(Storage, DataSource):
     def close(self) -> None:
         self._data_arr = None
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Any]:
         self.open()
         if self._data_arr is None:
+            return
+        attrs = dict(self._data_arr.attrs)
+        if attrs.get("sampleflux_format") == TYPED_FORMAT:
+            # Typed batch rows: rebuild each row as the stored item type under the stored
+            # field key (uniform template — see ZarrBatchSink.write).
+            field = str(attrs["__field__"])
+            type_name = str(attrs[_TYPE_ATTR])
+            item_attrs = restore_attrs(
+                {k: v for k, v in attrs.items() if k not in ("sampleflux_format", _TYPE_ATTR, "__field__")}, {}
+            )
+            for i in range(self._data_arr.shape[0]):
+                payload = np.asarray(self._data_arr[i])
+                item = decode_item(EncodedItem(type_name=type_name, payload=payload, attrs=item_attrs))
+                yield TypedSample({field: item})
             return
         for i in range(self._data_arr.shape[0]):
             yield Sample(input=torch.from_numpy(np.asarray(self._data_arr[i])))

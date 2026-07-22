@@ -51,12 +51,13 @@ from confluid import resolve as _confluid_resolve
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
-from sampleflux.ops.context import _MISSING, Apply, Capture, Drop, Mix, Save, Use, _read_output
+from sampleflux.bag.sample import TypedSample, primary
+from sampleflux.ops.context import _MISSING, Apply, Capture, Drop, MergeFields, Mix, Save, Use, _read_output
 from sampleflux.sample import Sample
 
 logger = get_logger(__name__)
 
-RESERVED_STEP_KEYS = ("from", "target_from", "metadata_from", "bind")
+RESERVED_STEP_KEYS = ("from", "target_from", "metadata_from", "merge_from", "bind")
 """Step-grammar keys stripped from a step mapping before the op is constructed."""
 
 __all__ = ["FlowGraph", "FlowStep", "from_ops", "parse_flow", "to_ops", "RESERVED_STEP_KEYS"]
@@ -70,24 +71,37 @@ class FlowStep(NamedTuple):
     from_: Optional[str]  # None = previous step (first step: the source sample)
     target_from: Optional[str]
     metadata_from: Optional[str]
-    bind: Dict[str, str]  # param -> "step" | "step.attr"
+    bind: Dict[str, str]  # param -> "step" | "step.attr" | "step[key]"
+    merge_from: Tuple[str, ...] = ()  # typed fan-in: union these steps' FIELDS, in slot order
 
 
 class _BindRef(NamedTuple):
     """A parsed ``bind:`` reference."""
 
     step: str
-    attr: Optional[str]  # None = the step's result; else the step op's @output attribute
+    attr: Optional[str]  # "step.attr" = the step op's @output attribute
+    key: Optional[str]  # "step[key]" = the named FIELD of the step's TypedSample result
+
+
+def _split_bind_ref(ref: str) -> _BindRef:
+    """Split a bind reference into its three shapes: ``step`` / ``step.attr`` / ``step[key]``."""
+    text = str(ref)
+    if text.endswith("]") and "[" in text:
+        head, _, inner = text[:-1].partition("[")
+        if head and inner and "." not in head:
+            return _BindRef(head, None, inner)
+    head, dot, attr = text.partition(".")
+    return _BindRef(head, attr if dot else None, None)
 
 
 def _parse_bind_ref(ref: str, known: Sequence[str]) -> _BindRef:
-    head, dot, attr = str(ref).partition(".")
-    if head not in known:
+    parsed = _split_bind_ref(ref)
+    if parsed.step not in known:
         raise ValueError(
             f"flow: bind reference {ref!r} does not name an earlier step "
             f"(known steps at this point: {list(known)!r})"
         )
-    return _BindRef(head, attr if dot else None)
+    return parsed
 
 
 def _check_reserved_collision(op: Any, step_name: str) -> None:
@@ -175,6 +189,21 @@ def parse_flow(flow_doc: Any, outputs: str = "", build: bool = True) -> Tuple[Li
                     f"flow step {name!r}: {key}: {ref!r} does not name an EARLIER step "
                     f"(document order is the schedule; steps so far: {seen!r})"
                 )
+        merge_raw = reserved.get("merge_from")
+        merge_from: Tuple[str, ...] = ()
+        if merge_raw is not None:
+            merge_from = (str(merge_raw),) if isinstance(merge_raw, str) else tuple(str(r) for r in merge_raw)
+            for ref in merge_from:
+                if ref not in seen:
+                    raise ValueError(
+                        f"flow step {name!r}: merge_from: {ref!r} does not name an EARLIER step "
+                        f"(document order is the schedule; steps so far: {seen!r})"
+                    )
+            if target_from is not None or metadata_from is not None:
+                raise ValueError(
+                    f"flow step {name!r}: merge_from (typed fan-in) and target_from/metadata_from "
+                    "(legacy fan-in) are mutually exclusive on one step"
+                )
         bind_raw = reserved.get("bind") or {}
         if not isinstance(bind_raw, dict):
             raise TypeError(f"flow step {name!r}: bind must be a mapping of param -> step[.output]")
@@ -193,6 +222,7 @@ def parse_flow(flow_doc: Any, outputs: str = "", build: bool = True) -> Tuple[Li
                 target_from=None if target_from is None else str(target_from),
                 metadata_from=None if metadata_from is None else str(metadata_from),
                 bind=bind,
+                merge_from=merge_from,
             )
         )
         seen.append(name)
@@ -223,8 +253,10 @@ def _result_readers(steps: Sequence[FlowStep], outputs: str) -> Dict[str, List[T
             readers[step.target_from].append((i, "target"))
         if step.metadata_from is not None:
             readers[step.metadata_from].append((i, "meta"))
+        for ref in step.merge_from:
+            readers[ref].append((i, "merge"))
         for ref in step.bind.values():
-            parsed = _BindRef(*ref.partition(".")[::2]) if "." in ref else _BindRef(ref, None)
+            parsed = _split_bind_ref(ref)
             if parsed.attr is None:
                 readers[parsed.step].append((i, "bind"))
     readers[outputs].append((len(steps), "out"))
@@ -317,7 +349,7 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
 
     # -- execution ---------------------------------------------------------
 
-    def _run(self, seed: Sample) -> Optional[Sample]:
+    def _run(self, seed: Any) -> Optional[Any]:
         """Run one sample through the steps; ``None`` = filtered (an op returned None)."""
         steps, outputs = self._ensure_parsed()
         readers = _result_readers(steps, outputs)
@@ -344,10 +376,34 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
                 base = read_result(prev, copy=False)
             else:
                 base = seed
-            sample = Sample.from_any(base)
+            # The TYPED carrier passes through verbatim; everything else coerces to Sample.
+            sample: Any = base if isinstance(base, TypedSample) else Sample.from_any(base)
 
-            # 2. fan-in slots (Mix semantics)
+            # 2a. typed fan-in: UNION the merge_from steps' fields (slot order, last wins)
+            if step.merge_from:
+                if not isinstance(sample, TypedSample):
+                    raise TypeError(
+                        f"flow step {step.name!r}: merge_from is the TYPED fan-in but the carrier is "
+                        f"{type(sample).__name__} — use target_from/metadata_from for legacy Samples."
+                    )
+                merged = [sample]
+                for ref in step.merge_from:
+                    value = read_result(ref, copy=True)
+                    if not isinstance(value, TypedSample):
+                        raise TypeError(
+                            f"flow step {step.name!r}: merge_from step {ref!r} holds "
+                            f"{type(value).__name__}, expected a TypedSample"
+                        )
+                    merged.append(value)
+                sample = TypedSample.merge(*merged)
+
+            # 2b. legacy fan-in slots (Mix semantics)
             if step.target_from is not None or step.metadata_from is not None:
+                if isinstance(sample, TypedSample):
+                    raise TypeError(
+                        f"flow step {step.name!r}: target_from/metadata_from are the LEGACY fan-in "
+                        "but the carrier is a TypedSample — use merge_from."
+                    )
                 metadata = dict(sample.meta)
                 target = sample.target
                 if step.target_from is not None:
@@ -378,24 +434,27 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
                         "Run expanding pipelines through the Flux engine (iterable-only)."
                     )
                 for param, ref in step.bind.items():
-                    if "." in ref:
-                        head, _, attr = ref.partition(".")
-                        producer = next(s for s in steps if s.name == head)
-                        value = _read_output(producer.op, attr)
+                    parsed = _split_bind_ref(ref)
+                    if parsed.attr is not None:
+                        producer = next(s for s in steps if s.name == parsed.step)
+                        value = _read_output(producer.op, parsed.attr)
                         if value is _MISSING:
                             raise AttributeError(
                                 f"flow step {step.name!r}: bind {param}={ref!r} — "
-                                f"step {head!r} op has no @output attribute {attr!r}"
+                                f"step {parsed.step!r} op has no @output attribute {parsed.attr!r}"
                             )
                     else:
-                        value = read_result(ref, copy=False)
-                        if isinstance(value, Sample):
+                        value = read_result(parsed.step, copy=False)
+                        if isinstance(value, TypedSample):
+                            # "step[key]" = the named field; bare "step" = the primary input.
+                            value = value[parsed.key] if parsed.key else primary(value)[1]
+                        elif isinstance(value, Sample):
                             value = value.input
                     setattr(op, param, value)
                 result = op(sample)
                 if result is None:
                     return None
-                sample = cast(Sample, result)
+                sample = result
 
             env[step.name] = sample
             prev = step.name
@@ -424,7 +483,8 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
             return
         assert self.source is not None
         for item in self.source:
-            result = self._run(Sample.from_any(item))
+            seed = item if isinstance(item, TypedSample) else Sample.from_any(item)
+            result = self._run(seed)
             if result is not None:
                 yield result
 
@@ -448,7 +508,7 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
             return len(self.source)
         return 0
 
-    def __getitem__(self, index: int) -> Sample:
+    def __getitem__(self, index: int) -> Any:
         if self.source is None:
             raise TypeError("FlowGraph source is None — cannot index.")
         if hasattr(self.source, "__getitem__"):
@@ -458,7 +518,8 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
                 f"FlowGraph source {type(self.source).__name__} does not support indexing; "
                 "wrap it in a list or use iteration."
             )
-        result = self._run(Sample.from_any(raw))
+        seed = raw if isinstance(raw, TypedSample) else Sample.from_any(raw)
+        result = self._run(seed)
         if result is None:
             raise IndexError(f"Sample {index} filtered out by the flow")
         return result
@@ -529,11 +590,11 @@ def to_ops(steps: Union[Sequence[FlowStep], Dict[str, Any]], outputs: str = "") 
     attr_refs: Dict[str, List[str]] = {}
     for step in parsed:
         for ref in step.bind.values():
-            if "." in ref:
-                head, _, attr = ref.partition(".")
-                attr_refs.setdefault(head, [])
-                if attr not in attr_refs[head]:
-                    attr_refs[head].append(attr)
+            parsed_ref = _split_bind_ref(ref)
+            if parsed_ref.attr is not None:
+                attr_refs.setdefault(parsed_ref.step, [])
+                if parsed_ref.attr not in attr_refs[parsed_ref.step]:
+                    attr_refs[parsed_ref.step].append(parsed_ref.attr)
 
     def take_cell(name: str) -> Tuple[str, bool]:
         """(cell, is_last_read) — decrement the read counter."""
@@ -547,7 +608,16 @@ def to_ops(steps: Union[Sequence[FlowStep], Dict[str, Any]], outputs: str = "") 
             cell, last = take_cell(step.from_)
             ops.append(Use(name=cell, drop=last))
 
-        # 2. fan-in slots
+        # 2. fan-in slots — typed union (MergeFields) or the legacy Mix slots
+        if step.merge_from:
+            merge_drops: List[str] = []
+            merge_cells: List[str] = []
+            for ref in step.merge_from:
+                cell, last = take_cell(ref)
+                merge_cells.append(cell)
+                if last:
+                    merge_drops.append(cell)
+            ops.append(MergeFields(sources=merge_cells, drop=merge_drops))
         if step.target_from is not None or step.metadata_from is not None:
             drops: List[str] = []
             kwargs: Dict[str, Any] = {}
@@ -567,14 +637,15 @@ def to_ops(steps: Union[Sequence[FlowStep], Dict[str, Any]], outputs: str = "") 
         emitted: Optional[Any] = step.op
         if emitted is not None:
             for param, ref in step.bind.items():
-                if "." in ref:
+                parsed_ref = _split_bind_ref(ref)
+                if parsed_ref.attr is not None:
                     cell = attr_cells[ref]
                     cell_reads_left.setdefault(cell, 1)
                     cell_reads_left[cell] -= 1
                     emitted = Apply(op=emitted, param=param, source=cell, drop=cell_reads_left[cell] <= 0)
                 else:
-                    cell, last = take_cell(ref)
-                    emitted = Apply(op=emitted, param=param, source=cell, drop=last)
+                    cell, last = take_cell(parsed_ref.step)
+                    emitted = Apply(op=emitted, param=param, source=cell, key=parsed_ref.key or "", drop=last)
             captures = attr_refs.get(step.name, [])
             if captures:
                 for attr in captures:
@@ -616,7 +687,7 @@ def to_ops(steps: Union[Sequence[FlowStep], Dict[str, Any]], outputs: str = "") 
 # ---------------------------------------------------------------------------
 
 
-_CONTEXT_OP_CLASSES = (Save, Use, Drop, Apply, Capture, Mix)
+_CONTEXT_OP_CLASSES = (Save, Use, Drop, Apply, Capture, Mix, MergeFields)
 
 
 def _ctx_view(raw: Any) -> Optional[type]:
@@ -738,6 +809,11 @@ def from_ops(ops: Sequence[Any], outputs: str = "") -> Tuple[Dict[str, Any], str
             pending.update(mix_grammar)
             pending["__mix_pending__"] = True
             continue
+        if view is MergeFields:
+            sources = [cell_ref(str(c)) for c in (_ctx_field(raw, "sources", None) or [])]
+            pending["merge_from"] = sources
+            pending["__mix_pending__"] = True
+            continue
         if view is Drop:
             continue  # liveness is recomputed on lowering
 
@@ -750,7 +826,9 @@ def from_ops(ops: Sequence[Any], outputs: str = "") -> Tuple[Dict[str, Any], str
                 for attr, cell in _capture_items(op).items():
                     captures[cell] = attr
             else:
-                bind[str(_ctx_field(op, "param", ""))] = cell_ref(str(_ctx_field(op, "source", "")))
+                ref = cell_ref(str(_ctx_field(op, "source", "")))
+                apply_key = str(_ctx_field(op, "key", "") or "")
+                bind[str(_ctx_field(op, "param", ""))] = f"{ref}[{apply_key}]" if apply_key else ref
             op = _ctx_field(op, "op")
         pending.pop("__mix_pending__", None)
         if bind:
