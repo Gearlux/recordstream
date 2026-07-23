@@ -504,6 +504,17 @@ coordinate frame, so the tuple order is load-bearing, not incidental.
 - The twins carry `category="op"` + `group="image"`/`"numpy"`, so they are discoverable exactly
   like the legacy ops (their modules were already entry-pointed; a class added to a registered
   module needs no new entry point).
+- The two DETECTION-TARGET twins `CocoToTorchVisionDetection` / `MasksToDetectionBoxes`
+  (`sampleflux/ops/target.py`, `group="structure"`) are the SAME shape reaching one step further:
+  they read one source field (a `Label` carrying a COCO `objects` mapping, or a `Mask`) and write
+  the torchvision detection target as a `Regions` item — `boxes` = the `[N,4]` xyxy tensor,
+  `labels` = the class-id tensor — tagged **`target`** (not `aux`: this IS the supervised target a
+  loss consumes, whereas `ConnectedComponents`'s raw blobs are an intermediate). `Regions` is the
+  natural typed home for a bounding-box set and the batch-friendly one — `typed_collate` gathers
+  per-sample `Regions` into a list of targets (the variable-N detection batch convention, since
+  boxes can't be stacked), exactly as it gathers a classification target `Label`. Byte-parity is
+  again free (each delegates to its legacy `*Op` on a shim `Sample`). Pinned in
+  `tests/test_typed_detection_target_ops.py`.
 
 ### Example
 

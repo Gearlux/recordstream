@@ -20,13 +20,22 @@ written verbatim (e.g. a plain ``int``); wrap it into a framework tensor downstr
   HuggingFace / COCO ``objects`` annotation (``{bbox, category}``) into the torchvision
   detection target ``{"boxes": xyxy, "labels"}`` (torch tensors). It is the generic,
   image-detection counterpart of waivefront's signal-domain ``RegionsToDetectionBoxesOp``.
+
+The typed-bag TWINS (:class:`MetadataToTarget` / :class:`EncodeTarget` / :class:`DecodeTarget`
+and the two detection twins :class:`CocoToTorchVisionDetection` / :class:`MasksToDetectionBoxes`)
+are the ``TypedSample`` counterparts of the legacy ``*Op`` classes above — STRICTLY ADDITIVE, the
+legacy ops untouched. Each detection twin reads one source field and writes the torchvision
+detection target as a :class:`~sampleflux.Regions` item (``boxes`` = the xyxy tensor, ``labels`` =
+the class-id tensor) tagged ``target``, reusing its legacy op's conversion math VERBATIM (via a
+shim :class:`~sampleflux.sample.Sample`) so the numbers are byte-identical.
 """
 
 from typing import Any, Dict, Literal, Optional
 
+import numpy as np
 from confluid import configurable
 
-from sampleflux.bag.items import Label, item_data
+from sampleflux.bag.items import Label, Mask, Regions, item_data
 from sampleflux.bag.sample import TypedSample
 from sampleflux.bag.transform import Transform
 from sampleflux.sample import Sample
@@ -506,6 +515,171 @@ class DecodeTarget(Transform):
         return out.set_role(out_key, "target")
 
 
+@configurable(category="op", group="structure")
+class CocoToTorchVisionDetection(Transform):
+    """Typed twin of :class:`CocoToTorchVisionDetectionOp` — a COCO / HF ``objects`` annotation → a target ``Regions``.
+
+    The typed-bag counterpart of :class:`CocoToTorchVisionDetectionOp`: it reads a source field
+    (``field``; blank picks the first :class:`~sampleflux.Label` field, else the first field)
+    carrying a HuggingFace / COCO ``objects`` mapping — ``{"bbox": [[...], ...], "category": [...]}``,
+    each box ``[x, y, w, h]`` in absolute pixels — either the field's natural value (a ``Label``'s
+    ``.value``, else the item's payload) and rewrites it to the torchvision detection target. This
+    twin REUSES the legacy ``CocoToTorchVisionDetectionOp`` VERBATIM (its objects-shape validation
+    AND its bbox/category conversion math on a shim :class:`~sampleflux.sample.Sample`), so the
+    ``boxes`` / ``labels`` tensors are byte-identical.
+
+    The target rides as a :class:`~sampleflux.Regions` item under ``output`` (``boxes`` = the
+    ``[N, 4]`` float32 xyxy-pixel tensor, ``labels`` = the ``[N]`` int64 class-id tensor) tagged
+    ``target`` — the natural typed home for a bounding-box set, and the batch-friendly one (the
+    typed collate gathers per-sample ``Regions`` into a list of targets, the variable-N detection
+    batch convention, exactly as the classification :class:`EncodeTarget` twin gathers a target
+    ``Label``). An empty annotation yields empty ``[0,4]`` / ``[0]`` tensors (the negative-example
+    contract torchvision detectors accept).
+
+    Args:
+        bbox_key: Key in the objects mapping holding per-box coordinates (default ``"bbox"``).
+        category_key: Key holding the per-box integer class ids (default ``"category"``).
+        bbox_format: Box layout in pixels — ``xywh`` (COCO, default), ``xyxy``, or ``cxcywh``; output is xyxy.
+        label_offset: Added to each class id (default ``0``). Set ``1`` to reserve class ``0`` for background.
+        field: Source field with the objects mapping; blank (default) picks the first ``Label``, else the first field.
+        output: Field the target ``Regions`` is written to (added if new); its role is set to ``target``.
+    """
+
+    handles = (Label,)
+    consumes = (Label,)
+    produces = (Regions,)
+
+    def __init__(
+        self,
+        bbox_key: str = "bbox",
+        category_key: str = "category",
+        bbox_format: BBoxFormat = "xywh",
+        label_offset: int = 0,
+        field: str = "",
+        output: str = "target",
+    ) -> None:
+        super().__init__()
+        self.bbox_key = str(bbox_key)
+        self.category_key = str(category_key)
+        self.bbox_format = bbox_format
+        self.label_offset = int(label_offset)
+        self.field = str(field)
+        self.output = str(output)
+
+    def _find_source(self, sample: TypedSample) -> str:
+        """Resolve the KEY of the source field (``self.field``, else the first ``Label``, else the first field)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(
+                    f"CocoToTorchVisionDetection: field {self.field!r} not in sample (fields: {list(sample.keys())})"
+                )
+            return self.field
+        for key, _item in sample.items_of_type(Label):
+            return key
+        for key in sample.keys():
+            return key
+        raise ValueError("CocoToTorchVisionDetection: sample is empty — no source field to read")
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        key = self._find_source(sample)
+        item = sample[key]
+        objects = item.value if isinstance(item, Label) else item_data(item)
+        # Reuse the legacy op VERBATIM (objects-shape validation + bbox/category math) on a shim
+        # Sample so the boxes / labels tensors are byte-identical.
+        target = CocoToTorchVisionDetectionOp(self.bbox_key, self.category_key, self.bbox_format, self.label_offset)(
+            Sample(input=None, target=objects, metadata={})
+        ).target
+        out = sample.replace_field(self.output, Regions(boxes=target["boxes"], labels=target["labels"]))
+        return out.set_role(self.output, "target")
+
+
+@configurable(category="op", group="structure")
+class MasksToDetectionBoxes(Transform):
+    """Typed twin of :class:`MasksToDetectionBoxesOp` — a segmentation ``Mask`` → a target ``Regions``.
+
+    The typed-bag counterpart of :class:`MasksToDetectionBoxesOp`: it reads the
+    :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the bag, else the first
+    array-bearing item) as a 2-D integer mask and derives one tight ``[x0,y0,x1,y1]`` box per object
+    — either one box per distinct non-zero pixel value (``connected=False``, an instance mask) or
+    one box per connected component of the binarized mask (``connected=True``, via the shared
+    :func:`sampleflux.ops.numpy.connected_component_bboxes` helper). This twin REUSES the legacy
+    ``MasksToDetectionBoxesOp`` VERBATIM on a shim :class:`~sampleflux.sample.Sample`, so the
+    ``boxes`` / ``labels`` tensors are byte-identical.
+
+    The target rides as a :class:`~sampleflux.Regions` item under ``output`` (``boxes`` = the
+    ``[N, 4]`` float32 xyxy-pixel tensor, every box's ``labels`` id = ``label``) tagged ``target`` —
+    the same batch-friendly representation the sibling :class:`CocoToTorchVisionDetection` twin
+    writes. An empty mask yields empty ``[0,4]`` / ``[0]`` tensors (the negative-example contract
+    torchvision detectors accept).
+
+    Args:
+        label: Foreground class id assigned to every derived box (default ``1``; class 0 = background).
+        connected: True = connected-components on a binary mask; False (default) = each non-zero value is one instance.
+        min_area: Drop objects whose mask area (in pixels) is below this (default ``1``).
+        connectivity: Connected-components neighborhood when ``connected=True`` — ``4`` or ``8`` (default ``4``).
+        field: Name of the ``Mask`` field to read; blank (default) picks the first ``Mask`` (else the first array).
+        output: Field the target ``Regions`` is written to (added if new); its role is set to ``target``.
+    """
+
+    handles = (Mask,)
+    consumes = (Mask,)
+    produces = (Regions,)
+
+    def __init__(
+        self,
+        label: int = 1,
+        connected: bool = False,
+        min_area: int = 1,
+        connectivity: int = 4,
+        field: str = "",
+        output: str = "target",
+    ) -> None:
+        super().__init__()
+        self.label = int(label)
+        self.connected = bool(connected)
+        self.min_area = int(min_area)
+        self.connectivity = int(connectivity)
+        self.field = str(field)
+        self.output = str(output)
+
+    def _find_mask(self, sample: TypedSample) -> np.ndarray:
+        """Resolve the mask array (``self.field``, else the first ``Mask``, else the first array-bearing item)."""
+        if self.field:
+            if self.field not in sample.keys():
+                raise ValueError(
+                    f"MasksToDetectionBoxes: field {self.field!r} not in sample (fields: {list(sample.keys())})"
+                )
+            data = item_data(sample[self.field])
+        else:
+            data = None
+            for _key, item in sample.items_of_type(Mask):
+                data = item_data(item)
+                break
+            if data is None:
+                for _key, item in sample.items():
+                    payload = item_data(item)
+                    if isinstance(payload, np.ndarray):
+                        data = payload
+                        break
+            if data is None:
+                raise ValueError(
+                    f"MasksToDetectionBoxes: no Mask or array-bearing field in sample (fields: {list(sample.keys())})"
+                )
+        if not isinstance(data, np.ndarray):
+            raise TypeError(f"MasksToDetectionBoxes: expected an np.ndarray mask, got {type(data).__name__}")
+        return data
+
+    def __call__(self, sample: TypedSample) -> TypedSample:
+        mask = self._find_mask(sample)
+        # Reuse the legacy op VERBATIM (instance / connected-component derivation) on a shim Sample
+        # so the boxes / labels tensors are byte-identical.
+        target = MasksToDetectionBoxesOp(self.label, self.connected, self.min_area, self.connectivity)(
+            Sample(input=None, target=mask, metadata={})
+        ).target
+        out = sample.replace_field(self.output, Regions(boxes=target["boxes"], labels=target["labels"]))
+        return out.set_role(self.output, "target")
+
+
 __all__ = [
     "MetadataToTargetOp",
     "EncodeTargetOp",
@@ -515,4 +689,6 @@ __all__ = [
     "MetadataToTarget",
     "EncodeTarget",
     "DecodeTarget",
+    "CocoToTorchVisionDetection",
+    "MasksToDetectionBoxes",
 ]
