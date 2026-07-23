@@ -22,7 +22,11 @@ collision-free — albumentations and torchvision share many bare names (``Color
 """
 
 import inspect
-from typing import Any, Iterable, List, Optional, Tuple, Type
+# Callable/Dict/Literal/Sequence/Union are referenced only inside the wrapped transforms'
+# STRING annotations, which get_type_hints() evaluates against THIS module's globals when
+# to_pydantic introspects a synthesized __init__ — so they must be importable here (flake8
+# can't see string-annotation usage).
+from typing import Any, Iterable, List, Optional, Tuple, Type, get_type_hints
 
 from confluid import configurable
 from loggair import get_logger
@@ -107,9 +111,25 @@ def _make_op(
     # widgets / parse_param_docs) sees the transform's real parameters, keyword-only, with
     # the adapter's target/seed appended LAST. Required params are defaulted to None so
     # zero-arg construction always works (the workspace lazy-init mandate).
+    # Resolve annotations to REAL objects against the transform's own module. A library's
+    # param annotations are often strings (PEP 563) referencing names local to that module
+    # (cv2, Literal, the library's own aliases); left as strings they'd blow up later when
+    # to_pydantic's get_type_hints evals them against THIS module. Anything that still won't
+    # resolve degrades to Any so introspection never chokes on a stray name.
+    try:
+        _hints = get_type_hints(transform_cls.__init__)
+    except Exception:
+        _hints = {}
+
+    def _resolve(p: inspect.Parameter) -> Any:
+        ann = _hints.get(p.name, p.annotation)
+        return Any if isinstance(ann, str) else ann
+
     sig_params = [inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD)]
     for p in specs:
-        sig_params.append(p.replace(kind=inspect.Parameter.KEYWORD_ONLY, default=defaults[p.name]))
+        sig_params.append(
+            p.replace(kind=inspect.Parameter.KEYWORD_ONLY, default=defaults[p.name], annotation=_resolve(p))
+        )
     sig_params.append(
         inspect.Parameter("target", inspect.Parameter.KEYWORD_ONLY, default="none", annotation=TargetMode)
     )
@@ -118,7 +138,7 @@ def _make_op(
             inspect.Parameter("seed", inspect.Parameter.KEYWORD_ONLY, default=None, annotation=Optional[int])
         )
     __init__.__signature__ = inspect.Signature(sig_params)  # type: ignore[attr-defined]
-    annotations = {p.name: p.annotation for p in specs if p.annotation is not inspect.Parameter.empty}
+    annotations = {p.name: _resolve(p) for p in specs if p.annotation is not inspect.Parameter.empty}
     annotations["target"] = TargetMode
     if seed_param:
         annotations["seed"] = Optional[int]
