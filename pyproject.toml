@@ -17,7 +17,11 @@ dependencies = [
     "orjson",
     "fsspec",
     "cloudpathlib",
-    "scikit-learn"  # LabelMap.fit() uses sklearn.preprocessing.LabelEncoder (lazy-imported)
+    "scikit-learn",  # LabelMap.fit() uses sklearn.preprocessing.LabelEncoder (lazy-imported)
+    # liquifai powers the generic `sampleflux run <config.yaml>` CLI (sampleflux.cli) that
+    # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
+    # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
+    "liquifai>=0.1.0",
 ]
 requires-python = ">=3.12"
 
@@ -112,6 +116,22 @@ sampleflux-bag-transform = "sampleflux.bag.transform"
 # Typed-bag structure ops (SetRole/RenameField/DropField/CopyField/SelectFields) — reshape a
 # TypedSample's named fields; the typed replacement for the classic triple-slot plumbing.
 sampleflux-ops-structure = "sampleflux.ops.structure"
+# The runnable orchestration layer: DatasetProcessor (generic source→sink runner) and the
+# workflow combinators (Sequence/Conditional/Switch + PathExists/Not/AllOf/AnyOf predicates).
+# Discovered as @configurable runnables; run via `sampleflux run`.
+sampleflux-processing = "sampleflux.processing"
+sampleflux-workflow = "sampleflux.workflow"
+
+# The `sampleflux` console script — `sampleflux run <config.yaml>` runs any Confluid-wired
+# runnable (a trainer, an evaluator, a DatasetProcessor, a workflow).
+[project.scripts]
+sampleflux = "sampleflux.cli:main"
+
+# Liquifai app registration: lets `liquifai-install-completions` discover this CLI via an
+# instant entry-point metadata read instead of a subprocess probe. Name = the binary name;
+# value = the LiquifyApp instance.
+[project.entry-points."liquifai.apps"]
+sampleflux = "sampleflux.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]

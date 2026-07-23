@@ -52,7 +52,16 @@ from sampleflux.flow import FlowGraph, from_ops, to_ops
 from sampleflux.kinds import INPUT, TARGET, Input, OpContract, SampleKind, Target, classify_carrier, op_contract
 from sampleflux.labels import LabelMap
 from sampleflux.ops import RescaleOp, StandardizeOp, ToTensorOp
+from sampleflux.processing import DatasetProcessor
 from sampleflux.projection import ProjectionField, SupportsProjection, iter_inputs, iter_targets, num_classes, project
+from sampleflux.runnable import (
+    ProgressCallback,
+    ProgressReporting,
+    TorchRunner,
+    entrypoint,
+    entrypoint_tasks,
+    runnable_entrypoints,
+)
 from sampleflux.sample import InputMeta, Pair, Sample, TargetMeta
 from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource, SplitName
 from sampleflux.typespec import (
@@ -73,6 +82,7 @@ from sampleflux.typespec import (
     infer_type,
     typed,
 )
+from sampleflux.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
 
 __all__ = [
     # ---- typed-bag surface (THE data model) ----
@@ -119,6 +129,21 @@ __all__ = [
     "get_collate",
     "register_collate",
     "LabelMap",
+    # ---- runnable protocol + orchestration (carrier-agnostic) ----
+    "TorchRunner",
+    "ProgressReporting",
+    "ProgressCallback",
+    "entrypoint",
+    "entrypoint_tasks",
+    "runnable_entrypoints",
+    "DatasetProcessor",
+    "Sequence",
+    "Conditional",
+    "Switch",
+    "PathExists",
+    "Not",
+    "AllOf",
+    "AnyOf",
     # ---- legacy surface (dies with the purge stage) ----
     "AnyType",
     "ArrayType",
