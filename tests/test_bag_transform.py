@@ -7,12 +7,12 @@ native augmentation transforms — libraries cover that through adapter coercion
 import numpy as np
 import pytest
 
-from sampleflux import Image, Label, Mask, Pipeline, Regions, Transform, TypedSample, as_transform
+from sampleflux import Image, Label, Mask, Pipeline, Regions, Sample, Transform, as_transform
 from tests._bag_fixtures import FixtureFlip
 
 
-def _seg() -> TypedSample:
-    return TypedSample(
+def _seg() -> Sample:
+    return Sample(
         {
             "image": Image(np.arange(8 * 10 * 3).reshape(8, 10, 3).astype(np.float32)),
             "mask": Mask(np.arange(8 * 10).reshape(8, 10)),
@@ -43,16 +43,16 @@ class TestKernelDispatchMachinery:
         assert out["regions"].boxes == [[1, 1, 4, 4]]  # regions skipped
 
     def test_image_layout_chw(self) -> None:
-        s = TypedSample({"image": Image(np.arange(3 * 4 * 5).reshape(3, 4, 5), layout="CHW")})
+        s = Sample({"image": Image(np.arange(3 * 4 * 5).reshape(3, 4, 5), layout="CHW")})
         out = FixtureFlip(p=1.0)(s)
         assert np.array_equal(np.asarray(out["image"]), np.asarray(s["image"])[:, :, ::-1])
 
     def test_regions_uses_canvas_without_image(self) -> None:
-        s = TypedSample({"regions": Regions(boxes=[[2, 0, 5, 3]], canvas=(8, 10))})
+        s = Sample({"regions": Regions(boxes=[[2, 0, 5, 3]], canvas=(8, 10))})
         assert FixtureFlip(p=1.0)(s)["regions"].boxes == [[5, 0, 8, 3]]
 
     def test_regions_without_reference_width_raises(self) -> None:
-        s = TypedSample({"regions": Regions(boxes=[[2, 0, 5, 3]])})  # no image, no canvas
+        s = Sample({"regions": Regions(boxes=[[2, 0, 5, 3]])})  # no image, no canvas
         with pytest.raises(ValueError, match="no reference width"):
             FixtureFlip(p=1.0)(s)
 
@@ -83,13 +83,13 @@ class TestAdapterParity:
 
 class TestPipelineAndFunction:
     def test_pipeline_is_sequential(self) -> None:
-        s = TypedSample({"x": Image(np.ones((2, 2, 3), dtype=np.float32))})
+        s = Sample({"x": Image(np.ones((2, 2, 3), dtype=np.float32))})
         double = as_transform(lambda d: d * 2, handles=(Image,))
         out = Pipeline([double, double])(s)
         assert np.allclose(np.asarray(out["x"]), 4.0)
 
     def test_function_transform_only_filter(self) -> None:
-        s = TypedSample({"a": Image(np.ones((2, 2, 3))), "b": Image(np.ones((2, 2, 3)))})
+        s = Sample({"a": Image(np.ones((2, 2, 3))), "b": Image(np.ones((2, 2, 3)))})
         out = as_transform(lambda d: d + 1, handles=(Image,), only=["a"])(s)
         assert np.allclose(np.asarray(out["a"]), 2.0) and np.allclose(np.asarray(out["b"]), 1.0)
 
@@ -100,12 +100,12 @@ class TestPipelineAndFunction:
 class TestBaseTransform:
     def test_default_get_params_and_passthrough(self) -> None:
         # A transform with no kernels leaves every field alone.
-        s = TypedSample({"x": Label("v")})
+        s = Sample({"x": Label("v")})
         assert Transform()(s) == s
 
     def test_decode_not_implemented(self) -> None:
         with pytest.raises(NotImplementedError, match="no decode"):
-            FixtureFlip().decode(TypedSample({"image": Image(np.zeros((2, 2, 3)))}))
+            FixtureFlip().decode(Sample({"image": Image(np.zeros((2, 2, 3)))}))
 
     def test_zero_arg_construction(self) -> None:
         assert FixtureFlip().p == 0.5 and Transform().only is None

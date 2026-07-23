@@ -25,8 +25,8 @@ from typing import Any, Iterable, Iterator, List, Optional
 from confluid import configurable, flow
 from confluid.fluid import Fluid
 
+from sampleflux.bag.sample import Sample
 from sampleflux.core import _worker_task
-from sampleflux.sample import Sample
 
 
 @configurable(category="op", group="compose")

@@ -28,9 +28,8 @@ from confluid import configurable
 from loggair import get_logger
 
 from sampleflux.bag.io import encode_item
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample
 from sampleflux.ops.formula import _FORMULA_NAMESPACE
-from sampleflux.sample import Sample
 from sampleflux.storage.base import TYPED_FORMAT, restore_attrs
 
 logger = get_logger("sampleflux.storage.query")
@@ -61,7 +60,7 @@ def _viewed(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _AttrView(v) if isinstance(v, dict) else v for k, v in metadata.items()}
 
 
-def typed_sample_metadata(sample: TypedSample) -> Dict[str, Dict[str, Any]]:
+def typed_sample_metadata(sample: Sample) -> Dict[str, Dict[str, Any]]:
     """A live sample's queryable metadata: ``{field: {attr: value}}`` (attrs via the io codec,
     payloads untouched) — the same nested shape the typed storage scans yield."""
     return {key: dict(encode_item(item).attrs) for key, item in sample.items()}
@@ -219,11 +218,7 @@ class MetadataFilterSource:
                     "falling back to full-iteration filtering (arrays load for every sample)."
                 )
                 self._matches = [
-                    i
-                    for i, sample in enumerate(self.source)
-                    if self._match(
-                        typed_sample_metadata(sample) if isinstance(sample, TypedSample) else dict(sample.meta)
-                    )
+                    i for i, sample in enumerate(self.source) if self._match(typed_sample_metadata(sample))
                 ]
         return self._matches
 

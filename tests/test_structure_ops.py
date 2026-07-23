@@ -3,12 +3,12 @@
 import numpy as np
 import pytest
 
-from sampleflux import Image, Label, Regions, TypedSample, primary
+from sampleflux import Image, Label, Regions, Sample, primary
 from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields, SetRole
 
 
-def _sample() -> TypedSample:
-    return TypedSample(
+def _sample() -> Sample:
+    return Sample(
         {"image": Image(np.zeros((2, 2, 3))), "regions": Regions(boxes=[[0, 0, 1, 1]]), "class": Label("x")},
         roles={"regions": "target", "class": "target"},
     )
@@ -99,15 +99,15 @@ class TestPrimaryAndMerge:
             primary(_sample(), "pred")
 
     def test_merge_union_last_wins(self) -> None:
-        a = TypedSample({"x": Label("a"), "shared": Label("from_a")})
-        b = TypedSample({"y": Label("b"), "shared": Label("from_b")}, roles={"shared": "target"})
-        m = TypedSample.merge(a, b)
+        a = Sample({"x": Label("a"), "shared": Label("from_a")})
+        b = Sample({"y": Label("b"), "shared": Label("from_b")}, roles={"shared": "target"})
+        m = Sample.merge(a, b)
         assert list(m.keys()) == ["x", "shared", "y"]  # union keeps first-seen position
         assert m["shared"].value == "from_b" and m.role_of("shared") == "target"  # last wins, role travels
 
     def test_merge_rejects_non_sample(self) -> None:
-        with pytest.raises(TypeError, match="expected TypedSample"):
-            TypedSample.merge(_sample(), "nope")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="expected Sample"):
+            Sample.merge(_sample(), "nope")  # type: ignore[arg-type]
 
     def test_configurable_marks(self) -> None:
         for cls in (SetRole, RenameField, DropField, CopyField, SelectFields):

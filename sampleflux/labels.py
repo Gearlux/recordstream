@@ -26,7 +26,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 from confluid import configurable
 
-from sampleflux.ops.target import DecodeTargetOp, EncodeTargetOp
+from sampleflux.ops.target import DecodeTarget, EncodeTarget
 
 
 @configurable
@@ -73,13 +73,13 @@ class LabelMap:
         """``id → name`` lookup (the inverse of :attr:`mapping`)."""
         return {v: k for k, v in self._require().items()}
 
-    def encode_op(self, ignore_unknown: bool = False, default: Any = 0) -> EncodeTargetOp:
-        """Return an :class:`~sampleflux.ops.target.EncodeTargetOp` that maps name → id via this map."""
-        return EncodeTargetOp(mapping=dict(self._require()), ignore_unknown=ignore_unknown, default=default)
+    def encode_op(self, ignore_unknown: bool = False, default: Any = 0) -> EncodeTarget:
+        """Return an :class:`~sampleflux.ops.target.EncodeTarget` transform that maps name → id via this map."""
+        return EncodeTarget(mapping=dict(self._require()), ignore_unknown=ignore_unknown, default=default)
 
-    def decode_op(self, ignore_unknown: bool = False, default: Any = None) -> DecodeTargetOp:
-        """Return a :class:`~sampleflux.ops.target.DecodeTargetOp` that maps id → name via this map."""
-        return DecodeTargetOp(mapping=dict(self.inverse), ignore_unknown=ignore_unknown, default=default)
+    def decode_op(self, ignore_unknown: bool = False, default: Any = None) -> DecodeTarget:
+        """Return a :class:`~sampleflux.ops.target.DecodeTarget` transform that maps id → name via this map."""
+        return DecodeTarget(mapping=dict(self.inverse), ignore_unknown=ignore_unknown, default=default)
 
     @classmethod
     def fit(cls, targets: Iterable[Any]) -> "LabelMap":

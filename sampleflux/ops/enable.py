@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.sample import Sample
+from sampleflux.bag.sample import Sample
 
 logger = get_logger(__name__)
 

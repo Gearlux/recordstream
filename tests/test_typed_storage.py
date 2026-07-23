@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sampleflux import Image, Label, Regions, Sample, TypedSample, register_item
+from sampleflux import Image, Label, Regions, Sample, register_item
 from sampleflux.storage.base import restore_attrs, split_attrs
 from sampleflux.storage.directory import DirectorySink, DirectorySource
 from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
@@ -26,7 +26,7 @@ class _StoreSig:
 
 def _samples() -> list:
     # Ragged across samples: different box counts, one field with an array-valued attr.
-    s0 = TypedSample(
+    s0 = Sample(
         {
             "image": Image(np.arange(12, dtype=np.float32).reshape(2, 2, 3), layout="CHW"),
             "sig": _StoreSig(np.arange(8, dtype=np.float32), samplerate=20e6, mask=np.array([1, 0, 1], dtype=np.uint8)),
@@ -35,7 +35,7 @@ def _samples() -> list:
         },
         roles={"regions": "target", "label": "target", "sig": "aux"},
     )
-    s1 = TypedSample(
+    s1 = Sample(
         {
             "image": Image(np.ones((2, 2, 3), dtype=np.float32)),
             "sig": _StoreSig(np.zeros(4, dtype=np.float32), samplerate=1e6, mask=np.array([0], dtype=np.uint8)),
@@ -102,36 +102,13 @@ class TestHDF5Typed:
             assert source.is_typed and len(source) == 2
             _assert_round_trip(list(source), _samples())
 
-    def test_carrier_guards_both_directions(self, tmp_path: Path) -> None:
-        typed_path = tmp_path / "typed.h5"
-        sink = HDF5Sink(path=typed_path, overwrite=True)
+    def test_non_sample_write_raises(self, tmp_path: Path) -> None:
+        # The sink only accepts a typed Sample bag; a bare array is rejected loudly.
+        sink = HDF5Sink(path=tmp_path / "typed.h5", overwrite=True)
         with sink:
             sink.write(_samples()[0])
-        appender = HDF5Sink(path=typed_path)
-        with appender:
-            with pytest.raises(TypeError, match="typed field-group layout"):
-                appender.write(Sample(input=np.zeros(3)))
-
-        legacy_path = tmp_path / "legacy.h5"
-        legacy = HDF5Sink(path=legacy_path, overwrite=True)
-        with legacy:
-            legacy.write(Sample(input=np.zeros(3), metadata={"k": 1}))
-        appender2 = HDF5Sink(path=legacy_path)
-        with appender2:
-            with pytest.raises(TypeError, match="legacy Sample layout"):
-                appender2.write(_samples()[0])
-
-    def test_legacy_path_unchanged(self, tmp_path: Path) -> None:
-        path = tmp_path / "legacy.h5"
-        sink = HDF5Sink(path=path, overwrite=True)
-        with sink:
-            sink.write(Sample(input=np.arange(4, dtype=np.float32), target=1, metadata={"snr_db": 12.0}))
-            sink.flush()
-        source = HDF5Source(path=path)
-        with source:
-            assert not source.is_typed
-            (back,) = list(source)
-        assert isinstance(back, Sample) and back.meta["snr_db"] == 12.0
+            with pytest.raises(TypeError, match="expected a Sample bag"):
+                sink.write(np.zeros(3))
 
 
 class TestZarrTyped:
@@ -145,13 +122,13 @@ class TestZarrTyped:
         assert source.is_typed and len(source) == 2
         _assert_round_trip(list(source), _samples())
 
-    def test_group_carrier_guard(self, tmp_path: Path) -> None:
+    def test_group_non_sample_write_raises(self, tmp_path: Path) -> None:
         path = str(tmp_path / "g.zarr")
         sink = ZarrGroupSink(path=path)
         sink.open()
         sink.write(_samples()[0])
-        with pytest.raises(TypeError, match="typed field-group layout"):
-            sink.write(Sample(input=np.zeros(3)))
+        with pytest.raises(TypeError, match="expected a Sample bag"):
+            sink.write(np.zeros(3))
 
     def test_batch_typed_rows(self, tmp_path: Path) -> None:
         path = str(tmp_path / "b.zarr")
@@ -161,7 +138,7 @@ class TestZarrTyped:
             sink.write(s)  # appends the PRIMARY input field's payload
         source = ZarrBatchSource(path=path)
         rows = list(source)
-        assert len(rows) == 2 and all(isinstance(r, TypedSample) for r in rows)
+        assert len(rows) == 2 and all(isinstance(r, Sample) for r in rows)
         assert isinstance(rows[0]["image"], Image) and rows[0]["image"].layout == "CHW"  # uniform template
         assert np.asarray(rows[1]["image"]).shape == (2, 2, 3)
 
@@ -216,10 +193,10 @@ class TestTypedQueries:
         fast = MetadataFilterSource(source=source, where="sig.samplerate > 1e7")
         assert len(fast) == 1
         (match,) = list(fast)
-        assert isinstance(match, TypedSample) and match["sig"].samplerate == 20e6
+        assert isinstance(match, Sample) and match["sig"].samplerate == 20e6
 
     def test_full_iteration_fallback_on_typed_samples(self) -> None:
-        # A plain list source (no iter_metadata protocol) of TypedSamples still filters.
+        # A plain list source (no iter_metadata protocol) of Samples still filters.
         filt = MetadataFilterSource(source=_samples(), where="image.layout == 'CHW'")
         assert len(filt) == 1
 

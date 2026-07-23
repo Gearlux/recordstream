@@ -1,21 +1,15 @@
 import operator
 import os
 import re
-from typing import Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
 from sampleflux.bag.items import Mask, NDArrayItem, Regions, item_data
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample
 from sampleflux.bag.transform import Transform
-from sampleflux.sample import Sample
-from sampleflux.typespec import ArrayType, PythonType, SampleType, UnionType
-
-# Common shorthands for the numpy ops' declared types.
-_NDARRAY = ArrayType(frameworks={"numpy"})
-_NUMERIC_OR_PIL = UnionType((ArrayType(dtype="numeric", frameworks={"numpy"}), PythonType("PIL.Image.Image")))
 
 logger = get_logger(__name__)
 
@@ -23,37 +17,33 @@ logger = get_logger(__name__)
 _EXPR_PATTERN = re.compile(r"\{(\w+)\}|\$(\w+)")
 
 
-def resolve_expression(value: str, sample: Sample) -> str:
-    """Substitute ``{key}`` from ``sample.meta`` and ``$NAME`` from ``os.environ``.
+def resolve_expression(value: str, meta: Optional[Dict[str, Any]] = None) -> str:
+    """Substitute ``{key}`` from ``meta`` and ``$NAME`` from ``os.environ``.
 
-    Returns the substituted string verbatim — the caller is responsible for
-    any further casting (e.g. ``float(...)`` for a numeric expression).
+    Returns the substituted string verbatim — the caller is responsible for any further
+    casting (e.g. ``float(...)`` for a numeric expression). In the typed-bag model an item
+    owns its own metadata (there is no shared sample dict), so ``meta`` is usually empty and
+    only literals / ``$ENV`` expressions resolve; a ``{key}`` bound then raises ``KeyError``.
 
     Args:
-        value: Expression string with ``{meta_key}`` and/or ``$ENV_VAR`` placeholders
-            (a plain literal returns unchanged).
-        sample: The Sample whose ``metadata`` supplies the ``{key}`` substitutions.
-
-    Examples:
-        ``"5.5"``                → ``"5.5"`` (no substitution)
-        ``"{reference_snr_level}"`` → ``str(metadata["reference_snr_level"])``
-        ``"-{reference_snr_level}"`` → ``"-<value>"`` (sign passes through to ``float()``)
-        ``"$REF_SNR"``           → ``os.environ["REF_SNR"]``
+        value: Expression string with ``{meta_key}`` and/or ``$ENV_VAR`` placeholders.
+        meta: Metadata dict supplying the ``{key}`` substitutions (defaults to empty).
 
     Raises:
         KeyError: A referenced metadata key or environment variable is missing.
     """
+    meta = meta or {}
 
     def _repl(match: "re.Match[str]") -> str:
         meta_key = match.group(1)
         env_name = match.group(2)
         if meta_key is not None:
-            if meta_key not in sample.meta:
+            if meta_key not in meta:
                 raise KeyError(
                     f"resolve_expression: metadata key {meta_key!r} missing in {value!r}; "
-                    f"available keys: {sorted(sample.meta)}"
+                    f"available keys: {sorted(meta)}"
                 )
-            return str(sample.meta[meta_key])
+            return str(meta[meta_key])
         assert env_name is not None
         if env_name not in os.environ:
             raise KeyError(f"resolve_expression: environment variable {env_name!r} missing in {value!r}")
@@ -62,398 +52,88 @@ def resolve_expression(value: str, sample: Sample) -> str:
     return _EXPR_PATTERN.sub(_repl, value)
 
 
-@configurable(category="op", group="numpy")
-class StandardizeOp:
-    """
-    Standardizes ndarray values with given mean and standard deviation.
-
-    Formula: output = (input - mean) / std
-
-    mean/std can be a single float (applied uniformly) or a sequence of
-    per-channel values that broadcasts over [C, H, W] format.
-
-    Handles PIL images by converting to ndarray first.
-
-    Args:
-        mean: Mean to subtract — a single float (uniform) or a per-channel sequence broadcasting over [C, H, W].
-        std: Standard deviation to divide by — a single float (uniform) or a per-channel sequence.
-    """
-
-    ACCEPTS = SampleType(input=_NUMERIC_OR_PIL)
-    PRODUCES = SampleType(input=ArrayType(dtype="floating", frameworks={"numpy"}))
-
-    def __init__(self, mean: Union[float, Sequence[float]] = 0.0, std: Union[float, Sequence[float]] = 1.0):
-        # Lazy / zero-arg: store config only. The defaults (mean 0, std 1) are an identity standardize.
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = sample.input
-
-        # Handle PIL / PngImageFile
-        if hasattr(arr, "convert"):
-            arr = np.array(arr)
-
-        if not isinstance(arr, np.ndarray):
-            raise TypeError(f"StandardizeOp expects an np.ndarray, got {type(arr).__name__}")
-
-        if arr.dtype == np.float64:
-            arr = arr.astype(np.float64)
-        else:
-            arr = arr.astype(np.float32)
-
-        if isinstance(self.mean, (int, float)):
-            mean_a = np.array([self.mean], dtype=arr.dtype)
-        else:
-            mean_a = np.array(self.mean, dtype=arr.dtype)
-
-        if isinstance(self.std, (int, float)):
-            std_a = np.array([self.std], dtype=arr.dtype)
-        else:
-            std_a = np.array(self.std, dtype=arr.dtype)
-
-        # Reshape to [C, 1, 1, ...] for broadcasting over [C, H, W]
-        mean_a = mean_a.reshape(-1, *([1] * (arr.ndim - 1)))
-        std_a = std_a.reshape(-1, *([1] * (arr.ndim - 1)))
-
-        arr = (arr - mean_a) / std_a
-
-        return sample._replace(input=arr)
-
-
-def _require_ndarray(sample: Sample, op_name: str) -> np.ndarray:
-    arr = sample.input
-    if not isinstance(arr, np.ndarray):
-        raise TypeError(f"{op_name} expects an np.ndarray on sample.input, got {type(arr).__name__}")
-    return arr
-
-
-@configurable(category="op", group="numpy")
-class SqueezeOp:
-    """Remove size-1 axes from an ``np.ndarray``.
-
-    Args:
-        axis: Axis index to remove. When ``None`` (default), all size-1 axes are removed.
-            When specified, the axis must have size 1 (numpy raises ``ValueError`` otherwise).
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, axis: Optional[int] = None) -> None:
-        self.axis = axis
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "SqueezeOp")
-        out = np.squeeze(arr) if self.axis is None else np.squeeze(arr, axis=self.axis)
-        return sample._replace(input=out)
-
-
-@configurable(category="op", group="numpy")
-class UnsqueezeOp:
-    """Insert a size-1 axis at the specified position in an ``np.ndarray``.
-
-    Args:
-        axis: Axis index at which the new dimension is inserted. Default ``0``.
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, axis: int = 0) -> None:
-        self.axis = axis
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "UnsqueezeOp")
-        return sample._replace(input=np.expand_dims(arr, axis=self.axis))
-
-
-@configurable(category="op", group="numpy")
-class ClipPercentilesOp:
-    """Clip ``sample.input`` to ``[p_low, p_high]`` percentiles of finite values.
-
-    Percentiles are computed over only finite entries — ``inf`` / ``-inf`` /
-    ``nan`` are excluded from the percentile estimate. ``np.clip`` then maps
-    ``+inf`` to the upper bound and ``-inf`` to the lower bound; ``nan``
-    survives unchanged. Chain :class:`ReplaceNonFiniteOp` upstream if remaining
-    ``nan`` values matter.
-
-    Args:
-        low: Lower percentile in ``[0, 100)``. Default ``2.0``.
-        high: Upper percentile in ``(0, 100]``, must be ``> low``. Default ``98.0``.
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, low: float = 2.0, high: float = 98.0) -> None:
-        # Lazy / zero-arg: store config only; the bound relationship is validated lazily in __call__.
-        self.low = float(low)
-        self.high = float(high)
-
-    def __call__(self, sample: Sample) -> Sample:
-        if not (0.0 <= self.low < self.high <= 100.0):
-            raise ValueError(f"ClipPercentilesOp: require 0 <= low < high <= 100; got low={self.low}, high={self.high}")
-        arr = _require_ndarray(sample, "ClipPercentilesOp")
-        finite = np.isfinite(arr)
-        if not finite.any():
-            logger.warning("ClipPercentilesOp: input is entirely non-finite; passing through")
-            return sample
-        lo = float(np.percentile(arr[finite], self.low))
-        hi = float(np.percentile(arr[finite], self.high))
-        return sample._replace(input=np.clip(arr, lo, hi))
-
-
-@configurable(category="op", group="numpy")
-class RescaleOp:
-    """Affine rescale ``sample.input`` from ``[in_min, in_max]`` to ``[out_min, out_max]``.
-
-    The default ``out_min=0.0`` / ``out_max=1.0`` covers the common
-    ``[0, 255] -> [0, 1]`` image-normalization case. PIL inputs are
-    converted to ndarray; integer dtypes are promoted to ``float32``
-    (``float64`` is preserved).
-
-    Args:
-        in_min: Lower edge of the input range. Default ``0.0``.
-        in_max: Upper edge of the input range, must be ``> in_min``. Default ``1.0``.
-        out_min: Lower edge of the output range. Default ``0.0``.
-        out_max: Upper edge of the output range, must be ``> out_min``. Default ``1.0``.
-        clip: When True (default), clamp values outside ``[in_min, in_max]``
-            before rescaling. When False, extrapolate linearly.
-    """
-
-    ACCEPTS = SampleType(input=_NUMERIC_OR_PIL)
-    PRODUCES = SampleType(input=ArrayType(dtype="floating", frameworks={"numpy"}))
-
-    def __init__(
-        self,
-        in_min: float = 0.0,
-        in_max: float = 1.0,
-        out_min: float = 0.0,
-        out_max: float = 1.0,
-        clip: bool = True,
-    ) -> None:
-        # Lazy / zero-arg: store config only; the bound relationships are validated lazily in __call__.
-        self.in_min = float(in_min)
-        self.in_max = float(in_max)
-        self.out_min = float(out_min)
-        self.out_max = float(out_max)
-        self.clip = bool(clip)
-
-    def __call__(self, sample: Sample) -> Sample:
-        if not (self.in_min < self.in_max):
-            raise ValueError(f"RescaleOp: require in_min < in_max; got in_min={self.in_min}, in_max={self.in_max}")
-        if not (self.out_min < self.out_max):
-            raise ValueError(
-                f"RescaleOp: require out_min < out_max; got out_min={self.out_min}, out_max={self.out_max}"
-            )
-        arr = sample.input
-        if hasattr(arr, "convert"):
-            arr = np.array(arr)
-        if not isinstance(arr, np.ndarray):
-            raise TypeError(f"RescaleOp expects an np.ndarray, got {type(arr).__name__}")
-        arr = arr.astype(np.float64 if arr.dtype == np.float64 else np.float32)
-        src = np.clip(arr, self.in_min, self.in_max) if self.clip else arr
-        scaled = (src - self.in_min) / (self.in_max - self.in_min)
-        out = scaled * (self.out_max - self.out_min) + self.out_min
-        return sample._replace(input=out)
-
-
-@configurable(category="op", group="numpy")
-class ReplaceNonFiniteOp:
-    """Replace ``inf`` / ``-inf`` / ``nan`` entries in ``sample.input``.
-
-    Args:
-        value: Replacement specifier. Either:
-
-            * a ``float`` / ``int`` — literal replacement value;
-            * the string ``"min"`` — replace with the array's finite min;
-            * the string ``"max"`` — replace with the array's finite max.
-
-            Default ``"min"``.
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, value: Union[float, int, str] = "min") -> None:
-        # Lazy / zero-arg: store config only; the 'min'/'max' string is validated lazily in __call__.
-        self.value = value
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "ReplaceNonFiniteOp")
-        non_finite = ~np.isfinite(arr)
-        if not non_finite.any():
-            return sample
-        if isinstance(self.value, str):
-            if self.value not in ("min", "max"):
-                raise ValueError(f"ReplaceNonFiniteOp: value string must be 'min' or 'max'; got {self.value!r}")
-            finite = ~non_finite
-            if not finite.any():
-                logger.warning("ReplaceNonFiniteOp: array is entirely non-finite; passing through")
-                return sample
-            finite_values = arr[finite]
-            repl = float(finite_values.min() if self.value == "min" else finite_values.max())
-        else:
-            repl = float(self.value)
-        return sample._replace(input=np.where(non_finite, repl, arr))
-
-
-# ThresholdOp comparison selectors. Closed ``Literal``s (workspace "prefer closed
-# Literals over bare strings" mandate) so GUIs / schema generators render the choice
-# as a dropdown and the allowed operators stay machine-introspectable via
-# ``typing.get_args(...)``. Two distinct types because the lower bound only sensibly
-# uses ``>`` / ``>=`` and the upper bound only ``<`` / ``<=``.
+# Threshold comparison selectors. Closed ``Literal``s so GUIs / schema generators render the
+# choice as a dropdown and the allowed operators stay machine-introspectable via
+# ``typing.get_args(...)``. Two distinct types because the lower bound only sensibly uses
+# ``>`` / ``>=`` and the upper bound only ``<`` / ``<=``.
 LowComparison = Literal[">", ">="]
 HighComparison = Literal["<", "<="]
 
-# Operator dispatch. The dict keys are the single runtime source of truth's
-# consumers — ``tests/test_ops.py`` pins ``set(_LOW_COMPARISONS) == get_args(LowComparison)``
-# (and likewise for high) so the map can never drift from the Literal.
 _LOW_COMPARISONS: Dict[str, Callable[[Any, float], Any]] = {">": operator.gt, ">=": operator.ge}
 _HIGH_COMPARISONS: Dict[str, Callable[[Any, float], Any]] = {"<": operator.lt, "<=": operator.le}
 
 
-@configurable(category="op", group="numpy")
-class ThresholdOp:
-    """Threshold ``sample.input`` (ndarray) into a boolean mask using one or both bounds.
+def _resolve_bound(bound: Union[float, int, str], meta: Optional[Dict[str, Any]]) -> float:
+    """Resolve a threshold bound (literal / numeric / ``resolve_expression`` string) to a float."""
+    if isinstance(bound, str):
+        resolved = resolve_expression(bound, meta)
+        try:
+            return float(resolved)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"threshold: expression {bound!r} resolved to {resolved!r}, which is not a number"
+            ) from exc
+    try:
+        return float(bound)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"threshold bounds must be a number or expression string; got {type(bound).__name__}") from exc
 
-    Which mask is produced depends on *which* bounds are set (presence-driven), and the
-    comparison applied for each is selected by ``low_op`` / ``high_op``:
 
-    * only ``low_level``  → ``input <low_op> low_level``    (values above the floor)
-    * only ``high_level`` → ``input <high_op> high_level``  (values below the ceiling)
+def threshold_array(
+    arr: np.ndarray,
+    low_level: Optional[Union[float, int, str]] = None,
+    high_level: Optional[Union[float, int, str]] = None,
+    low_op: LowComparison = ">",
+    high_op: HighComparison = "<",
+    meta: Optional[Dict[str, Any]] = None,
+) -> np.ndarray:
+    """Threshold ``arr`` into a boolean mask using one or both bounds.
+
+    * only ``low_level``  → ``arr <low_op> low_level``    (values above the floor)
+    * only ``high_level`` → ``arr <high_op> high_level``  (values below the ceiling)
     * both                → both conditions AND-ed together (band-pass)
 
-    ``low_op`` is ``">"`` (strict, the default) or ``">="`` (inclusive); ``high_op`` is
-    ``"<"`` (strict, the default) or ``"<="`` (inclusive). So the defaults yield the OPEN
-    interval ``low_level < input < high_level``, while ``low_op=">="`` + ``high_op="<="``
-    yield the CLOSED interval ``low_level <= input <= high_level``.
-
-    At least one of ``low_level`` / ``high_level`` MUST be provided; passing
-    neither raises ``ValueError`` when the op is applied (the zero-arg default is
-    deferred-valid so the op stays constructible, per the lazy-init convention).
-
-    Each bound is either a numeric literal or a string expression resolved via
-    :func:`resolve_expression` against ``sample.meta`` and ``os.environ``:
-
-    * ``5.5`` or ``"5.5"``                — fixed bound
-    * ``"{reference_snr_level}"``         — looks up ``metadata["reference_snr_level"]``
-    * ``"-{reference_snr_level}"``        — negated lookup (the leading ``-`` is
-                                             carried through ``float(...)`` after substitution)
-    * ``"$REF_SNR"`` / ``"-$REF_SNR"``    — environment-variable lookup
-
-    Records each resolved bound that was applied under ``metadata["threshold_low"]``
-    / ``metadata["threshold_high"]`` for traceability.
-
-    Args:
-        low_level: Lower bound (numeric literal or expression) compared with ``low_op`` when set;
-            ``None`` disables the lower bound.
-        high_level: Upper bound (numeric literal or expression) compared with ``high_op`` when set;
-            ``None`` disables the upper bound.
-        low_op: Lower-bound comparison — ``">"`` (strict, default) or ``">="`` (inclusive).
-        high_op: Upper-bound comparison — ``"<"`` (strict, default) or ``"<="`` (inclusive).
+    At least one of ``low_level`` / ``high_level`` MUST be provided.
     """
+    if not isinstance(arr, np.ndarray):
+        raise TypeError(f"threshold_array expects an np.ndarray, got {type(arr).__name__}")
+    if isinstance(low_level, str) and low_level.strip() == "":
+        low_level = None
+    if isinstance(high_level, str) and high_level.strip() == "":
+        high_level = None
 
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=ArrayType(dtype="bool", frameworks={"numpy"}))
-
-    def __init__(
-        self,
-        low_level: Optional[Union[float, int, str]] = None,
-        high_level: Optional[Union[float, int, str]] = None,
-        low_op: LowComparison = ">",
-        high_op: HighComparison = "<",
-    ) -> None:
-        # Lazy / zero-arg: store config only; the "at least one bound" requirement is validated
-        # lazily in __call__ so the op stays constructible with no arguments.
-        self.low_level = low_level
-        self.high_level = high_level
-        self.low_op = low_op
-        self.high_op = high_op
-
-    def _resolve(self, bound: Optional[Union[float, int, str]], sample: Sample) -> float:
-        if bound is None:
-            raise ValueError("ThresholdOp._resolve called with None — bound was not filtered by __call__")
-        if isinstance(bound, str):
-            resolved = resolve_expression(bound, sample)
-            try:
-                return float(resolved)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"ThresholdOp: expression {bound!r} resolved to {resolved!r}, which is not a number"
-                ) from exc
-        # Any non-string numeric: a Python int/float, a NumPy scalar (e.g. the float32 a value-chain
-        # MaxOp → FormulaOp → ConfigureOp injects into low_level per sample), or a 0-d array — anything
-        # float() accepts. A list / multi-D array / complex value fails float() and raises the TypeError.
-        try:
-            return float(bound)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                f"ThresholdOp bounds must be a number or expression string; got {type(bound).__name__}"
-            ) from exc
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = sample.input
-        if not isinstance(arr, np.ndarray):
-            raise TypeError(f"ThresholdOp expects an np.ndarray on sample.input, got {type(arr).__name__}")
-
-        low_level = self.low_level
-        high_level = self.high_level
-        # Treat empty string (blank STRING widget left unset) as None ("disabled").
-        if isinstance(low_level, str) and low_level.strip() == "":
-            low_level = None
-        if isinstance(high_level, str) and high_level.strip() == "":
-            high_level = None
-
-        mask: Optional[np.ndarray] = None
-        if low_level is not None:
-            low = self._resolve(low_level, sample)
-            if np.isnan(low):
-                logger.warning(
-                    f"ThresholdOp: resolved low_level is NaN; no values will be above the threshold. "
-                    f"Expression was {self.low_level!r} resolved to {low!r}"
-                )
-            else:
-                sample.meta["threshold_low"] = low
-                mask = _LOW_COMPARISONS[self.low_op](arr, low)
-        if high_level is not None:
-            high = self._resolve(high_level, sample)
-            if np.isnan(high):
-                logger.warning(
-                    f"ThresholdOp: resolved high_level is NaN; no values will be below the threshold. "
-                    f"Expression was {self.high_level!r} resolved to {high!r}"
-                )
-            else:
-                sample.meta["threshold_high"] = high
-                below = _HIGH_COMPARISONS[self.high_op](arr, high)
-                mask = below if mask is None else (mask & below)
-        if mask is None:
-            raise ValueError("ThresholdOp requires at least one of 'low_level' / 'high_level'")
-        return sample._replace(input=mask)
+    mask: Optional[np.ndarray] = None
+    if low_level is not None:
+        low = _resolve_bound(low_level, meta)
+        if np.isnan(low):
+            logger.warning(f"threshold_array: resolved low_level is NaN ({low_level!r}); no values pass the floor.")
+        else:
+            mask = _LOW_COMPARISONS[low_op](arr, low)
+    if high_level is not None:
+        high = _resolve_bound(high_level, meta)
+        if np.isnan(high):
+            logger.warning(f"threshold_array: resolved high_level is NaN ({high_level!r}); no values pass the ceiling.")
+        else:
+            below = _HIGH_COMPARISONS[high_op](arr, high)
+            mask = below if mask is None else (mask & below)
+    if mask is None:
+        raise ValueError("threshold_array requires at least one of 'low_level' / 'high_level'")
+    return mask
 
 
 @configurable(category="op", group="numpy")
 class Threshold(Transform):
-    """Typed twin of :class:`ThresholdOp` — an array-bearing field → a boolean ``Mask`` item.
+    """An array-bearing field → a boolean ``Mask`` item.
 
-    The typed-bag counterpart of :class:`ThresholdOp`: it reads the array at ``field`` (blank =
-    the first array-bearing item in the bag) and thresholds it into a boolean mask with the SAME
-    bound / comparison / expression math — this twin REUSES the legacy op verbatim, so the booleans
-    are identical — writing a :class:`~sampleflux.Mask` item under ``output`` tagged ``aux`` (a
-    threshold mask is an intermediate that a later op — e.g. :class:`ConnectedComponents` —
-    consumes, not a model input or target). Any other field passes through untouched.
-
-    Which mask is produced depends on which bounds are set, and the comparison for each is picked
-    by ``low_op`` / ``high_op`` (see :class:`ThresholdOp` for the full presence-driven rules and
-    the open-vs-closed interval semantics). At least one of ``low_level`` / ``high_level`` MUST be
-    set; passing neither raises ``ValueError`` when applied (the zero-arg default stays
-    constructible per the lazy-init convention).
+    Reads the array at ``field`` (blank = the first array-bearing item in the bag) and thresholds
+    it into a boolean mask with the bound / comparison / expression math (:func:`threshold_array`),
+    writing a :class:`~sampleflux.Mask` item under ``output`` tagged ``aux`` (a threshold mask is an
+    intermediate that a later op — e.g. :class:`ConnectedComponents` — consumes). Any other field
+    passes through untouched.
 
     Each bound is a numeric literal or a ``resolve_expression`` string — ``5.5`` / ``"5.5"``
     (literal) or ``"$REF_SNR"`` (environment variable). NOTE: ``{meta_key}`` expressions have no
-    typed metadata source in the bag model (an item owns its own metadata; there is no shared
-    sample dict), so only literals and ``$ENV`` resolve here — a ``{key}`` bound raises ``KeyError``.
+    typed metadata source in the bag model, so only literals and ``$ENV`` resolve here.
 
     Args:
         low_level: Lower bound (numeric literal or ``$ENV`` expression) compared with ``low_op`` when set;
@@ -487,7 +167,7 @@ class Threshold(Transform):
         self.field = field
         self.output = output
 
-    def _find_array(self, sample: TypedSample) -> np.ndarray:
+    def _find_array(self, sample: Sample) -> np.ndarray:
         """Resolve the array to threshold (``self.field`` or the first array-bearing item)."""
         if self.field:
             if self.field not in sample.keys():
@@ -502,12 +182,9 @@ class Threshold(Transform):
                 return data
         raise ValueError(f"Threshold: no array-bearing field in sample (fields: {list(sample.keys())})")
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         arr = self._find_array(sample)
-        # Reuse the legacy op's threshold math VERBATIM on a shim Sample so the booleans are
-        # identical; the shim's empty metadata is why only literals / $ENV bounds resolve here.
-        legacy = ThresholdOp(self.low_level, self.high_level, self.low_op, self.high_op)
-        mask = legacy(Sample(input=arr, target=None, metadata={})).input
+        mask = threshold_array(arr, self.low_level, self.high_level, self.low_op, self.high_op)
         out = sample.replace_field(self.output, Mask(mask))
         return out.set_role(self.output, "aux")
 
@@ -518,11 +195,9 @@ def connected_component_bboxes(
     """Label connected ``True`` regions of a 2-D bool mask → ``(row_min, row_max, col_min, col_max)`` inclusive tuples.
 
     Components smaller than ``min_area_bins`` are dropped. ``connectivity`` is ``4``
-    (orthogonal neighbors) or ``8`` (orthogonal + diagonal). This is the shared scipy
-    core behind :class:`ConnectedComponentsOp` (signal-domain bin bboxes on ``input``)
-    AND :class:`sampleflux.ops.target.MasksToDetectionBoxesOp` (its ``connected=True``
-    mode, which lifts the tuples to xyxy-pixel detection boxes). Requires ``scipy``
-    (``pip install sampleflux[vision]``).
+    (orthogonal neighbors) or ``8`` (orthogonal + diagonal). Shared by :class:`ConnectedComponents`
+    AND :func:`sampleflux.ops.target.masks_to_detection` (its ``connected=True`` mode). Requires
+    ``scipy`` (``pip install sampleflux[vision]``).
     """
     if min_area_bins < 1:
         raise ValueError(f"min_area_bins must be >= 1; got {min_area_bins!r}")
@@ -559,203 +234,17 @@ def connected_component_bboxes(
 
 
 @configurable(category="op", group="numpy")
-class MinOp:
-    """Reduce ``sample.input`` to its minimum value, ignoring NaN.
-
-    Args:
-        axis: Axis along which to compute the minimum. ``None`` (default) reduces over all axes.
-        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, axis: Optional[int] = None, keepdims: bool = False) -> None:
-        self.axis = axis
-        self.keepdims = bool(keepdims)
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "MinOp")
-        return sample._replace(input=np.nanmin(arr, axis=self.axis, keepdims=self.keepdims))
-
-
-@configurable(category="op", group="numpy")
-class MaxOp:
-    """Reduce ``sample.input`` to its maximum value, ignoring NaN.
-
-    Args:
-        axis: Axis along which to compute the maximum. ``None`` (default) reduces over all axes.
-        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, axis: Optional[int] = None, keepdims: bool = False) -> None:
-        self.axis = axis
-        self.keepdims = bool(keepdims)
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "MaxOp")
-        return sample._replace(input=np.nanmax(arr, axis=self.axis, keepdims=self.keepdims))
-
-
-@configurable(category="op", group="numpy")
-class MedianOp:
-    """Reduce ``sample.input`` to its median value, ignoring NaN.
-
-    Args:
-        axis: Axis along which to compute the median. ``None`` (default) reduces over all axes.
-        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, axis: Optional[int] = None, keepdims: bool = False) -> None:
-        self.axis = axis
-        self.keepdims = bool(keepdims)
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "MedianOp")
-        return sample._replace(input=np.nanmedian(arr, axis=self.axis, keepdims=self.keepdims))
-
-
-@configurable(category="op", group="numpy")
-class PercentileOp:
-    """Reduce ``sample.input`` to a 2-element array ``[p_low, p_high]``, ignoring NaN.
-
-    Output shape when ``axis=None``: ``(2,)`` scalar pair. When ``axis=k``:
-    ``(2, …)`` stacked along a new leading dimension.
-
-    Args:
-        low: Lower percentile in ``[0, 100]``. Default ``5.0``.
-        high: Upper percentile in ``[0, 100]``, should be ``> low``. Default ``95.0``.
-        axis: Axis along which to compute the percentiles. ``None`` (default) reduces over all axes.
-        keepdims: When ``True``, the reduced axes are retained with size 1 (default ``False``).
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(
-        self,
-        low: float = 5.0,
-        high: float = 95.0,
-        axis: Optional[int] = None,
-        keepdims: bool = False,
-    ) -> None:
-        self.low = float(low)
-        self.high = float(high)
-        self.axis = axis
-        self.keepdims = bool(keepdims)
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "PercentileOp")
-        p_low = np.nanpercentile(arr, self.low, axis=self.axis, keepdims=self.keepdims)
-        p_high = np.nanpercentile(arr, self.high, axis=self.axis, keepdims=self.keepdims)
-        return sample._replace(input=np.stack([p_low, p_high]))
-
-
-@configurable(category="op", group="numpy")
-class StatsOp:
-    """Compute summary statistics of ``sample.input`` and record them in metadata; input is passed through unchanged.
-
-    Writes five scalar float keys to ``sample.metadata``: ``{prefix}min``,
-    ``{prefix}max``, ``{prefix}median``, ``{prefix}p_low``, ``{prefix}p_high``.
-    NaN values are excluded from all computations.
-
-    Chain anywhere in a pipeline without disrupting the data flow — useful for
-    inspecting distribution properties during development or for downstream
-    normalisation decisions.
-
-    Args:
-        low: Lower percentile bound (0–100). Default ``5.0``.
-        high: Upper percentile bound (0–100). Default ``95.0``.
-        prefix: Optional string prepended to every metadata key, e.g. ``"input_"`` to
-            distinguish multiple ``StatsOp`` invocations in one pipeline.
-    """
-
-    ACCEPTS = SampleType(input=_NDARRAY)
-    PRODUCES = SampleType(input=_NDARRAY)
-
-    def __init__(self, low: float = 5.0, high: float = 95.0, prefix: str = "") -> None:
-        self.low = float(low)
-        self.high = float(high)
-        self.prefix = prefix
-
-    def __call__(self, sample: Sample) -> Sample:
-        arr = _require_ndarray(sample, "StatsOp")
-        p = self.prefix
-        meta = dict(sample.meta)
-        meta[f"{p}min"] = float(np.nanmin(arr))
-        meta[f"{p}max"] = float(np.nanmax(arr))
-        meta[f"{p}median"] = float(np.nanmedian(arr))
-        meta[f"{p}p_low"] = float(np.nanpercentile(arr, self.low))
-        meta[f"{p}p_high"] = float(np.nanpercentile(arr, self.high))
-        return sample._replace(metadata=meta)
-
-
-@configurable(category="op", group="numpy")
-class ConnectedComponentsOp:
-    """Label connected ``True`` regions of a boolean mask into bin-bbox tuples.
-
-    Reads ``sample.input`` as a 2-D boolean ndarray; writes ``sample.input`` as
-    a list of ``(row_min, row_max, col_min, col_max)`` integer tuples (inclusive
-    bounds). Components smaller than ``min_area_bins`` are dropped.
-
-    ``connectivity`` selects the neighborhood:
-
-    * ``4`` — orthogonal neighbors only (N/S/E/W); diagonally touching
-      components stay separate.
-    * ``8`` — orthogonal + diagonal neighbors; diagonally touching
-      components merge.
-
-    Requires ``scipy`` (install via ``pip install sampleflux[vision]``).
-
-    Args:
-        min_area_bins: Minimum component area in bins; smaller connected regions are dropped (``>= 1``).
-        connectivity: Pixel neighborhood — ``4`` (orthogonal only) or ``8`` (orthogonal + diagonal).
-    """
-
-    ACCEPTS = SampleType(input=ArrayType(ndim=2, dtype="bool", frameworks={"numpy"}))
-    PRODUCES = SampleType(input=PythonType("list"))
-
-    def __init__(self, min_area_bins: int = 1, connectivity: int = 4) -> None:
-        # Lazy / zero-arg: store config only; bounds are validated lazily in __call__.
-        self.min_area_bins = int(min_area_bins)
-        self.connectivity = int(connectivity)
-
-    def __call__(self, sample: Sample) -> Sample:
-        mask = sample.input
-        if not isinstance(mask, np.ndarray):
-            raise TypeError(f"ConnectedComponentsOp expects an np.ndarray on sample.input, got {type(mask).__name__}")
-        if mask.ndim != 2:
-            raise ValueError(f"ConnectedComponentsOp expects a 2-D mask; got shape {mask.shape}")
-        # Shared scipy core (also used by sampleflux.ops.target.MasksToDetectionBoxesOp);
-        # validates min_area_bins / connectivity and raises the scipy ImportError.
-        bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
-        return sample._replace(input=bboxes)
-
-
-@configurable(category="op", group="numpy")
 class ConnectedComponents(Transform):
-    """Typed twin of :class:`ConnectedComponentsOp` — a boolean ``Mask`` → a ``Regions`` item.
+    """A boolean ``Mask`` → a ``Regions`` item.
 
-    The typed-bag counterpart of :class:`ConnectedComponentsOp`: it reads the
-    :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the bag, else the first
-    array-bearing item) as a 2-D boolean array and labels its connected ``True`` regions into
-    ``(row_min, row_max, col_min, col_max)`` inclusive bin-box tuples via the SAME shared
-    :func:`connected_component_bboxes` helper the legacy op uses (so the numbers are identical),
-    writing them as a :class:`~sampleflux.Regions` item under ``output``. That field is tagged
-    ``aux``: these are RAW detections (thresholded blobs), NOT model predictions — the ``pred``
-    role is reserved for a detector's output. Any other field passes through untouched.
+    Reads the :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the bag, else the
+    first array-bearing item) as a 2-D boolean array and labels its connected ``True`` regions into
+    ``(row_min, row_max, col_min, col_max)`` inclusive bin-box tuples via
+    :func:`connected_component_bboxes`, writing them as a :class:`~sampleflux.Regions` item under
+    ``output`` tagged ``aux`` (RAW detections, not model predictions). Any other field passes through.
 
-    The ``Regions.boxes`` list holds ``(row_min, row_max, col_min, col_max)`` tuples — the exact
-    generic bin-box format (row bounds first, then column bounds; inclusive) a downstream
-    back-projection reads to map bins to a signal / world coordinate frame. Components smaller than
-    ``min_area_bins`` are dropped; ``connectivity`` selects the 4- or 8-neighborhood. Requires
-    ``scipy`` (``pip install sampleflux[vision]``).
+    Components smaller than ``min_area_bins`` are dropped; ``connectivity`` selects the 4- or
+    8-neighborhood. Requires ``scipy`` (``pip install sampleflux[vision]``).
 
     Args:
         min_area_bins: Minimum component area in bins; smaller connected regions are dropped (``>= 1``).
@@ -781,7 +270,7 @@ class ConnectedComponents(Transform):
         self.field = field
         self.output = output
 
-    def _find_mask(self, sample: TypedSample) -> np.ndarray:
+    def _find_mask(self, sample: Sample) -> np.ndarray:
         """Resolve the mask to label (``self.field``, else the first ``Mask``, else the first array)."""
         if self.field:
             if self.field not in sample.keys():
@@ -811,8 +300,19 @@ class ConnectedComponents(Transform):
             raise ValueError(f"ConnectedComponents expects a 2-D mask; got shape {data.shape}")
         return data
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         mask = self._find_mask(sample)
         bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
         out = sample.replace_field(self.output, Regions(boxes=list(bboxes)))
         return out.set_role(self.output, "aux")
+
+
+__all__ = [
+    "resolve_expression",
+    "threshold_array",
+    "connected_component_bboxes",
+    "LowComparison",
+    "HighComparison",
+    "Threshold",
+    "ConnectedComponents",
+]

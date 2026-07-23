@@ -10,7 +10,7 @@ from sampleflux import (
     Image,
     Label,
     Regions,
-    TypedSample,
+    Sample,
     decode_item,
     decode_sample,
     encode_item,
@@ -78,7 +78,7 @@ class TestRegisteredCodec:
 
 class TestSampleCodec:
     def test_sample_round_trip_fields_roles_order(self) -> None:
-        s = TypedSample(
+        s = Sample(
             {
                 "image": Image(np.zeros((2, 2, 3), dtype=np.float32)),
                 "regions": Regions(boxes=[[0, 0, 1, 1]], labels=["a"], canvas=(2, 2)),

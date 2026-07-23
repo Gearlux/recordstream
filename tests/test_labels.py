@@ -4,9 +4,9 @@ import json
 
 import pytest
 
+from sampleflux import Label, Sample
 from sampleflux.labels import LabelMap
-from sampleflux.ops.target import DecodeTargetOp, EncodeTargetOp
-from sampleflux.sample import Sample
+from sampleflux.ops.target import DecodeTarget, EncodeTarget
 
 # ---------------------------------------------------------------------------
 # Construction & lazy validation
@@ -85,24 +85,24 @@ def test_from_label_names_empty_raises() -> None:
 def test_encode_op_encodes_target() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     op = lm.encode_op()
-    assert isinstance(op, EncodeTargetOp)
-    out = op(Sample(input=None, target="dog", metadata={}))
-    assert out.target == 1
+    assert isinstance(op, EncodeTarget)
+    out = op(Sample({"y": Label("dog")}, roles={"y": "target"}))
+    assert out["y"].value == 1
 
 
 def test_decode_op_inverts_encoding() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     op = lm.decode_op()
-    assert isinstance(op, DecodeTargetOp)
-    out = op(Sample(input=None, target=0, metadata={}))
-    assert out.target == "cat"
+    assert isinstance(op, DecodeTarget)
+    out = op(Sample({"y": Label(0)}, roles={"y": "target"}))
+    assert out["y"].value == "cat"
 
 
 def test_encode_op_ignore_unknown() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     op = lm.encode_op(ignore_unknown=True, default=-1)
-    out = op(Sample(input=None, target="fish", metadata={}))
-    assert out.target == -1
+    out = op(Sample({"y": Label("fish")}, roles={"y": "target"}))
+    assert out["y"].value == -1
 
 
 # ---------------------------------------------------------------------------

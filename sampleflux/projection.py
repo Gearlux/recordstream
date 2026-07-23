@@ -12,9 +12,8 @@ selection); :func:`num_classes` is one helper built on top of it.
 
 Design notes
 ------------
-* :class:`SupportsProjection` is a ``Protocol`` (never a base class), so it
-  composes with the SampleFlux **Functional Purity** mandate — a source opts in by
-  *defining* ``project``, not by inheriting.
+* :class:`SupportsProjection` is a ``Protocol`` (never a base class), so a source
+  opts in by *defining* ``project``, not by inheriting.
 * Every public function is a lazy generator (**Lazy Evaluation** mandate) —
   nothing materializes the whole source.
 * :func:`num_classes` (integer class-id semantics) is a free function, *not* a
@@ -23,73 +22,59 @@ Design notes
   make every ``Flux`` look classification-capable to duck-typed consumers.
 """
 
-from typing import Any, Collection, Iterator, Literal, Protocol, Tuple, get_args, runtime_checkable
+from typing import Any, Collection, Dict, Iterator, Literal, Protocol, Tuple, get_args, runtime_checkable
 
 from sampleflux.bag.items import Label, item_data
-from sampleflux.bag.sample import Role, TypedSample, primary
-from sampleflux.sample import Sample
+from sampleflux.bag.sample import Role, Sample, primary
 
-#: The projectable :class:`~sampleflux.sample.Sample` fields, as a *closed*
-#: ``Literal`` rather than a bare ``str``. Typing the field set this way lets
-#: UIs, form-spec builders, and MCP tool schemas enumerate the allowed values
-#: straight from the annotation (``typing.get_args(ProjectionField)``) and lets
-#: a type checker reject a typo at the call site — the Literal-over-strings
-#: discipline the workspace mandate calls for, applied because the set is fixed
-#: and short.
+#: The projectable :class:`~sampleflux.bag.sample.Sample` roles, as a *closed*
+#: ``Literal`` rather than a bare ``str``. Typing the field set this way lets UIs,
+#: form-spec builders, and MCP tool schemas enumerate the allowed values straight
+#: from the annotation (``typing.get_args(ProjectionField)``) and lets a type
+#: checker reject a typo at the call site. ``metadata`` maps onto the bag's ``aux`` role.
 ProjectionField = Literal["input", "target", "metadata"]
 
 INPUT: ProjectionField = "input"
 TARGET: ProjectionField = "target"
 METADATA: ProjectionField = "metadata"
 _FIELDS: Tuple[ProjectionField, ...] = get_args(ProjectionField)
+_FIELD_ROLES: Dict[str, str] = {"input": "input", "target": "target", "metadata": "aux"}
 
 
 @runtime_checkable
 class SupportsProjection(Protocol):
-    """A source that can yield partial :class:`~sampleflux.sample.Sample` records.
+    """A source that can yield partial :class:`~sampleflux.bag.sample.Sample` records.
 
     Implementers SHOULD avoid building unrequested fields — e.g. skip decoding the
     input image when only ``target`` is asked for; that efficiency is the whole
-    point of the protocol. ``fields`` is a subset of
-    ``{"input", "target", "metadata"}``; unrequested fields come back as ``None``
-    (``{}`` for ``metadata``).
+    point of the protocol. ``fields`` is a subset of ``{"input", "target", "metadata"}``.
     """
 
     def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]: ...
 
 
-def _carrier_field(carrier: Any, field: ProjectionField) -> Any:
-    """Read one field's VALUE from either a legacy :class:`Sample` or a typed :class:`TypedSample`.
+def _carrier_field(sample: Sample, field: ProjectionField) -> Any:
+    """Read one field's VALUE from a typed :class:`Sample`.
 
-    For a ``TypedSample`` (the typed-bag carrier the migrated sources yield) the value of the
-    ``input`` / ``target`` role is the FIRST field of that role — a ``Label``'s ``.value`` (the class
-    id / scalar), else the item's raw payload (:func:`item_data`). A missing role yields ``None``, so
-    a target-only walk over a typed source feeds :func:`num_classes` exactly as the legacy carrier did.
+    The value of the ``input`` / ``target`` role is the FIRST field of that role — a
+    ``Label``'s ``.value`` (the class id / scalar), else the item's raw payload
+    (:func:`item_data`). A missing role yields ``None``, so a target-only walk feeds
+    :func:`num_classes`.
     """
-    if isinstance(carrier, TypedSample):
-        role: Role = "input" if field == INPUT else "target"
-        try:
-            _key, item = primary(carrier, role)
-        except KeyError:
-            return None
-        return item.value if isinstance(item, Label) else item_data(item)
-    s = Sample.from_any(carrier)
-    if field == INPUT:
-        return s.input
-    if field == TARGET:
-        return s.target
-    return s.meta
+    role: Role = "input" if field == INPUT else "target"
+    try:
+        _key, item = primary(sample, role)
+    except KeyError:
+        return None
+    return item.value if isinstance(item, Label) else item_data(item)
 
 
-def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Any]:
+def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Sample]:
     """Yield partial records from ``source`` carrying only ``fields``.
 
-    Uses the source's own ``project`` when it implements :class:`SupportsProjection` (the efficient
-    path that skips building unrequested fields); otherwise falls back to a full iteration that builds
-    every field and nulls the unrequested ones — always correct, just not faster. A typed-bag
-    :class:`TypedSample` is passed through VERBATIM (never coerced into a legacy ``Sample``); the walk
-    helpers below extract the requested field from whichever carrier flows. Lazy: a generator that
-    never materializes the source.
+    Uses the source's own ``project`` when it implements :class:`SupportsProjection` (the
+    efficient path that skips building unrequested fields); otherwise falls back to a full
+    iteration that keeps only the fields whose role matches the request. Lazy: a generator.
     """
     want = frozenset(fields)
     unknown = want - frozenset(_FIELDS)
@@ -98,16 +83,10 @@ def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Any]:
     if isinstance(source, SupportsProjection):
         yield from source.project(want)
         return
-    for raw in source:
-        if isinstance(raw, TypedSample):
-            yield raw
-            continue
-        s = Sample.from_any(raw)
-        yield Sample(
-            input=s.input if INPUT in want else None,
-            target=s.target if TARGET in want else None,
-            metadata=s.meta if METADATA in want else {},
-        )
+    want_roles = {_FIELD_ROLES[f] for f in want}
+    for sample in source:
+        keep = [k for k in sample.keys() if sample.role_of(k) in want_roles]
+        yield Sample({k: sample[k] for k in keep}, {k: sample.role_of(k) for k in keep})
 
 
 def iter_inputs(source: Any) -> Iterator[Any]:

@@ -1,6 +1,6 @@
 """``sampleflux.bag`` — the typed-bag data model with type-dispatched transforms.
 
-A sample is a NAMED BAG of TYPED ITEMS (:class:`TypedSample`), each item owning its own
+A sample is a NAMED BAG of TYPED ITEMS (:class:`Sample`), each item owning its own
 metadata; ``input``/``target`` are ROLE TAGS on fields, not tuple positions. Transforms
 dispatch on item TYPE via a kernel registry, sampling their parameters once per sample so
 multi-field consistency (flip image + mask + boxes together) is automatic. External libraries
@@ -11,7 +11,7 @@ kernels, adapters, and storage codecs from outside (``register_item`` / ``@Trans
 
 This is THE sampleflux data model (the legacy ``Sample`` triple is being migrated out; it
 survives only until every consumer has flipped). Import the public surface from the PACKAGE
-TOP LEVEL (``from sampleflux import TypedSample, Image, Transform, ...``) — the ``bag``
+TOP LEVEL (``from sampleflux import Sample, Image, Transform, ...``) — the ``bag``
 module path is a transitional home. See ``docs/typed-model.md`` (usage) and
 ``docs/architecture.md`` (rationale).
 """
@@ -45,7 +45,7 @@ from sampleflux.bag.items import (
     register_item,
     with_data,
 )
-from sampleflux.bag.sample import ROLES, Role, TypedSample, primary
+from sampleflux.bag.sample import ROLES, Role, Sample, primary
 from sampleflux.bag.transform import (
     FunctionTransform,
     Pipeline,
@@ -57,7 +57,7 @@ from sampleflux.bag.transform import (
 
 __all__ = [
     # data model
-    "TypedSample",
+    "Sample",
     "Role",
     "ROLES",
     "primary",

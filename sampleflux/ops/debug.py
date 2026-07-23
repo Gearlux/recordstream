@@ -5,7 +5,8 @@ from typing import Any, Literal, Optional
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.sample import Sample
+from sampleflux.bag.items import item_data
+from sampleflux.bag.sample import Sample
 
 logger = get_logger(__name__)
 
@@ -104,9 +105,11 @@ class PrintSampleOp:
 
     def _format(self, sample: Sample) -> str:
         parts = [f"[{self.label} #{self._count}]"]
-        if self.include_data:
-            parts.append(f"input={_summarize(sample.input)}")
-            parts.append(f"target={_summarize(sample.target)}")
-        if self.include_metadata:
-            parts.append(f"metadata={_summarize_metadata(sample.metadata)}")
+        for key in sample.keys():
+            role = sample.role_of(key)
+            if role == "aux" and not self.include_metadata:
+                continue
+            if role != "aux" and not self.include_data:
+                continue
+            parts.append(f"{key}[{role}]={_summarize(item_data(sample[key]))}")
         return " ".join(parts)

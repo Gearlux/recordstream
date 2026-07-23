@@ -5,24 +5,20 @@ from typing import Any, Collection, Dict, Iterator, List, Literal, Optional, get
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.bag import Image, Label, TypedSample
+from sampleflux.bag import Image, Label, Sample
 from sampleflux.projection import ProjectionField
-from sampleflux.sample import Sample
 
 logger = get_logger(__name__)
 
 
 def _pass_through(item: Any) -> Any:
-    """Coerce a wrapped source's item to a carrier the engine accepts.
+    """Pass a wrapped source's item through verbatim.
 
-    A typed-bag :class:`~sampleflux.TypedSample` is passed through VERBATIM — the view sources
-    (:class:`DatasetSplit` / :class:`RangeSource` / :class:`ConcatSource`) only slice/index, they
-    never inspect payloads, so a typed source flows through them unchanged. Any legacy carrier is
-    normalized to a :class:`~sampleflux.sample.Sample` via ``Sample.from_any``.
+    Every carrier is a typed-bag :class:`~sampleflux.Sample`; the view sources
+    (:class:`DatasetSplit` / :class:`RangeSource` / :class:`ConcatSource`) only slice/index,
+    they never inspect payloads, so a source's samples flow through them unchanged.
     """
-    if isinstance(item, TypedSample):
-        return item
-    return Sample.from_any(item)
+    return item
 
 
 # Closed set of split names for DatasetSplit's fraction mode (workspace mandate: prefer
@@ -68,7 +64,7 @@ def _resolve_metadata_features(
 @configurable(category="source")
 class HuggingFaceSource:
     """
-    SampleFlux Source for Hugging Face Datasets, yielding typed-bag :class:`~sampleflux.TypedSample`\\ s.
+    SampleFlux Source for Hugging Face Datasets, yielding typed-bag :class:`~sampleflux.Sample`\\ s.
 
     Field mapping (the typed-bag layout that replaces the ``Sample(input, target, metadata)`` triple):
 
@@ -162,8 +158,8 @@ class HuggingFaceSource:
         want_input: bool = True,
         want_target: bool = True,
         want_meta: bool = True,
-    ) -> TypedSample:
-        """Assemble one :class:`~sampleflux.TypedSample` from a raw HF row dict (see the class docstring
+    ) -> Sample:
+        """Assemble one :class:`~sampleflux.Sample` from a raw HF row dict (see the class docstring
         for the field mapping).
 
         ``want_input`` / ``want_target`` / ``want_meta`` gate which roles are built — the projection
@@ -189,9 +185,9 @@ class HuggingFaceSource:
             fields["hf_split"] = Label(self.split)
             roles["hf_path"] = "aux"
             roles["hf_split"] = "aux"
-        return TypedSample(fields, roles)
+        return Sample(fields, roles)
 
-    def __iter__(self) -> Iterator[TypedSample]:
+    def __iter__(self) -> Iterator[Sample]:
         dataset = self.dataset
         metadata_features = self.resolved_metadata_features
         limit = self.count or len(dataset)
@@ -201,11 +197,11 @@ class HuggingFaceSource:
                 break
             yield self._to_typed_sample(item, metadata_features)
 
-    def __getitem__(self, index: int) -> TypedSample:
+    def __getitem__(self, index: int) -> Sample:
         return self._to_typed_sample(self.dataset[index], self.resolved_metadata_features)
 
-    def project(self, fields: Collection[ProjectionField]) -> Iterator[TypedSample]:
-        """Yield role-restricted ``TypedSample``\\ s — the ``SupportsProjection`` efficient path.
+    def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]:
+        """Yield role-restricted ``Sample``\\ s — the ``SupportsProjection`` efficient path.
 
         Only the requested roles are built, so a target-only walk (e.g. :func:`~sampleflux.num_classes`)
         skips decoding the image entirely: ``"input"`` -> the ``"image"`` field, ``"target"`` -> the

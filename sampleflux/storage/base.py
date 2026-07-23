@@ -4,8 +4,7 @@ from typing import Any, Dict, Iterator, Protocol, Tuple, runtime_checkable
 import numpy as np
 import torch
 
-from sampleflux.bag.sample import TypedSample
-from sampleflux.sample import Sample
+from sampleflux.bag.sample import Sample
 
 #: Root-attribute format tag stamped on stores written in the typed field-group layout.
 TYPED_FORMAT = "typedsample-v1"
@@ -55,7 +54,7 @@ class DataSink(Protocol):
 class TypedDataSource(Protocol):
     """Minimum contract for a typed-bag data source."""
 
-    def __iter__(self) -> Iterator[TypedSample]:
+    def __iter__(self) -> Iterator[Sample]:
         """Iterate over typed samples in the source."""
         ...
 
@@ -68,7 +67,7 @@ class TypedDataSource(Protocol):
 class TypedDataSink(Protocol):
     """Minimum contract for a typed-bag data sink."""
 
-    def write(self, sample: TypedSample) -> None:
+    def write(self, sample: Sample) -> None:
         """Write a single typed sample to the sink."""
         ...
 

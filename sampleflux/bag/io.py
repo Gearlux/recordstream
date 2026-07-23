@@ -21,7 +21,7 @@ from dataclasses import is_dataclass
 from typing import Any, Callable, Dict, Tuple, cast
 
 from sampleflux.bag.items import NDArrayItem, get_item_type, item_data
-from sampleflux.bag.sample import Role, TypedSample
+from sampleflux.bag.sample import Role, Sample
 
 __all__ = [
     "EncodedItem",
@@ -90,21 +90,21 @@ def decode_item(encoded: EncodedItem) -> Any:
     return cls(**encoded.attrs)
 
 
-def encode_sample(sample: TypedSample) -> Tuple[EncodedField, ...]:
+def encode_sample(sample: Sample) -> Tuple[EncodedField, ...]:
     """Encode every field of a sample, in insertion order."""
     return tuple(
         EncodedField(key=key, role=sample.role_of(key), item=encode_item(item)) for key, item in sample.items()
     )
 
 
-def decode_sample(fields: Tuple[EncodedField, ...]) -> TypedSample:
-    """Rebuild a :class:`TypedSample` from encoded fields (order preserved)."""
+def decode_sample(fields: Tuple[EncodedField, ...]) -> Sample:
+    """Rebuild a :class:`Sample` from encoded fields (order preserved)."""
     items: Dict[str, Any] = {}
     roles: Dict[str, Role] = {}
     for field in fields:
         items[field.key] = decode_item(field.item)
         roles[field.key] = field.role
-    return TypedSample(items, roles)
+    return Sample(items, roles)
 
 
 # --- the default structural codec -------------------------------------------

@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from sampleflux import Image, Mask, Regions, Transform, TypedSample, item_data, with_data
+from sampleflux import Image, Mask, Regions, Sample, Transform, item_data, with_data
 
 
 class FixtureFlip(Transform):
@@ -28,7 +28,7 @@ class FixtureFlip(Transform):
         super().__init__(only=only)
         self.p = p
 
-    def get_params(self, sample: TypedSample) -> Dict[str, Any]:
+    def get_params(self, sample: Sample) -> Dict[str, Any]:
         do = float(np.random.random()) < self.p
         return {"do": do, "width": _reference_width(sample)}
 
@@ -59,7 +59,7 @@ def _flip_regions(item: Regions, params: Dict[str, Any]) -> Regions:
     return Regions(boxes=boxes, labels=item.labels, scores=item.scores, canvas=item.canvas)
 
 
-def _reference_width(sample: TypedSample) -> Optional[int]:
+def _reference_width(sample: Sample) -> Optional[int]:
     """The horizontal extent to flip boxes against — from the first Image/Mask, or a Regions canvas."""
     for _, item in sample.items():
         if isinstance(item, Image):

@@ -14,7 +14,8 @@ from typing import Any, Dict
 
 from confluid import configurable
 
-from sampleflux.sample import Sample
+from sampleflux.bag.items import item_data, with_data
+from sampleflux.bag.sample import Sample, primary
 
 # Every public ``math`` symbol + the scalar built-in helpers, mirroring the canvas Math
 # node's namespace. The bound variable shadows same-named constants (e.g. ``e``).
@@ -39,9 +40,10 @@ class FormulaOp:
     def __call__(self, sample: Sample) -> Sample:
         if not self.formula.strip():
             raise ValueError("FormulaOp: 'formula' must be a non-empty expression")
-        namespace = {**_FORMULA_NAMESPACE, self.var: sample.input}
+        key, item = primary(sample, "input")
+        namespace = {**_FORMULA_NAMESPACE, self.var: item_data(item)}
         try:
             value = eval(self.formula, {"__builtins__": {}}, namespace)  # noqa: S307 - restricted namespace
         except Exception as exc:
             raise ValueError(f"FormulaOp: formula {self.formula!r} failed: {exc}") from exc
-        return sample._replace(input=value)
+        return sample.replace_field(key, with_data(item, value))

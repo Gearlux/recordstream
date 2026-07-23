@@ -14,10 +14,18 @@ from confluid import parse_param_docs  # type: ignore[import-not-found]
 
 from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
 from sampleflux.ops.albumentations import AlbumentationsOp
-from sampleflux.ops.numpy import ConnectedComponentsOp, StandardizeOp, ThresholdOp
-from sampleflux.ops.target import DecodeTargetOp, EncodeTargetOp, MetadataToTargetOp
-from sampleflux.ops.torch import StandardizeOp as TorchStandardizeOp
-from sampleflux.ops.torch import ToTensorOp
+from sampleflux.ops.configure import ConfigureOp
+from sampleflux.ops.image import ConvertToImage
+from sampleflux.ops.numpy import ConnectedComponents, Threshold
+from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields, SetRole
+from sampleflux.ops.target import (
+    CocoToTorchVisionDetection,
+    DecodeTarget,
+    EncodeTarget,
+    MasksToDetectionBoxes,
+    MetadataToTarget,
+)
+from sampleflux.ops.torch import ToTensor
 from sampleflux.ops.torchvision import TorchvisionTransformOp
 from sampleflux.ops.transform_chain import TransformChain
 from sampleflux.sources import HuggingFaceSource
@@ -28,14 +36,21 @@ _NODE_CLASSES = [
     JointFlux,
     FilterOp,
     WrappedOp,
-    StandardizeOp,
-    ThresholdOp,
-    ConnectedComponentsOp,
-    ToTensorOp,
-    TorchStandardizeOp,
-    MetadataToTargetOp,
-    EncodeTargetOp,
-    DecodeTargetOp,
+    Threshold,
+    ConnectedComponents,
+    ConvertToImage,
+    ToTensor,
+    MetadataToTarget,
+    EncodeTarget,
+    DecodeTarget,
+    CocoToTorchVisionDetection,
+    MasksToDetectionBoxes,
+    SetRole,
+    RenameField,
+    DropField,
+    CopyField,
+    SelectFields,
+    ConfigureOp,
     TransformChain,
     AlbumentationsOp,
     TorchvisionTransformOp,

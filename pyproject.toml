@@ -70,18 +70,15 @@ sampleflux-ops-random-apply = "sampleflux.ops.random_apply"
 sampleflux-ops-configure = "sampleflux.ops.configure"
 sampleflux-ops-formula = "sampleflux.ops.formula"
 sampleflux-ops-transform-chain = "sampleflux.ops.transform_chain"
-# Context ops (Save/Use/Drop/Apply/Capture/Mix) — the graph-plane building blocks lowered from flow: docs
+# Context ops (Save/Use/Drop/Apply/Capture/MergeFields) — the graph-plane building blocks lowered from flow: docs
 sampleflux-ops-context = "sampleflux.ops.context"
 # The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
 sampleflux-flow = "sampleflux.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source
 sampleflux-storage-query = "sampleflux.storage.query"
 sampleflux-ops-sink = "sampleflux.ops.sink"
-sampleflux-ops-stash = "sampleflux.ops.stash"
 sampleflux-ops-numpy = "sampleflux.ops.numpy"
 sampleflux-ops-torch = "sampleflux.ops.torch"
-sampleflux-ops-copy = "sampleflux.ops.copy"
-sampleflux-ops-swap = "sampleflux.ops.swap"
 sampleflux-ops-target = "sampleflux.ops.target"
 sampleflux-ops-image = "sampleflux.ops.image"
 # Augmentation adapters over well-known libraries (pair-scoped input+target ops).
@@ -94,10 +91,8 @@ sampleflux-ops-torchvision = "sampleflux.ops.torchvision"
 # library transform, generated at import time by sampleflux.ops._augment_bridge.
 sampleflux-ops-albumentations-transforms = "sampleflux.ops.albumentations_transforms"
 sampleflux-ops-torchvision-transforms = "sampleflux.ops.torchvision_transforms"
-# DropMetadataOp (strip metadata keys — e.g. the __taidal_stash_* snapshots) + PrintSampleOp
-# (log/print a per-sample summary). Entry-point changes need an editable reinstall before
-# FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
-sampleflux-ops-metadata = "sampleflux.ops.metadata"
+# PrintSampleOp (log/print a per-sample summary). Entry-point changes need an editable reinstall
+# before FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
 sampleflux-ops-debug = "sampleflux.ops.debug"
 # Storage SINKS (HDF5Sink / ZarrGroupSink / ZarrBatchSink / DirectorySink) carry
 # category="sink" so FluxStudio surfaces them as DatasetProcessor sink nodes. They live under
@@ -114,7 +109,7 @@ sampleflux-storage-directory = "sampleflux.storage.directory"
 # discovery sees the module (`aisland setup`, never --reinstall).
 sampleflux-bag-transform = "sampleflux.bag.transform"
 # Typed-bag structure ops (SetRole/RenameField/DropField/CopyField/SelectFields) — reshape a
-# TypedSample's named fields; the typed replacement for the classic triple-slot plumbing.
+# Sample's named fields; the typed replacement for the classic triple-slot plumbing.
 sampleflux-ops-structure = "sampleflux.ops.structure"
 # The runnable orchestration layer: DatasetProcessor (generic source→sink runner) and the
 # workflow combinators (Sequence/Conditional/Switch + PathExists/Not/AllOf/AnyOf predicates).

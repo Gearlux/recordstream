@@ -32,8 +32,9 @@ import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
+from sampleflux.bag.items import Mask, item_data, with_data
+from sampleflux.bag.sample import Sample, primary
 from sampleflux.ops.albumentations import TargetMode, _resolve_transform
-from sampleflux.sample import Sample
 
 logger = get_logger(__name__)
 
@@ -133,31 +134,27 @@ class TorchvisionTransformOp:
         from torchvision import tv_tensors
 
         pipeline = self.pipeline
-        image = self._wrap_image(sample.input, tv_tensors, torch)
+        key, item = primary(sample, "input")
+        image = self._wrap_image(item_data(item), tv_tensors, torch)
 
         if self.target == "mask":
-            mask = self._wrap_mask(sample.target, tv_tensors, torch)
-            out_image, out_mask = pipeline(image, mask)
-            return sample._replace(input=self._unwrap(out_image, torch), target=self._unwrap(out_mask, torch))
-        if self.target == "boxes":
-            target = sample.target
-            if not isinstance(target, dict) or "boxes" not in target or "labels" not in target:
-                raise TypeError(
-                    f"TorchvisionTransformOp(target='boxes'): sample.target must be the torchvision "
-                    f"detection dict {{'boxes': [N,4] xyxy, 'labels': [N]}}; got {type(target).__name__}. "
-                    "Wire CocoToTorchVisionDetectionOp / MasksToDetectionBoxesOp upstream."
+            mask_field = next(iter(sample.items_of_type(Mask)), None)
+            if mask_field is None:
+                raise ValueError(
+                    "TorchvisionTransformOp(target='mask'): no Mask field in the sample to transform jointly."
                 )
-            boxes = tv_tensors.BoundingBoxes(
-                torch.as_tensor(np.asarray(target["boxes"], dtype=np.float32).reshape(-1, 4)),
-                format="XYXY",
-                canvas_size=self._canvas_size(image),
+            mkey, mitem = mask_field
+            mask = self._wrap_mask(item_data(mitem), tv_tensors, torch)
+            out_image, out_mask = pipeline(image, mask)
+            result = sample.replace_field(key, with_data(item, self._unwrap(out_image, torch).detach().cpu().numpy()))
+            return result.replace_field(mkey, with_data(mitem, self._unwrap(out_mask, torch).detach().cpu().numpy()))
+        if self.target == "boxes":
+            raise NotImplementedError(
+                "TorchvisionTransformOp(target='boxes') is not yet ported to the typed-bag Regions target "
+                "(migration follow-up); use target='none' or 'mask'."
             )
-            labels = torch.as_tensor(np.asarray(target["labels"]).reshape(-1), dtype=torch.int64)
-            out_image, out_target = pipeline(image, {**target, "boxes": boxes, "labels": labels})
-            out_target["boxes"] = self._unwrap(out_target["boxes"], torch).to(torch.float32)
-            out_target["labels"] = self._unwrap(out_target["labels"], torch)
-            return sample._replace(input=self._unwrap(out_image, torch), target=out_target)
-        return sample._replace(input=self._unwrap(pipeline(image), torch))
+        out_image = self._unwrap(pipeline(image), torch)
+        return sample.replace_field(key, with_data(item, out_image.detach().cpu().numpy()))
 
     @staticmethod
     def _wrap_image(value: Any, tv_tensors: Any, torch: Any) -> Any:

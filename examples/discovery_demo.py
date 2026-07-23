@@ -1,25 +1,23 @@
+"""Passive introspection: scan a module and get a JSON schema per callable (no manual tool defs).
+
+Standalone, zero-arg, exit 0.
+"""
+
 import json
-from pathlib import Path
 
 from sampleflux.discovery import scan_module
 
 
 def main() -> None:
-    # 1. Path to our basic pipeline script
-    pipeline_script = Path(__file__).parent / "basic_pipeline.py"
+    module = "sampleflux.ops.numpy"
+    print(f"--- Scanning Module: {module} ---")
+    schemas = scan_module(module)
 
-    # 2. Scan the module for callables
-    print(f"--- Scanning Module: {pipeline_script.name} ---")
-    schemas = scan_module(pipeline_script)
-
-    # 3. Print the results as formatted JSON
-    # This is exactly what FluxStudio will see
     print(json.dumps(schemas, indent=2))
 
-    # 4. Verification
-    found_ops = [s["name"] for s in schemas]
-    assert "multiply" in found_ops
-    assert "add_noise" in found_ops
+    found = [s["name"] for s in schemas]
+    assert "Threshold" in found
+    assert "ConnectedComponents" in found
     print("\nDiscovery Engine Verified!")
 
 

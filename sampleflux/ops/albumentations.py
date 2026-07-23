@@ -25,13 +25,14 @@ via ``np.asarray``) and the output stays numpy HWC — tensorize downstream with
 :class:`~sampleflux.ops.torchvision.TorchvisionTransformOp`, which emits CHW torch tensors.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, List, Literal, Optional
 
 import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.sample import Sample
+from sampleflux.bag.items import Mask, item_data, with_data
+from sampleflux.bag.sample import Sample, primary
 
 logger = get_logger(__name__)
 
@@ -159,41 +160,23 @@ class AlbumentationsOp:
         return self._pipeline
 
     def __call__(self, sample: Sample) -> Sample:
-        image = _as_array(sample.input)
+        key, item = primary(sample, "input")
+        image = _as_array(item_data(item))
         if self.target == "mask":
-            out = self.pipeline(image=image, mask=_as_array(sample.target))
-            return sample._replace(input=out["image"], target=out["mask"])
+            mask_field = next(iter(sample.items_of_type(Mask)), None)
+            if mask_field is None:
+                raise ValueError("AlbumentationsOp(target='mask'): no Mask field in the sample to transform jointly.")
+            mkey, mitem = mask_field
+            out = self.pipeline(image=image, mask=_as_array(item_data(mitem)))
+            result = sample.replace_field(key, with_data(item, out["image"]))
+            return result.replace_field(mkey, with_data(mitem, out["mask"]))
         if self.target == "boxes":
-            new_input, new_target = self._apply_boxes(image, sample.target)
-            return sample._replace(input=new_input, target=new_target)
+            raise NotImplementedError(
+                "AlbumentationsOp(target='boxes') is not yet ported to the typed-bag Regions target "
+                "(migration follow-up); use target='none' or 'mask'."
+            )
         out = self.pipeline(image=image)
-        return sample._replace(input=out["image"])
-
-    def _apply_boxes(self, image: np.ndarray, target: Any) -> Tuple[Any, Dict[str, Any]]:
-        """Route the torchvision detection dict through albumentations' bbox machinery."""
-        import torch
-
-        pipeline = self.pipeline
-        if not isinstance(target, dict) or "boxes" not in target or "labels" not in target:
-            raise TypeError(
-                f"AlbumentationsOp(target='boxes'): sample.target must be the torchvision detection "
-                f"dict {{'boxes': [N,4] xyxy, 'labels': [N]}}; got {type(target).__name__}. Wire "
-                "CocoToTorchVisionDetectionOp / MasksToDetectionBoxesOp upstream."
-            )
-        if "bboxes" not in getattr(pipeline, "processors", {}):
-            raise ValueError(
-                "AlbumentationsOp(target='boxes'): the prebuilt Compose was built without bbox_params. "
-                "Construct it as A.Compose([...], bbox_params=A.BboxParams(format='pascal_voc', "
-                "label_fields=['labels'])) — or pass 'transforms' and let the op add them."
-            )
-        boxes = np.asarray(target["boxes"], dtype=np.float32).reshape(-1, 4)
-        labels = [int(v) for v in np.asarray(target["labels"]).reshape(-1)]
-        out = pipeline(image=image, bboxes=boxes.tolist(), labels=labels)
-        out_boxes = np.asarray(out["bboxes"], dtype=np.float32).reshape(-1, 4)
-        new_target = dict(target)
-        new_target["boxes"] = torch.as_tensor(out_boxes, dtype=torch.float32)
-        new_target["labels"] = torch.as_tensor(list(out["labels"]), dtype=torch.int64).reshape(-1)
-        return out["image"], new_target
+        return sample.replace_field(key, with_data(item, out["image"]))
 
 
 __all__ = ["AlbumentationsOp", "TargetMode"]

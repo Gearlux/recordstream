@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
-from sampleflux import FlowGraph, Flux, Image, Label, Mask, Transform, TypedSample, to_ops
+from sampleflux import FlowGraph, Flux, Image, Label, Mask, Sample, Transform, to_ops
 from sampleflux.flow import from_ops, parse_flow
 from sampleflux.ops.context import MergeFields
 from sampleflux.ops.structure import RenameField, SetRole
@@ -20,7 +20,7 @@ class _AddOffset(Transform):
         super().__init__(only=only)
         self.offset = offset
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         out = sample
         for key, item in sample.items():
             if isinstance(item, Image) and (self.only is None or key in self.only):
@@ -31,14 +31,14 @@ class _AddOffset(Transform):
 class _MakeMask(Transform):
     """Derives a Mask field from the first Image (a branch producer)."""
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         image = next(item for item in sample.fields.values() if isinstance(item, Image))
         out = sample.replace_field("mask", Mask(np.asarray(image)[..., 0] > 0.5))
         return out.set_role("mask", "target")
 
 
-def _seed(value: float = 0.0) -> TypedSample:
-    return TypedSample(
+def _seed(value: float = 0.0) -> Sample:
+    return Sample(
         {"image": Image(np.full((2, 3, 3), value, dtype=np.float32)), "label": Label("x")},
         roles={"label": "target"},
     )
@@ -48,7 +48,7 @@ class TestTypedFlowGraph:
     def test_linear_typed_flow(self) -> None:
         graph = FlowGraph(source=[_seed(1.0)], flow={"plus": _AddOffset(offset=2.0)})
         (out,) = list(graph)
-        assert isinstance(out, TypedSample) and np.allclose(np.asarray(out["image"]), 3.0)
+        assert isinstance(out, Sample) and np.allclose(np.asarray(out["image"]), 3.0)
 
     def test_merge_from_union(self) -> None:
         # Fork: derive a mask on a branch, SELECT the new field, union it back into the main
@@ -100,7 +100,7 @@ class TestTypedFlowGraph:
                 super().__init__()
                 self.item = item
 
-            def __call__(self, sample: TypedSample) -> TypedSample:
+            def __call__(self, sample: Sample) -> Sample:
                 offset = float(np.asarray(self.item).mean())
                 out = sample
                 for key, value in sample.items():
@@ -122,7 +122,7 @@ class TestTypedFlowGraph:
                 super().__init__()
                 self.item = item
 
-            def __call__(self, sample: TypedSample) -> TypedSample:
+            def __call__(self, sample: Sample) -> Sample:
                 assert isinstance(self.item, Image)  # primary input-role field of the bound step
                 return sample
 
@@ -132,21 +132,23 @@ class TestTypedFlowGraph:
             "final": {"op": _CapturePrimary(), "from": "start", "bind": {"item": "probe"}},
         }
         (out,) = list(FlowGraph(source=[_seed(0.0)], flow=flow, outputs="final"))
-        assert isinstance(out, TypedSample)
+        assert isinstance(out, Sample)
 
-    def test_typed_step_with_legacy_fanin_raises(self) -> None:
+    def test_legacy_fanin_key_removed(self) -> None:
+        # target_from / metadata_from (the legacy Sample fan-in) were purged; they are now
+        # unknown step keys — a flow document using one fails loudly at parse.
         flow = {
             "start": {},
             "a": {"op": _AddOffset(offset=1.0), "from": "start"},
             "out": {"from": "a", "target_from": "start"},
         }
         graph = FlowGraph(source=[_seed(0.0)], flow=flow, outputs="out")
-        with pytest.raises(TypeError, match="LEGACY fan-in"):
+        with pytest.raises(ValueError, match="unknown step key"):
             list(graph)
 
-    def test_merge_and_legacy_fanin_mutually_exclusive(self) -> None:
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            parse_flow({"a": {}, "b": {"from": "a", "merge_from": ["a"], "target_from": "a"}})
+    def test_metadata_from_key_removed(self) -> None:
+        with pytest.raises(ValueError, match="unknown step key"):
+            parse_flow({"a": {}, "b": {"from": "a", "merge_from": ["a"], "metadata_from": "a"}})
 
     def test_merge_from_forward_ref_raises(self) -> None:
         with pytest.raises(ValueError, match="EARLIER step"):
@@ -188,7 +190,7 @@ class TestTypedLoweringParity:
                 super().__init__()
                 self.item = item
 
-            def __call__(self, sample: TypedSample) -> TypedSample:
+            def __call__(self, sample: Sample) -> Sample:
                 return sample.replace_field("echo", self.item)
 
         flow = {
@@ -208,10 +210,10 @@ class TestTypedLoweringParity:
 
 class TestTypedThroughFlux:
     def test_default_flux_carries_typed_verbatim(self) -> None:
-        # No native=True needed: a TypedSample source item is NEVER coerced to legacy Sample.
+        # No native=True needed: a Sample source item is NEVER coerced to legacy Sample.
         flux = Flux(source=[_seed(1.0)], ops=[_AddOffset(offset=1.0)])
         (out,) = list(flux)
-        assert isinstance(out, TypedSample) and np.allclose(np.asarray(out["image"]), 2.0)
+        assert isinstance(out, Sample) and np.allclose(np.asarray(out["image"]), 2.0)
 
     def test_getitem_typed(self) -> None:
         flux = Flux(source=[_seed(1.0), _seed(2.0)], ops=[SetRole(key="image", role="aux")])

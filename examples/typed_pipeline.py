@@ -3,7 +3,7 @@
 Demonstrates the modality-neutral core of the redesign that steps away from
 ``Sample(input, target, metadata)``:
 
-1. a ``TypedSample`` is a NAMED BAG of TYPED ITEMS, each owning its metadata — an ``Image``
+1. a ``Sample`` is a NAMED BAG of TYPED ITEMS, each owning its metadata — an ``Image``
    carries its layout, a ``Regions`` its canvas, a ``Label`` its classes; ``input`` /
    ``target`` are ROLE TAGS, not fixed positions;
 2. the HEADLINE — ONE pipeline of BARE library transforms (each wrapped by its registered
@@ -12,8 +12,7 @@ Demonstrates the modality-neutral core of the redesign that steps away from
    augmentation transforms — the libraries cover that through adapter coercion;
 3. cross-field consistency — ONE library flip draw moves Image, Mask and Regions together,
    the Label untouched;
-4. a custom transform from a plain function (``as_transform``), no library, no core edit;
-5. interop — lower to a legacy ``Sample`` and lift back losslessly.
+4. a custom transform from a plain function (``as_transform``), no library, no core edit.
 
 Signal-domain items (``Signal`` / ``Spectrogram``) and the ``Fourier`` transform are NOT here —
 sampleflux is modality-neutral. They live in ``waivefront.bag`` and register into the SAME
@@ -26,13 +25,12 @@ import albumentations as A
 import numpy as np
 from torchvision.transforms import v2
 
-from sampleflux import Image, Label, Mask, Pipeline, Regions, TypedSample, as_transform
-from sampleflux.bag.interop import to_legacy, to_typed
+from sampleflux import Image, Label, Mask, Pipeline, Regions, Sample, as_transform
 
 
-def make_sample(rng: np.random.Generator) -> TypedSample:
+def make_sample(rng: np.random.Generator) -> Sample:
     """A detection sample: an image, its mask, its boxes (targets), and a class label (target)."""
-    return TypedSample(
+    return Sample(
         {
             "image": Image(rng.random((16, 20, 3)).astype(np.float32)),
             "mask": Mask(rng.random((16, 20)) > 0.5),
@@ -75,14 +73,6 @@ def main() -> None:
     brightened = brighten(sample)
     print("\n--- custom function transform ---")
     print("image brightened:", np.allclose(np.asarray(brightened["image"]), np.asarray(sample["image"]) + 0.1))
-
-    # 4. Interop — lossless round-trip through the legacy Sample.
-    legacy = to_legacy(sample)
-    back = to_typed(legacy)
-    print("\n--- legacy interop ---")
-    print("legacy input:", np.asarray(legacy.input).shape, " metadata keys:", list(legacy.meta))
-    print("round-trip equal:", back == sample)
-    assert back == sample
 
     print("\nOK")
 

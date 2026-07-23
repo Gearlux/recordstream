@@ -28,13 +28,33 @@ from PIL import Image, ImageDraw
 
 from sampleflux.bag.items import Image as ImageItem
 from sampleflux.bag.items import NDArrayItem, item_data
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample, primary
 from sampleflux.bag.transform import Transform
-from sampleflux.sample import Sample
-from sampleflux.typespec import ArrayType as _ArrayType
-from sampleflux.typespec import PythonType, SampleType, UnionType
 
 logger = get_logger("sampleflux.ops.image")
+
+
+def normalize_to_uint8(
+    arr: np.ndarray,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+) -> np.ndarray:
+    """Min-max normalize ``arr`` to ``uint8`` in ``[0, 255]``.
+
+    ``vmin`` / ``vmax`` pin the scale when given (clamping out-of-range values); otherwise the
+    array's finite min / max are used. Non-finite entries are folded to the bounds; a degenerate
+    range yields all-zeros. The single quantization source of truth (the 2-D-map / float-array
+    paths of :func:`value_to_image` call it directly).
+    """
+    arr = np.asarray(arr).astype(np.float32)
+    finite = arr[np.isfinite(arr)]
+    lo = float(vmin) if vmin is not None else (float(finite.min()) if finite.size else 0.0)
+    hi = float(vmax) if vmax is not None else (float(finite.max()) if finite.size else 0.0)
+    if hi <= lo:
+        return np.zeros(arr.shape, dtype=np.uint8)
+    filled = np.nan_to_num(arr, nan=lo, posinf=hi, neginf=lo)
+    norm = (filled - lo) / (hi - lo)
+    return np.asarray(np.clip(norm, 0.0, 1.0) * 255.0, dtype=np.uint8)
 
 
 # Closed set of supported matplotlib colormaps — the SINGLE source of truth for every colormap knob
@@ -116,7 +136,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
         arr = arr.astype(np.uint8) * 255
 
     if arr.ndim == 2:
-        return np.array(_apply_colormap(NormalizeToUint8Op.normalize_to_uint8(arr), colormap))
+        return np.array(_apply_colormap(normalize_to_uint8(arr), colormap))
     if arr.ndim == 3:
         # Normalize channel position to trailing (HWC).
         if arr.shape[0] in (1, 3, 4) and arr.shape[2] not in (1, 3, 4):
@@ -130,7 +150,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
             arr = arr[..., :3]
         else:  # 2 channels (or other) — replicate the first
             arr = np.repeat(arr[..., :1], 3, axis=2)
-        return arr if arr.dtype == np.uint8 else NormalizeToUint8Op.normalize_to_uint8(arr)
+        return arr if arr.dtype == np.uint8 else normalize_to_uint8(arr)
     return _text_to_image(f"input ndim={arr.ndim}, shape={arr.shape}")
 
 
@@ -175,19 +195,18 @@ def value_to_image(value: Any, colormap: Colormap = "viridis", max_size: int = 5
 
 
 def sample_to_image(sample: Sample, colormap: Colormap = "viridis", max_size: int = 512) -> np.ndarray:
-    """Render ``sample.input`` to an ``(H, W, 3)`` uint8 RGB image for display.
+    """Render a sample's primary input to an ``(H, W, 3)`` uint8 RGB image for display.
 
-    Thin wrapper over :func:`value_to_image` (which does the modality-agnostic
-    rendering) applied to ``sample.input``. Kept as the canonical "preview a
-    sample" entry point for SampleFlux pipelines; use :func:`value_to_image`
-    directly to render an arbitrary value such as ``sample.target``.
+    Thin wrapper over :func:`value_to_image` (which does the modality-agnostic rendering)
+    applied to the payload of the sample's primary ``input``-role field. Use
+    :func:`value_to_image` directly to render an arbitrary field payload.
 
     Args:
-        sample: The Sample to preview; its ``input`` field is rendered.
+        sample: The Sample to preview; its primary ``input`` field is rendered.
         colormap: Colormap applied to 2-D maps — one of the supported names (see ``Colormap``; ``"gray"`` = greyscale).
         max_size: Maximum length in pixels of the longest image side; larger renders are downscaled.
     """
-    return value_to_image(sample.input, colormap=colormap, max_size=max_size)
+    return value_to_image(item_data(primary(sample, "input")[1]), colormap=colormap, max_size=max_size)
 
 
 # --------------------------------------------------------------------------- #
@@ -576,145 +595,12 @@ def draw_text(
 
 
 @configurable(category="op", group="image")
-class ConvertToImageOp:
-    """Convert ``sample.input`` (array / tensor / 2-D map / PIL image) into a PIL image.
-
-    The generic image-conversion op — normalize → colormap → (flip) → resize.
-    It is modality-agnostic: a dB spectrogram, a segmentation logit map, a CHW
-    tensor, or an already-PIL image all become a ``PIL.Image.Image`` on
-    ``sample.input``. Domain overlays are a SEPARATE concern — chain
-    ``waivefront.visualizers.RenderOverlaysOp`` after this op to draw
-    signal-region rectangles; this op never draws annotations.
-
-    Rendering uses :func:`value_to_image`'s core (so 2-D maps are colormapped,
-    3-D arrays treated as images, bool masks become 0/255, floats min-max
-    normalized). Sizing:
-
-    * ``width`` and ``height`` both > 0 → resize to exactly that raster
-      (e.g. a spectrogram rendered to ``1024x512`` for downstream detectors).
-    * otherwise → bound the longest side by ``max_size``, preserving aspect.
-
-    ``flip_vertical=True`` mirrors the image top-to-bottom — used when the source
-    array's row 0 is the *bottom* of the desired image (a spectrogram stores
-    row 0 = f_min but display wants f_max at the top, so overlay pixel math
-    lines up). The final ``image_width_px`` / ``image_height_px`` are published
-    to ``sample.meta`` so downstream consumers (e.g. a detector
-    back-projecting pixel boxes to signal regions) can read the raster size.
-
-    Args:
-        colormap: Colormap applied to 2-D maps — a supported ``Colormap`` name (``"gray"`` = greyscale).
-        width: Exact output width in pixels; resize to ``(width, height)`` when both width and height are > 0.
-        height: Exact output height in pixels; resize to ``(width, height)`` when both width and height are > 0.
-        max_size: When ``width``/``height`` aren't both set, bound the longest side to this many pixels (aspect kept).
-        flip_vertical: Mirror the image top-to-bottom (e.g. spectrogram row 0 = f_min → display f_max at the top).
-    """
-
-    ACCEPTS = SampleType(input=UnionType((PythonType("PIL.Image.Image"), _ArrayType(frameworks={"numpy", "torch"}))))
-    PRODUCES = SampleType(input=PythonType("PIL.Image.Image"))
-
-    def __init__(
-        self,
-        colormap: Colormap = "gray",
-        width: int = 0,
-        height: int = 0,
-        max_size: int = 512,
-        flip_vertical: bool = False,
-    ) -> None:
-        self.colormap: Colormap = colormap
-        self.width = int(width)
-        self.height = int(height)
-        self.max_size = int(max_size)
-        self.flip_vertical = bool(flip_vertical)
-
-    def __call__(self, sample: Sample) -> Sample:
-        rgb = _render_rgb(sample.input, self.colormap)
-        if self.flip_vertical:
-            rgb = rgb[::-1, :, :]
-        if self.width > 0 and self.height > 0:
-            img = Image.fromarray(rgb).resize(
-                (self.width, self.height),
-                resample=Image.Resampling.BILINEAR,
-            )
-        else:
-            img = Image.fromarray(_bound_longest_side(rgb, self.max_size))
-
-        sample.meta["image_width_px"] = img.width
-        sample.meta["image_height_px"] = img.height
-        return sample._replace(input=img)
-
-
-@configurable(category="op", group="image")
-class NormalizeToUint8Op:
-    """Min-max normalize ``sample.input`` to a ``uint8`` array in ``[0, 255]``.
-
-    The generic value→``uint8`` conversion step, decoupled from any colormap or
-    PIL rendering (that is :class:`ConvertToImageOp`). Useful as a standalone
-    quantization stage — e.g. turning a dB spectrogram or a logit map into a
-    display-ready 8-bit grid — and as the shared math behind the renderers in
-    this module (:func:`value_to_image` calls :meth:`normalize_to_uint8`
-    directly for its 2-D-map and float-array paths).
-
-    By default the scale is taken from the array's own finite min/max (per-array
-    auto-contrast). Supply ``vmin`` / ``vmax`` to pin a *fixed* range instead so
-    successive samples are quantized on a common scale (e.g. a constant dB window
-    across a dataset) — values outside the range clamp to ``0`` / ``255``.
-
-    Non-finite entries (``NaN`` / ``±inf``) are folded to the low / high bound
-    before scaling; a degenerate range (``vmax <= vmin``, or a flat array under
-    auto bounds) maps to all-zeros to avoid a divide-by-zero.
-
-    Args:
-        vmin: Lower bound mapped to ``0``; ``None`` (default) uses the array's finite minimum.
-        vmax: Upper bound mapped to ``255``; ``None`` (default) uses the array's finite maximum.
-    """
-
-    ACCEPTS = SampleType(input=_ArrayType(frameworks={"numpy", "torch"}))
-    PRODUCES = SampleType(input=_ArrayType(dtype="uint8", frameworks={"numpy"}))
-
-    def __init__(self, vmin: Optional[float] = None, vmax: Optional[float] = None) -> None:
-        self.vmin = None if vmin is None else float(vmin)
-        self.vmax = None if vmax is None else float(vmax)
-
-    @staticmethod
-    def normalize_to_uint8(
-        arr: np.ndarray,
-        vmin: Optional[float] = None,
-        vmax: Optional[float] = None,
-    ) -> np.ndarray:
-        """Min-max normalize ``arr`` to ``uint8`` in ``[0, 255]``.
-
-        ``vmin`` / ``vmax`` pin the scale when given (clamping out-of-range
-        values); otherwise the array's finite min / max are used. Non-finite
-        entries are folded to the bounds; a degenerate range yields all-zeros.
-        """
-        arr = np.asarray(arr).astype(np.float32)
-        finite = arr[np.isfinite(arr)]
-        lo = float(vmin) if vmin is not None else (float(finite.min()) if finite.size else 0.0)
-        hi = float(vmax) if vmax is not None else (float(finite.max()) if finite.size else 0.0)
-        if hi <= lo:
-            return np.zeros(arr.shape, dtype=np.uint8)
-        filled = np.nan_to_num(arr, nan=lo, posinf=hi, neginf=lo)
-        norm = (filled - lo) / (hi - lo)
-        # np.asarray (not .astype) so the return type is ndarray under stub
-        # versions where clip-arithmetic degrades to Any.
-        return np.asarray(np.clip(norm, 0.0, 1.0) * 255.0, dtype=np.uint8)
-
-    def __call__(self, sample: Sample) -> Sample:
-        if self.vmin is not None and self.vmax is not None and self.vmin >= self.vmax:
-            raise ValueError(f"NormalizeToUint8Op: vmin must be < vmax; got vmin={self.vmin!r}, vmax={self.vmax!r}")
-        arr = sample.input
-        if isinstance(arr, torch.Tensor):
-            arr = arr.detach().cpu().numpy()
-        return sample._replace(input=self.normalize_to_uint8(arr, self.vmin, self.vmax))
-
-
-@configurable(category="op", group="image")
 class ConvertToImage(Transform):
     """Typed twin of :class:`ConvertToImageOp` — an array-bearing field → an ``Image`` item.
 
     The typed-bag counterpart of :class:`ConvertToImageOp`: instead of rendering
     ``sample.input`` into a PIL image in place, it reads an array-bearing field from a
-    :class:`~sampleflux.TypedSample` and writes a fresh :class:`~sampleflux.Image` item
+    :class:`~sampleflux.Sample` and writes a fresh :class:`~sampleflux.Image` item
     (HWC ``uint8`` RGB) under ``output``, tagged with the ``input`` role (it is the
     pipeline's working image). Any other field passes through untouched.
 
@@ -764,7 +650,7 @@ class ConvertToImage(Transform):
         self.field = field
         self.output = output
 
-    def _find_source(self, sample: TypedSample) -> Any:
+    def _find_source(self, sample: Sample) -> Any:
         """Resolve the payload to render (``self.field`` or the first array-bearing item)."""
         if self.field:
             if self.field not in sample.keys():
@@ -776,7 +662,7 @@ class ConvertToImage(Transform):
                 return item_data(item)
         raise ValueError(f"ConvertToImage: no array-bearing field in sample (fields: {list(sample.keys())})")
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         rgb = _render_rgb(self._find_source(sample), self.colormap)
         if self.flip_vertical:
             rgb = rgb[::-1, :, :]
@@ -794,8 +680,7 @@ __all__ = [
     "Colormap",
     "COLORMAPS",
     "ConvertToImage",
-    "ConvertToImageOp",
-    "NormalizeToUint8Op",
+    "normalize_to_uint8",
     "value_to_image",
     "sample_to_image",
     "select_channel",

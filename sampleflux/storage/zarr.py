@@ -4,12 +4,10 @@ from typing import Any, Dict, Iterator, List, Optional, Union, cast
 
 import confluid
 import numpy as np
-import torch
 import zarr
 
 from sampleflux.bag.io import EncodedItem, decode_item, encode_item
-from sampleflux.bag.sample import TypedSample
-from sampleflux.sample import Sample
+from sampleflux.bag.sample import Sample, primary
 from sampleflux.storage.base import TYPED_FORMAT, DataSink, DataSource, Storage, restore_attrs, split_attrs, to_numpy
 
 #: Reserved field-group attr names in the typed layout (never item attrs).
@@ -18,7 +16,7 @@ _ROLE_ATTR = "__role__"
 _ORDER_ATTR = "__field_order__"
 
 
-def _read_typed_group(grp: "zarr.Group") -> TypedSample:
+def _read_typed_group(grp: "zarr.Group") -> Sample:
     """Decode one ``sample_NNNNNN`` group of the typed field-group layout."""
     order = json.loads(str(grp.attrs[_ORDER_ATTR]))
     fields: Dict[str, Any] = {}
@@ -36,7 +34,7 @@ def _read_typed_group(grp: "zarr.Group") -> TypedSample:
         attrs = restore_attrs(plain, arrays)
         fields[name] = decode_item(EncodedItem(type_name=str(fattrs[_TYPE_ATTR]), payload=payload, attrs=attrs))
         roles[name] = str(fattrs[_ROLE_ATTR])
-    return TypedSample(fields, roles)
+    return Sample(fields, roles)
 
 
 # category="sink": surfaced by visual editors as a sink node docking into a DatasetProcessor's sink slot.
@@ -66,35 +64,11 @@ class ZarrGroupSink(Storage, DataSink):
         self.open()
         if self._root is None:
             raise RuntimeError("Zarr group not open")
+        if not isinstance(sample, Sample):
+            raise TypeError(f"ZarrGroupSink: expected a Sample bag, got {type(sample).__name__}")
+        self._write_typed(sample)
 
-        if isinstance(sample, TypedSample):
-            self._write_typed(sample)
-            return
-        if self._root.attrs.get("sampleflux_format") == TYPED_FORMAT:
-            raise TypeError(
-                "ZarrGroupSink: this store carries the typed field-group layout — cannot append a "
-                "legacy Sample to it (one carrier per store)."
-            )
-
-        # Use require_group to handle existing nodes safely
-        name = f"sample_{self._counter:06d}"
-        grp = self._root.require_group(name)
-
-        # 1. Save data and target. create_array needs a numpy array (it can't read a
-        # torch tensor's dtype); to_numpy detaches/moves to CPU. overwrite=True replaces
-        # an existing node, so no manual delete is needed on re-write.
-        grp.create_array("data", data=to_numpy(sample.input), overwrite=True)
-
-        if sample.target is not None:
-            grp.create_array("target", data=to_numpy(sample.target), overwrite=True)
-
-        # 2. Save metadata as Zarr attributes (.zattrs)
-        if sample.meta:
-            grp.attrs.update(sample.meta)
-
-        self._counter += 1
-
-    def _write_typed(self, sample: TypedSample) -> None:
+    def _write_typed(self, sample: Sample) -> None:
         """One sample in the typed field-group layout (the Zarr twin of HDF5Sink._write_typed)."""
         assert self._root is not None
         existing_format = self._root.attrs.get("sampleflux_format")
@@ -102,7 +76,7 @@ class ZarrGroupSink(Storage, DataSink):
             if any(True for _ in self._root.group_keys()) and self._counter == 0:
                 raise TypeError(
                     "ZarrGroupSink: this store carries the legacy Sample layout — cannot append a "
-                    "TypedSample to it (one carrier per store)."
+                    "Sample to it (one carrier per store)."
                 )
             self._root.attrs["sampleflux_format"] = TYPED_FORMAT
         elif existing_format != TYPED_FORMAT:
@@ -172,15 +146,8 @@ class ZarrGroupSource(Storage, DataSource):
         self.open()
         if self._root is None:
             return
-        if self.is_typed:
-            for name in sorted(self._root.group_keys()):
-                yield _read_typed_group(cast(zarr.Group, self._root[name]))
-            return
         for name in sorted(self._root.group_keys()):
-            grp = cast(zarr.Group, self._root[name])
-            data = cast(zarr.Array, grp[self.sample_key])[:]
-            target = cast(zarr.Array, grp[self.target_key])[:] if self.target_key in grp else None
-            yield Sample(input=torch.from_numpy(np.asarray(data)), target=target, metadata=dict(grp.attrs))
+            yield _read_typed_group(cast(zarr.Group, self._root[name]))
 
     def __len__(self) -> int:
         self.open()
@@ -237,42 +204,26 @@ class ZarrBatchSink(Storage, DataSink):
         self.open()
         if self._data_arr is None:
             raise RuntimeError("Zarr array not open")
+        if not isinstance(sample, Sample):
+            raise TypeError(f"ZarrBatchSink: expected a Sample bag, got {type(sample).__name__}")
 
-        if isinstance(sample, TypedSample):
-            # The batch sink stores ONE uniform array: the PRIMARY input field's payload per
-            # row, plus a one-time item template (type/field/attrs of the FIRST sample) so the
-            # source can rebuild typed rows. Uniform-batch by design — per-sample attr
-            # variation does not fit a single stacked array; use ZarrGroupSink for that.
-            from sampleflux.bag.sample import primary
-
-            key, item = primary(sample)
-            encoded = encode_item(item)
-            if "sampleflux_format" not in self._data_arr.attrs:
-                plain, arrays = split_attrs(encoded.attrs)
-                if arrays:
-                    raise TypeError(
-                        "ZarrBatchSink: array-valued item attrs do not fit the single-array batch "
-                        "layout — use ZarrGroupSink."
-                    )
-                self._data_arr.attrs.update(
-                    {"sampleflux_format": TYPED_FORMAT, _TYPE_ATTR: encoded.type_name, "__field__": key, **plain}
+        # The batch sink stores ONE uniform array: the PRIMARY input field's payload per row,
+        # plus a one-time item template (type/field/attrs of the FIRST sample) so the source can
+        # rebuild typed rows. Uniform-batch by design — per-sample attr variation does not fit a
+        # single stacked array; use ZarrGroupSink for that.
+        key, item = primary(sample)
+        encoded = encode_item(item)
+        if "sampleflux_format" not in self._data_arr.attrs:
+            plain, arrays = split_attrs(encoded.attrs)
+            if arrays:
+                raise TypeError(
+                    "ZarrBatchSink: array-valued item attrs do not fit the single-array batch "
+                    "layout — use ZarrGroupSink."
                 )
-            self._data_arr.append([np.asarray(to_numpy(encoded.payload))], axis=0)
-            self._counter += 1
-            return
-        if self._data_arr.attrs.get("sampleflux_format") == TYPED_FORMAT:
-            raise TypeError(
-                "ZarrBatchSink: this store carries the typed layout — cannot append a legacy "
-                "Sample to it (one carrier per store)."
+            self._data_arr.attrs.update(
+                {"sampleflux_format": TYPED_FORMAT, _TYPE_ATTR: encoded.type_name, "__field__": key, **plain}
             )
-
-        # Append to the primary array
-        # Zarr handles the resizing and chunking internally
-        self._data_arr.append([sample.input], axis=0)
-
-        # Note: Handling metadata in a single-array sink requires
-        # a separate attribute list or sidecar file.
-        # For simplicity, we attach to the array attributes.
+        self._data_arr.append([np.asarray(to_numpy(encoded.payload))], axis=0)
         self._counter += 1
 
     def flush(self) -> None:
@@ -310,21 +261,17 @@ class ZarrBatchSource(Storage, DataSource):
         if self._data_arr is None:
             return
         attrs = dict(self._data_arr.attrs)
-        if attrs.get("sampleflux_format") == TYPED_FORMAT:
-            # Typed batch rows: rebuild each row as the stored item type under the stored
-            # field key (uniform template — see ZarrBatchSink.write).
-            field = str(attrs["__field__"])
-            type_name = str(attrs[_TYPE_ATTR])
-            item_attrs = restore_attrs(
-                {k: v for k, v in attrs.items() if k not in ("sampleflux_format", _TYPE_ATTR, "__field__")}, {}
-            )
-            for i in range(self._data_arr.shape[0]):
-                payload = np.asarray(self._data_arr[i])
-                item = decode_item(EncodedItem(type_name=type_name, payload=payload, attrs=item_attrs))
-                yield TypedSample({field: item})
-            return
+        # Typed batch rows: rebuild each row as the stored item type under the stored field key
+        # (uniform template — see ZarrBatchSink.write).
+        field = str(attrs["__field__"])
+        type_name = str(attrs[_TYPE_ATTR])
+        item_attrs = restore_attrs(
+            {k: v for k, v in attrs.items() if k not in ("sampleflux_format", _TYPE_ATTR, "__field__")}, {}
+        )
         for i in range(self._data_arr.shape[0]):
-            yield Sample(input=torch.from_numpy(np.asarray(self._data_arr[i])))
+            payload = np.asarray(self._data_arr[i])
+            item = decode_item(EncodedItem(type_name=type_name, payload=payload, attrs=item_attrs))
+            yield Sample({field: item})
 
     def __len__(self) -> int:
         self.open()

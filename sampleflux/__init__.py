@@ -1,13 +1,14 @@
 """
 SampleFlux: Modular, functional data pipelines.
 
-The TYPED-BAG model (``TypedSample`` + typed items + type-dispatched ``Transform``\\ s) is THE
-data model — import its surface from here (``from sampleflux import TypedSample, Image, ...``);
-the internal module layout is transitional. The legacy ``Sample`` triple surface below it is
-being migrated out and will be deleted once every consumer has flipped.
+The data model is the TYPED BAG: a :class:`Sample` is a named bag of typed items (each
+owning its metadata), ``input`` / ``target`` are ROLE TAGS on fields, and transforms
+dispatch on item TYPE. Import the whole surface from the package top level
+(``from sampleflux import Sample, Image, Transform, primary, ...``); the internal module
+layout (``sampleflux.bag.*``) is transitional and may be promoted to the package root.
 """
 
-# --- the typed-bag surface (THE data model; frozen — consumers import ONLY from here) -----
+# --- the typed-bag data model + transforms + item codec ------------------------------------
 from sampleflux.bag import (
     ROLES,
     EncodedField,
@@ -20,8 +21,8 @@ from sampleflux.bag import (
     Pipeline,
     Regions,
     Role,
+    Sample,
     Transform,
-    TypedSample,
     as_transform,
     coerce_transform,
     decode_item,
@@ -42,16 +43,12 @@ from sampleflux.bag import (
     with_data,
 )
 
-# --- shared infrastructure (carrier-agnostic) ----------------------------------------------
-from sampleflux.collate import collate, get_collate, register_collate
+# --- shared infrastructure -----------------------------------------------------------------
+from sampleflux.collate import collate, get_collate, register_collate, registered_collates, typed_collate
 from sampleflux.context import Context
-from sampleflux.core import Flux, JointFlux, WrappedOp
+from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
 from sampleflux.flow import FlowGraph, from_ops, to_ops
-
-# --- LEGACY surface (the Sample triple era — dies with the purge stage) --------------------
-from sampleflux.kinds import INPUT, TARGET, Input, OpContract, SampleKind, Target, classify_carrier, op_contract
 from sampleflux.labels import LabelMap
-from sampleflux.ops import RescaleOp, StandardizeOp, ToTensorOp
 from sampleflux.processing import DatasetProcessor
 from sampleflux.projection import ProjectionField, SupportsProjection, iter_inputs, iter_targets, num_classes, project
 from sampleflux.runnable import (
@@ -62,31 +59,12 @@ from sampleflux.runnable import (
     entrypoint_tasks,
     runnable_entrypoints,
 )
-from sampleflux.sample import InputMeta, Pair, Sample, TargetMeta
 from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource, SplitName
-from sampleflux.typespec import (
-    AnyType,
-    ArrayType,
-    Dim,
-    Dtype,
-    DtypeFamily,
-    DtypeSpec,
-    Framework,
-    ListType,
-    MappingType,
-    PythonType,
-    SampleType,
-    UnionType,
-    infer_field_types,
-    infer_sample_type,
-    infer_type,
-    typed,
-)
 from sampleflux.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
 
 __all__ = [
-    # ---- typed-bag surface (THE data model) ----
-    "TypedSample",
+    # ---- typed-bag data model ----
+    "Sample",
     "Role",
     "ROLES",
     "primary",
@@ -117,19 +95,35 @@ __all__ = [
     "decode_item",
     "encode_sample",
     "decode_sample",
-    "infer_field_types",
     # ---- shared infrastructure ----
     "Context",
     "Flux",
     "JointFlux",
+    "FilterOp",
+    "WrappedOp",
     "FlowGraph",
     "from_ops",
     "to_ops",
     "collate",
     "get_collate",
     "register_collate",
+    "registered_collates",
+    "typed_collate",
     "LabelMap",
-    # ---- runnable protocol + orchestration (carrier-agnostic) ----
+    # ---- sources ----
+    "HuggingFaceSource",
+    "DatasetSplit",
+    "RangeSource",
+    "ConcatSource",
+    "SplitName",
+    # ---- projection ----
+    "ProjectionField",
+    "SupportsProjection",
+    "iter_inputs",
+    "iter_targets",
+    "num_classes",
+    "project",
+    # ---- runnable protocol + orchestration ----
     "TorchRunner",
     "ProgressReporting",
     "ProgressCallback",
@@ -144,47 +138,4 @@ __all__ = [
     "Not",
     "AllOf",
     "AnyOf",
-    # ---- legacy surface (dies with the purge stage) ----
-    "AnyType",
-    "ArrayType",
-    "ConcatSource",
-    "DatasetSplit",
-    "Dim",
-    "INPUT",
-    "Input",
-    "InputMeta",
-    "OpContract",
-    "Pair",
-    "TARGET",
-    "Target",
-    "TargetMeta",
-    "SampleKind",
-    "classify_carrier",
-    "op_contract",
-    "Dtype",
-    "DtypeFamily",
-    "DtypeSpec",
-    "Framework",
-    "HuggingFaceSource",
-    "ListType",
-    "MappingType",
-    "ProjectionField",
-    "PythonType",
-    "RangeSource",
-    "RescaleOp",
-    "Sample",
-    "SampleType",
-    "SplitName",
-    "StandardizeOp",
-    "SupportsProjection",
-    "ToTensorOp",
-    "UnionType",
-    "WrappedOp",
-    "infer_sample_type",
-    "infer_type",
-    "iter_inputs",
-    "iter_targets",
-    "num_classes",
-    "project",
-    "typed",
 ]

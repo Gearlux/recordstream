@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from sampleflux.bag.dispatch import Kernel, dispatch, register_kernel
 from sampleflux.bag.items import item_data, with_data
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample
 
 __all__ = [
     "Transform",
@@ -72,11 +72,11 @@ class Transform:
         """Register a kernel for ``item_type`` on this transform (decorator over :func:`register_kernel`)."""
         return register_kernel(cls, item_type)
 
-    def get_params(self, sample: TypedSample) -> Dict[str, Any]:
+    def get_params(self, sample: Sample) -> Dict[str, Any]:
         """Sample the shared parameters for one call. Default: no params."""
         return {}
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         params = self.get_params(sample)
         out = sample
         for key, item in sample.items():
@@ -88,7 +88,7 @@ class Transform:
             out = out.replace_field(key, kernel(item, params))
         return out
 
-    def decode(self, sample: TypedSample) -> TypedSample:
+    def decode(self, sample: Sample) -> Sample:
         """The inverse transform (for visualization / back-projection). Not defined by default."""
         raise NotImplementedError(f"{type(self).__name__} defines no decode (inverse)")
 
@@ -160,7 +160,7 @@ class Pipeline:
     def __init__(self, transforms: Sequence[Any]) -> None:
         self.transforms: List[Transform] = [coerce_transform(t) for t in transforms]
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         for transform in self.transforms:
             sample = transform(sample)
         return sample
@@ -181,7 +181,7 @@ class FunctionTransform(Transform):
         self._fn = fn
         self.handles = tuple(handles)
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         out = sample
         for key, item in sample.items():
             if self.only is not None and key not in self.only:

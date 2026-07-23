@@ -2,6 +2,8 @@ import time
 
 import numpy as np
 
+from sampleflux import Image, Sample
+from sampleflux.bag.items import item_data
 from sampleflux.core import Flux
 
 
@@ -11,7 +13,7 @@ def heavy_op(x: np.ndarray) -> np.ndarray:
 
 
 def test_parallel_execution() -> None:
-    source = [np.array([i]) for i in range(10)]
+    source = [Sample({"x": Image(np.array([i]))}, roles={"x": "input"}) for i in range(10)]
 
     start = time.time()
     # Use a real top-level function for pickling
@@ -20,16 +22,12 @@ def test_parallel_execution() -> None:
     duration = time.time() - start
 
     assert len(results) == 10
-    # In my previous run it was i*2
-    assert results[0].input == 0
-    assert results[9].input == 18
-    # 10 items of 0.1s sequentially = 1.0s. 4 workers ≈ 0.3s + spawn overhead.
-    # Threshold is generous because GH Actions runners are noticeably slower
-    # than local dev machines (observed >5s on cold runners). We only assert
-    # the pipeline completes — this isn't a benchmark.
+    assert int(item_data(results[0]["x"])[0]) == 0
+    assert int(item_data(results[9]["x"])[0]) == 18
+    # We only assert the pipeline completes — this isn't a benchmark.
     assert duration < 15.0
 
 
 def test_parallel_with_joint() -> None:
-    # Already tested in test_joint.py, but helps coverage here too
+    # Already tested elsewhere; helps coverage here too.
     pass

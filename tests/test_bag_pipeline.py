@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sampleflux.bag import Image, Label, Mask, Pipeline, Regions, TypedSample
+from sampleflux.bag import Image, Label, Mask, Pipeline, Regions, Sample
 from tests._bag_fixtures import FixtureFlip
 
 
@@ -25,7 +25,7 @@ class TestTorchvisionAdapter:
     def test_normalize_touches_only_image(self) -> None:
         from sampleflux.bag.adapters import TorchvisionV2Adapter
 
-        s = TypedSample(
+        s = Sample(
             {"image": Image(np.ones((4, 5, 3), dtype=np.float32)), "class": Label("x")},
             roles={"class": "target"},
         )
@@ -38,7 +38,7 @@ class TestTorchvisionAdapter:
     def test_flip_moves_image_mask_boxes_together(self) -> None:
         from sampleflux.bag.adapters import TorchvisionV2Adapter
 
-        s = TypedSample(
+        s = Sample(
             {
                 "image": Image(np.arange(6 * 8 * 3).reshape(6, 8, 3).astype(np.float32)),
                 "mask": Mask(np.arange(6 * 8).reshape(6, 8).astype(np.int64)),
@@ -54,12 +54,12 @@ class TestTorchvisionAdapter:
         from sampleflux.bag.adapters import TorchvisionV2Adapter
 
         with pytest.raises(ValueError, match="must be set"):
-            TorchvisionV2Adapter()(TypedSample({"image": Image(np.zeros((2, 2, 3), dtype=np.float32))}))
+            TorchvisionV2Adapter()(Sample({"image": Image(np.zeros((2, 2, 3), dtype=np.float32))}))
 
     def test_no_handled_field_is_noop(self) -> None:
         from sampleflux.bag.adapters import TorchvisionV2Adapter
 
-        s = TypedSample({"class": Label("x")})
+        s = Sample({"class": Label("x")})
         assert TorchvisionV2Adapter(self.v2.RandomHorizontalFlip(p=1.0))(s) == s
 
 
@@ -69,7 +69,7 @@ class TestAlbumentationsAdapter:
 
         from sampleflux.bag.adapters import AlbumentationsAdapter
 
-        s = TypedSample(
+        s = Sample(
             {"image": Image(np.full((6, 6, 3), 0.5, dtype=np.float32)), "class": Label("x")},
             roles={"class": "target"},
         )
@@ -83,7 +83,7 @@ class TestAlbumentationsAdapter:
 
         from sampleflux.bag.adapters import AlbumentationsAdapter
 
-        s = TypedSample(
+        s = Sample(
             {
                 "image": Image(np.random.rand(10, 12, 3).astype(np.float32)),
                 "regions": Regions(boxes=[[2, 3, 6, 7]], labels=[1], canvas=(10, 12)),
@@ -97,7 +97,7 @@ class TestAlbumentationsAdapter:
         from sampleflux.bag.adapters import AlbumentationsAdapter
 
         with pytest.raises(ValueError, match="must be set"):
-            AlbumentationsAdapter()(TypedSample({"image": Image(np.zeros((2, 2, 3), dtype=np.float32))}))
+            AlbumentationsAdapter()(Sample({"image": Image(np.zeros((2, 2, 3), dtype=np.float32))}))
 
 
 class TestMixedPipeline:
@@ -111,7 +111,7 @@ class TestMixedPipeline:
         import albumentations as A
 
         rng = np.random.default_rng(0)
-        sample = TypedSample(
+        sample = Sample(
             {
                 "image": Image(rng.random((16, 20, 3)).astype(np.float32)),
                 "mask": Mask(rng.random((16, 20)) > 0.5),
@@ -180,7 +180,7 @@ class TestCoercion:
 
         register_adapter(lambda o: isinstance(o, MyLibDouble), factory)
 
-        s = TypedSample({"image": Image(np.ones((2, 2, 3)))})
+        s = Sample({"image": Image(np.ones((2, 2, 3)))})
         out = Pipeline([MyLibDouble()])(s)
         assert np.allclose(np.asarray(out["image"]), 2.0)
         assert isinstance(coerce_transform(MyLibDouble()), FunctionTransform)

@@ -17,7 +17,8 @@ from typing import Any, List, Optional, cast
 from confluid import configurable, flow
 from confluid.fluid import Fluid
 
-from sampleflux.sample import Sample
+from sampleflux.bag.items import item_data
+from sampleflux.bag.sample import Sample, primary
 
 
 @configurable(category="op", group="compose")
@@ -87,8 +88,8 @@ class ConfigureOp:
             if result is None:
                 return None  # the compute chain filtered the sample (FilterOp semantics)
             current = result
-        value = current.input
-        sample.meta[self.key or self.param] = value
+        # The computed value is the primary input item's payload of the side-branch result.
+        value = item_data(primary(current)[1])
         target = cast(Any, self.target)
         setattr(target, self.param, value)
         return _apply_op(sample, target)

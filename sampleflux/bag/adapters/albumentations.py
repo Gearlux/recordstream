@@ -14,7 +14,7 @@ from typing import Any, List, Optional
 import numpy as np
 
 from sampleflux.bag.items import Image, Mask, Regions, item_data, with_data
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample
 from sampleflux.bag.transform import Transform, register_adapter
 
 
@@ -35,7 +35,7 @@ class AlbumentationsAdapter(Transform):
         super().__init__(only=only)
         self.transform = transform
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         if self.transform is None:
             raise ValueError("AlbumentationsAdapter: 'transform' must be set before calling.")
 
@@ -71,7 +71,7 @@ class AlbumentationsAdapter(Transform):
             )
         return result
 
-    def _pick(self, sample: TypedSample, item_type: type) -> Optional[str]:
+    def _pick(self, sample: Sample, item_type: type) -> Optional[str]:
         """The first field of ``item_type`` (honoring ``only``), or ``None``."""
         for key, item in sample.items():
             if self.only is not None and key not in self.only:

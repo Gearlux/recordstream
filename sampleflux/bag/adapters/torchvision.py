@@ -18,7 +18,7 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from sampleflux.bag.items import Image, Mask, Regions, item_data, with_data
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample
 from sampleflux.bag.transform import Transform, register_adapter
 
 
@@ -50,7 +50,7 @@ class TorchvisionV2Adapter(Transform):
         super().__init__(only=only)
         self.transform = transform
 
-    def __call__(self, sample: TypedSample) -> TypedSample:
+    def __call__(self, sample: Sample) -> Sample:
         import torch
         from torchvision import tv_tensors
 
@@ -76,7 +76,7 @@ class TorchvisionV2Adapter(Transform):
         return out
 
 
-def _canvas_size(sample: TypedSample) -> Optional[Tuple[int, int]]:
+def _canvas_size(sample: Sample) -> Optional[Tuple[int, int]]:
     """``(H, W)`` from the first Image/Mask field — the reference frame for bounding boxes."""
     for _, item in sample.items():
         if isinstance(item, (Image, Mask)):

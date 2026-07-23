@@ -1,4 +1,4 @@
-"""``TypedSample`` — the named bag of typed items that replaces ``Sample(input, target, metadata)``.
+"""``Sample`` — the named bag of typed items that replaces ``Sample(input, target, metadata)``.
 
 A sample is an ordered mapping ``name -> item`` (see :mod:`sampleflux.bag.items`), plus a
 per-key ROLE tag. This gives every field BOTH a name (the key — the albumentations dispatch
@@ -7,7 +7,7 @@ ordinary tags read only at the train / collate / sink boundary rather than fixed
 positions. A field can change role without moving keys; auxiliary items (masks, derived
 params) are simply tagged ``aux`` and excluded from both ``inputs()`` and ``targets()``.
 
-``TypedSample`` is immutable — every mutator returns a NEW sample (copy-on-write), mirroring
+``Sample`` is immutable — every mutator returns a NEW sample (copy-on-write), mirroring
 the ``Sample._replace`` idiom the legacy engine already relies on, so a transform never
 aliases its input.
 """
@@ -17,7 +17,7 @@ from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 import numpy as np
 from typing_extensions import Literal, get_args
 
-__all__ = ["TypedSample", "Role", "ROLES", "primary"]
+__all__ = ["Sample", "Role", "ROLES", "primary"]
 
 #: The closed set of field roles. ``input`` / ``target`` drive the train boundary; ``aux`` is
 #: a helper field (mask, derived param) in neither; ``pred`` is a model prediction. Closed
@@ -28,13 +28,13 @@ ROLES: Tuple[str, ...] = get_args(Role)
 _DEFAULT_ROLE: Role = "input"
 
 
-class TypedSample:
+class Sample:
     """An ordered, immutable bag of typed items with per-field role tags.
 
     Construct from a mapping of items (roles default to ``input``); pass ``roles`` to tag
     specific keys::
 
-        s = TypedSample(
+        s = Sample(
             {"image": Image(rgb), "regions": Regions(boxes), "class": Label("drone")},
             roles={"regions": "target", "class": "target"},
         )
@@ -54,9 +54,9 @@ class TypedSample:
         roles = roles or {}
         for key, role in roles.items():
             if key not in self._fields:
-                raise KeyError(f"TypedSample: role given for unknown field {key!r}")
+                raise KeyError(f"Sample: role given for unknown field {key!r}")
             if role not in ROLES:
-                raise ValueError(f"TypedSample: invalid role {role!r} for {key!r} (allowed: {list(ROLES)})")
+                raise ValueError(f"Sample: invalid role {role!r} for {key!r} (allowed: {list(ROLES)})")
         self._roles: Dict[str, Role] = {key: roles.get(key, _DEFAULT_ROLE) for key in self._fields}
 
     # --- read views -------------------------------------------------------
@@ -115,36 +115,36 @@ class TypedSample:
                 yield key, item
 
     # --- copy-on-write mutators ------------------------------------------
-    def replace_field(self, key: str, item: Any) -> "TypedSample":
+    def replace_field(self, key: str, item: Any) -> "Sample":
         """A copy with ``key`` set to ``item`` (added if new; role preserved, else ``input``)."""
         fields = dict(self._fields)
         fields[key] = item
-        return TypedSample(fields, {**self._roles, key: self._roles.get(key, _DEFAULT_ROLE)})
+        return Sample(fields, {**self._roles, key: self._roles.get(key, _DEFAULT_ROLE)})
 
-    def set_role(self, key: str, role: Role) -> "TypedSample":
+    def set_role(self, key: str, role: Role) -> "Sample":
         """A copy with ``key``'s role set to ``role``."""
         if key not in self._fields:
-            raise KeyError(f"TypedSample.set_role: unknown field {key!r}")
+            raise KeyError(f"Sample.set_role: unknown field {key!r}")
         if role not in ROLES:
-            raise ValueError(f"TypedSample.set_role: invalid role {role!r} (allowed: {list(ROLES)})")
-        return TypedSample(dict(self._fields), {**self._roles, key: role})
+            raise ValueError(f"Sample.set_role: invalid role {role!r} (allowed: {list(ROLES)})")
+        return Sample(dict(self._fields), {**self._roles, key: role})
 
-    def drop(self, key: str) -> "TypedSample":
+    def drop(self, key: str) -> "Sample":
         """A copy without ``key``."""
         fields = dict(self._fields)
         roles = dict(self._roles)
         fields.pop(key, None)
         roles.pop(key, None)
-        return TypedSample(fields, roles)
+        return Sample(fields, roles)
 
-    def rename(self, src: str, dst: str) -> "TypedSample":
+    def rename(self, src: str, dst: str) -> "Sample":
         """A copy with field ``src`` renamed to ``dst`` (role travels; position moves to the end).
 
         Renaming onto an existing ``dst`` replaces it (last-write-wins, consistent with
         :meth:`merge`). Unknown ``src`` raises.
         """
         if src not in self._fields:
-            raise KeyError(f"TypedSample.rename: unknown field {src!r}")
+            raise KeyError(f"Sample.rename: unknown field {src!r}")
         fields = dict(self._fields)
         roles = dict(self._roles)
         item = fields.pop(src)
@@ -153,11 +153,11 @@ class TypedSample:
         roles.pop(dst, None)
         fields[dst] = item
         roles[dst] = role
-        return TypedSample(fields, roles)
+        return Sample(fields, roles)
 
     # --- fan-in ------------------------------------------------------------
     @classmethod
-    def merge(cls, *samples: "TypedSample") -> "TypedSample":
+    def merge(cls, *samples: "Sample") -> "Sample":
         """The ordered UNION of several samples' fields — the typed fan-in primitive.
 
         Fields AND their roles are united in listed order; on a key collision the
@@ -169,15 +169,15 @@ class TypedSample:
         fields: Dict[str, Any] = {}
         roles: Dict[str, Role] = {}
         for sample in samples:
-            if not isinstance(sample, TypedSample):
-                raise TypeError(f"TypedSample.merge: expected TypedSample, got {type(sample).__name__}")
+            if not isinstance(sample, Sample):
+                raise TypeError(f"Sample.merge: expected Sample, got {type(sample).__name__}")
             fields.update(sample._fields)
             roles.update(sample._roles)
         return cls(fields, roles)
 
     # --- equality / repr --------------------------------------------------
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, TypedSample):
+        if not isinstance(other, Sample):
             return NotImplemented
         if self._roles != other._roles or list(self._fields) != list(other._fields):
             return False
@@ -185,10 +185,10 @@ class TypedSample:
 
     def __repr__(self) -> str:
         parts = ", ".join(f"{key}={type(item).__name__}[{self._roles[key]}]" for key, item in self._fields.items())
-        return f"TypedSample({parts})"
+        return f"Sample({parts})"
 
 
-def primary(sample: TypedSample, role: Role = "input") -> Tuple[str, Any]:
+def primary(sample: Sample, role: Role = "input") -> Tuple[str, Any]:
     """The FIRST field of ``role`` in insertion order, as ``(key, item)``.
 
     The sanctioned answer to "the input" / "the target" of a bag: engines, ``bind``, and

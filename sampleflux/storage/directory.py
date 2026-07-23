@@ -6,7 +6,7 @@ import confluid
 import numpy as np
 
 from sampleflux.bag.io import EncodedItem, decode_item, encode_item
-from sampleflux.bag.sample import TypedSample
+from sampleflux.bag.sample import Sample
 from sampleflux.storage.base import DataSink, Storage, restore_attrs, split_attrs, to_numpy
 
 #: Typed-layout filenames inside each per-sample directory.
@@ -38,37 +38,12 @@ class DirectorySink(Storage, DataSink):
 
     def write(self, sample: Any) -> None:
         """Write a sample to its own subdirectory."""
-        if isinstance(sample, TypedSample):
-            self.open()
-            self._write_typed(sample)
-            return
+        if not isinstance(sample, Sample):
+            raise TypeError(f"DirectorySink: expected a Sample bag, got {type(sample).__name__}")
+        self.open()
+        self._write_typed(sample)
 
-        # Use a zero-padded index for sorting
-        sample_dir = self.path / f"{self._counter:06d}"
-        sample_dir.mkdir(parents=True, exist_ok=True)
-
-        # 1. Save Metadata (YAML via Confluid)
-        if sample.meta:
-            meta_path = sample_dir / "metadata.yaml"
-            meta_path.write_text(confluid.dump(sample.meta))
-
-        # 2. Save Input and Target (Numpy)
-        if self.use_npz:
-            # Combined file
-            np.savez(
-                sample_dir / "sample.npz",
-                data=sample.input,
-                target=sample.target if sample.target is not None else np.array([]),
-            )
-        else:
-            # Separate files
-            np.save(sample_dir / "data.npy", sample.input)
-            if sample.target is not None:
-                np.save(sample_dir / "target.npy", sample.target)
-
-        self._counter += 1
-
-    def _write_typed(self, sample: TypedSample) -> None:
+    def _write_typed(self, sample: Sample) -> None:
         """One sample in the typed field-group layout: ``fields.json`` + ``fields.npz``.
 
         ``fields.json`` describes every field (order, item type, role, plain attrs);
@@ -129,7 +104,7 @@ class DirectorySource(Storage):
             raise FileNotFoundError(f"DirectorySource: {self.path} does not exist")
         return sorted(p for p in self.path.iterdir() if p.is_dir() and (p / _FIELDS_JSON).exists())
 
-    def __iter__(self) -> Iterator[TypedSample]:
+    def __iter__(self) -> Iterator[Sample]:
         for sample_dir in self._sample_dirs():
             yield self._read(sample_dir)
 
@@ -137,7 +112,7 @@ class DirectorySource(Storage):
         return len(self._sample_dirs())
 
     @staticmethod
-    def _read(sample_dir: Path) -> TypedSample:
+    def _read(sample_dir: Path) -> Sample:
         spec = json.loads((sample_dir / _FIELDS_JSON).read_text())
         npz_path = sample_dir / _FIELDS_NPZ
         payloads = dict(np.load(npz_path, allow_pickle=False)) if npz_path.exists() else {}
@@ -150,4 +125,4 @@ class DirectorySource(Storage):
             payload = payloads[key] if entry["has_payload"] else None
             fields[key] = decode_item(EncodedItem(type_name=entry["type"], payload=payload, attrs=attrs))
             roles[key] = entry["role"]
-        return TypedSample(fields, roles)
+        return Sample(fields, roles)
