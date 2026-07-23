@@ -1,13 +1,29 @@
 import bisect
 import random
-from typing import Any, Dict, Iterator, List, Literal, Optional, get_args
+from typing import Any, Collection, Dict, Iterator, List, Literal, Optional, get_args
 
 from confluid import configurable
 from loggair import get_logger
 
+from sampleflux.bag import Image, Label, TypedSample
+from sampleflux.projection import ProjectionField
 from sampleflux.sample import Sample
 
 logger = get_logger(__name__)
+
+
+def _pass_through(item: Any) -> Any:
+    """Coerce a wrapped source's item to a carrier the engine accepts.
+
+    A typed-bag :class:`~sampleflux.TypedSample` is passed through VERBATIM — the view sources
+    (:class:`DatasetSplit` / :class:`RangeSource` / :class:`ConcatSource`) only slice/index, they
+    never inspect payloads, so a typed source flows through them unchanged. Any legacy carrier is
+    normalized to a :class:`~sampleflux.sample.Sample` via ``Sample.from_any``.
+    """
+    if isinstance(item, TypedSample):
+        return item
+    return Sample.from_any(item)
+
 
 # Closed set of split names for DatasetSplit's fraction mode (workspace mandate: prefer
 # closed Literals over bare strings — self-documenting + machine-introspectable by UIs /
@@ -52,8 +68,16 @@ def _resolve_metadata_features(
 @configurable(category="source")
 class HuggingFaceSource:
     """
-    SampleFlux Source for Hugging Face Datasets.
-    Configurable mapping of dataset features to SampleFlux Sample triplets.
+    SampleFlux Source for Hugging Face Datasets, yielding typed-bag :class:`~sampleflux.TypedSample`\\ s.
+
+    Field mapping (the typed-bag layout that replaces the ``Sample(input, target, metadata)`` triple):
+
+    * the ``input_feature`` value (image / array) -> an :class:`~sampleflux.Image` field named
+      ``"image"`` (role ``input``);
+    * the ``target_feature`` value (label) -> a :class:`~sampleflux.Label` field named ``"class"``
+      (role ``target``);
+    * each ``metadata_features`` column -> its own :class:`~sampleflux.Label` field keyed by the column
+      name (role ``aux``), plus the source-provenance ``hf_path`` / ``hf_split`` aux Labels.
 
     Lazy & zero-arg per the workspace class-design convention (see confluid AGENTS.md
     "Lazy Initialization & Zero-Arg Construction"): the constructor only stores values and
@@ -64,9 +88,9 @@ class HuggingFaceSource:
     Args:
         path: HF dataset identifier — a Hub repo id (e.g. ``kitofrank/RFUAV``) or a local imagefolder path.
         split: HF split name (``train`` / ``validation`` / ``test`` / etc.).
-        input_feature: Dataset feature column to map onto ``Sample.input``.
-        target_feature: Dataset feature column to map onto ``Sample.target``.
-        metadata_features: Columns onto ``Sample.metadata``; ``None``=none, ``"*"``=all but input/target, else a list.
+        input_feature: Dataset feature column mapped onto the ``"image"`` input field (an ``Image`` item).
+        target_feature: Dataset feature column mapped onto the ``"class"`` target field (a ``Label`` item).
+        metadata_features: Columns -> per-column aux ``Label`` fields; ``None``=none, ``"*"``=all-but-i/o, else a list.
         count: Optional cap on the number of samples yielded (useful for fast smoke runs).
         name: Optional HF subset/config name (e.g. for multi-config datasets).
     """
@@ -130,40 +154,78 @@ class HuggingFaceSource:
             self.metadata_features, getattr(self.dataset, "column_names", None), self.input_feature, self.target_feature
         )
 
-    def __iter__(self) -> Iterator[Sample]:
-        counter = 0
+    def _to_typed_sample(
+        self,
+        item: Any,
+        metadata_features: List[str],
+        *,
+        want_input: bool = True,
+        want_target: bool = True,
+        want_meta: bool = True,
+    ) -> TypedSample:
+        """Assemble one :class:`~sampleflux.TypedSample` from a raw HF row dict (see the class docstring
+        for the field mapping).
+
+        ``want_input`` / ``want_target`` / ``want_meta`` gate which roles are built — the projection
+        path (:meth:`project`) passes only the requested ones, so an unwanted image is never decoded.
+        """
+        fields: Dict[str, Any] = {}
+        roles: Dict[str, Any] = {}
+        if want_input:
+            # The input value (image/array) becomes an ``Image`` item; a PIL image / list is coerced
+            # to an ndarray by ``Image.__new__`` (np.asarray), preserving the default HWC layout.
+            fields["image"] = Image(item.get(self.input_feature))
+            roles["image"] = "input"
+        if want_target:
+            fields["class"] = Label(item.get(self.target_feature))
+            roles["class"] = "target"
+        if want_meta:
+            # Each requested metadata column rides its OWN aux Label field (typed-bag: metadata belongs
+            # to the item it describes), keyed by the column name. Source provenance follows the same shape.
+            for feature in metadata_features:
+                fields[feature] = Label(item.get(feature))
+                roles[feature] = "aux"
+            fields["hf_path"] = Label(self.path)
+            fields["hf_split"] = Label(self.split)
+            roles["hf_path"] = "aux"
+            roles["hf_split"] = "aux"
+        return TypedSample(fields, roles)
+
+    def __iter__(self) -> Iterator[TypedSample]:
         dataset = self.dataset
         metadata_features = self.resolved_metadata_features
         limit = self.count or len(dataset)
 
-        for item in dataset:
+        for counter, item in enumerate(dataset):
             if counter >= limit:
                 break
+            yield self._to_typed_sample(item, metadata_features)
 
-            # 1. Extract Input
-            input_val = item.get(self.input_feature)
+    def __getitem__(self, index: int) -> TypedSample:
+        return self._to_typed_sample(self.dataset[index], self.resolved_metadata_features)
 
-            # 2. Extract Target
-            target_val = item.get(self.target_feature)
+    def project(self, fields: Collection[ProjectionField]) -> Iterator[TypedSample]:
+        """Yield role-restricted ``TypedSample``\\ s — the ``SupportsProjection`` efficient path.
 
-            # 3. Build Metadata
-            metadata = {f: item.get(f) for f in metadata_features}
-            metadata["hf_path"] = self.path
-            metadata["hf_split"] = self.split
-
-            yield Sample(input=input_val, target=target_val, metadata=metadata)
-            counter += 1
-
-    def __getitem__(self, index: int) -> Sample:
-        item = self.dataset[index]
-        metadata = {f: item.get(f) for f in self.resolved_metadata_features}
-        metadata["hf_path"] = self.path
-        metadata["hf_split"] = self.split
-        return Sample(
-            input=item.get(self.input_feature),
-            target=item.get(self.target_feature),
-            metadata=metadata,
-        )
+        Only the requested roles are built, so a target-only walk (e.g. :func:`~sampleflux.num_classes`)
+        skips decoding the image entirely: ``"input"`` -> the ``"image"`` field, ``"target"`` -> the
+        ``"class"`` Label, ``"metadata"`` -> the aux metadata-feature / provenance Labels.
+        """
+        want = frozenset(fields)
+        dataset = self.dataset
+        want_meta = "metadata" in want
+        metadata_features = self.resolved_metadata_features if want_meta else []
+        limit = self.count or len(dataset)
+        for counter, item in enumerate(dataset):
+            if counter >= limit:
+                break
+            yield self._to_typed_sample(
+                item,
+                metadata_features,
+                want_input="input" in want,
+                want_target="target" in want,
+                want_meta=want_meta,
+            )
 
     def __len__(self) -> int:
         # A ``count`` of 0 (or None) means "all samples", matching __iter__'s
@@ -315,7 +377,7 @@ class DatasetSplit:
     def __iter__(self) -> Iterator[Sample]:
         return iter(self._view(self.split or "train"))
 
-    def __getitem__(self, index: int) -> Sample:
+    def __getitem__(self, index: int) -> Any:
         return self._view(self.split or "train")[index]
 
     def __len__(self) -> int:
@@ -337,10 +399,10 @@ class _SplitView:
 
     def __iter__(self) -> Iterator[Sample]:
         for idx in self.indices:
-            yield Sample.from_any(self.source[idx])
+            yield _pass_through(self.source[idx])
 
-    def __getitem__(self, index: int) -> Sample:
-        return Sample.from_any(self.source[self.indices[index]])
+    def __getitem__(self, index: int) -> Any:
+        return _pass_through(self.source[self.indices[index]])
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -395,10 +457,10 @@ class RangeSource:
 
     def __iter__(self) -> Iterator[Sample]:
         for idx in self.indices:
-            yield Sample.from_any(self.source[idx])
+            yield _pass_through(self.source[idx])
 
-    def __getitem__(self, index: int) -> Sample:
-        return Sample.from_any(self.source[self.indices[index]])
+    def __getitem__(self, index: int) -> Any:
+        return _pass_through(self.source[self.indices[index]])
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -450,7 +512,7 @@ class ConcatSource:
     def __len__(self) -> int:
         return self.offsets[-1] if self.offsets else 0
 
-    def __getitem__(self, index: int) -> Sample:
+    def __getitem__(self, index: int) -> Any:
         n = len(self)
         if index < 0:
             index += n
@@ -458,9 +520,9 @@ class ConcatSource:
             raise IndexError(index)
         j = bisect.bisect_right(self.offsets, index)
         start = self.offsets[j - 1] if j > 0 else 0
-        return Sample.from_any(self.sources[j][index - start])
+        return _pass_through(self.sources[j][index - start])
 
     def __iter__(self) -> Iterator[Sample]:
         for src in self.sources:
             for item in src:
-                yield Sample.from_any(item)
+                yield _pass_through(item)

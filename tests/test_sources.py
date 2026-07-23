@@ -532,8 +532,9 @@ class _StubHFDataset(list):
 
 def test_hf_source_iter_metadata_features_star_expands_on_real_dataset() -> None:
     # End-to-end through __iter__: a dataset with extra columns + metadata_features="*" carries
-    # every non-input/target column onto Sample.metadata (plus the synthetic hf_path/hf_split).
+    # every non-input/target column onto its OWN aux Label field (plus the synthetic hf_path/hf_split).
     # The "*" expansion is now lazy (resolved_metadata_features reads dataset.column_names).
+    from sampleflux import Image, Label, TypedSample
     from sampleflux.sources import HuggingFaceSource
 
     rows = [{"image": i, "label": i % 2, "id": f"r{i}", "src": "a"} for i in range(3)]
@@ -541,8 +542,22 @@ def test_hf_source_iter_metadata_features_star_expands_on_real_dataset() -> None
     src._dataset = _StubHFDataset(rows, ["image", "label", "id", "src"])  # pre-seed: no network
 
     samples = list(src)
-    assert [s.input for s in samples] == [0, 1, 2]
-    md = samples[0].meta
-    assert md["id"] == "r0" and md["src"] == "a"
-    assert "image" not in md and "label" not in md  # input/target excluded from metadata
-    assert md["hf_path"] == "fake/ds" and md["hf_split"] == "train"
+    assert all(isinstance(s, TypedSample) for s in samples)
+
+    # input_feature -> "image" Image (role input); target_feature -> "class" Label (role target).
+    assert [int(s["image"]) for s in samples] == [0, 1, 2]
+    assert all(isinstance(s["image"], Image) and s.role_of("image") == "input" for s in samples)
+    assert [s["class"].value for s in samples] == [0, 1, 0]  # label = i % 2
+    assert all(isinstance(s["class"], Label) and s.role_of("class") == "target" for s in samples)
+
+    # Each metadata column rides its own aux Label field, keyed by the column name.
+    s0 = samples[0]
+    assert s0["id"].value == "r0" and s0["src"].value == "a"
+    assert s0.role_of("id") == "aux" and s0.role_of("src") == "aux"
+    assert isinstance(s0["id"], Label) and isinstance(s0["src"], Label)
+    # input/target features are NOT duplicated as aux metadata fields.
+    assert s0.role_of("image") == "input" and s0.role_of("class") == "target"
+
+    # Source provenance rides aux Label fields too.
+    assert s0["hf_path"].value == "fake/ds" and s0["hf_split"].value == "train"
+    assert s0.role_of("hf_path") == "aux" and s0.role_of("hf_split") == "aux"

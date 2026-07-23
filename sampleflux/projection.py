@@ -25,6 +25,8 @@ Design notes
 
 from typing import Any, Collection, Iterator, Literal, Protocol, Tuple, get_args, runtime_checkable
 
+from sampleflux.bag.items import Label, item_data
+from sampleflux.bag.sample import Role, TypedSample, primary
 from sampleflux.sample import Sample
 
 #: The projectable :class:`~sampleflux.sample.Sample` fields, as a *closed*
@@ -56,14 +58,38 @@ class SupportsProjection(Protocol):
     def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]: ...
 
 
-def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Sample]:
-    """Yield :class:`Sample` records from ``source`` carrying only ``fields``.
+def _carrier_field(carrier: Any, field: ProjectionField) -> Any:
+    """Read one field's VALUE from either a legacy :class:`Sample` or a typed :class:`TypedSample`.
 
-    Uses the source's own ``project`` when it implements
-    :class:`SupportsProjection` (the efficient path that skips building
-    unrequested fields); otherwise falls back to a full iteration that builds
-    every field and nulls the unrequested ones — always correct, just not faster.
-    Lazy: a generator that never materializes the source.
+    For a ``TypedSample`` (the typed-bag carrier the migrated sources yield) the value of the
+    ``input`` / ``target`` role is the FIRST field of that role — a ``Label``'s ``.value`` (the class
+    id / scalar), else the item's raw payload (:func:`item_data`). A missing role yields ``None``, so
+    a target-only walk over a typed source feeds :func:`num_classes` exactly as the legacy carrier did.
+    """
+    if isinstance(carrier, TypedSample):
+        role: Role = "input" if field == INPUT else "target"
+        try:
+            _key, item = primary(carrier, role)
+        except KeyError:
+            return None
+        return item.value if isinstance(item, Label) else item_data(item)
+    s = Sample.from_any(carrier)
+    if field == INPUT:
+        return s.input
+    if field == TARGET:
+        return s.target
+    return s.meta
+
+
+def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Any]:
+    """Yield partial records from ``source`` carrying only ``fields``.
+
+    Uses the source's own ``project`` when it implements :class:`SupportsProjection` (the efficient
+    path that skips building unrequested fields); otherwise falls back to a full iteration that builds
+    every field and nulls the unrequested ones — always correct, just not faster. A typed-bag
+    :class:`TypedSample` is passed through VERBATIM (never coerced into a legacy ``Sample``); the walk
+    helpers below extract the requested field from whichever carrier flows. Lazy: a generator that
+    never materializes the source.
     """
     want = frozenset(fields)
     unknown = want - frozenset(_FIELDS)
@@ -73,6 +99,9 @@ def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Sample
         yield from source.project(want)
         return
     for raw in source:
+        if isinstance(raw, TypedSample):
+            yield raw
+            continue
         s = Sample.from_any(raw)
         yield Sample(
             input=s.input if INPUT in want else None,
@@ -82,15 +111,15 @@ def project(source: Any, fields: Collection[ProjectionField]) -> Iterator[Sample
 
 
 def iter_inputs(source: Any) -> Iterator[Any]:
-    """Lazily yield each sample's ``input`` (skipping target construction when supported)."""
+    """Lazily yield each sample's ``input`` value (skipping target construction when supported)."""
     for s in project(source, (INPUT,)):
-        yield s.input
+        yield _carrier_field(s, INPUT)
 
 
 def iter_targets(source: Any) -> Iterator[Any]:
-    """Lazily yield each sample's ``target`` (skipping input construction when supported)."""
+    """Lazily yield each sample's ``target`` value (skipping input construction when supported)."""
     for s in project(source, (TARGET,)):
-        yield s.target
+        yield _carrier_field(s, TARGET)
 
 
 def _to_int(value: Any) -> int:
