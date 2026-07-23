@@ -10,7 +10,8 @@ canvas graph or ``flow:`` document lowers to a plain sequential op list containi
 Unlike the stash family these NEVER touch ``sample.metadata``: graph wiring lives on the
 engine-created Context data plane, so the metadata bus stays byte-identical to a linear
 run. Cells are stored by reference (ops are copy-on-write by convention); ``Use`` copies
-on read unless it drops the cell — mirroring ``UnstashInputOp(copy=True, remove=True)``.
+on read unless it drops the cell — the same copy-on-read / move-on-drop idiom as
+``Apply(source=cell)``.
 """
 
 from copy import deepcopy
@@ -87,7 +88,7 @@ class Use:
     """Replace the stream sample with a Context cell's value (a branch start).
 
     The incoming sample is discarded; the cell's value becomes the stream sample
-    (``Sample.from_any`` coerces a raw cell value). Reads a DEEP COPY so two branches
+    (a raw, non-``Sample`` cell value is used verbatim). Reads a DEEP COPY so two branches
     reading one fork stay independent — unless ``drop`` frees the cell, which skips the
     copy (move semantics, the right choice for a cell's LAST reader).
 

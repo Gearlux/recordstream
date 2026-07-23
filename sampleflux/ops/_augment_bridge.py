@@ -117,7 +117,7 @@ def _make_op(
     # to_pydantic's get_type_hints evals them against THIS module. Anything that still won't
     # resolve degrades to Any so introspection never chokes on a stray name.
     try:
-        _hints = get_type_hints(transform_cls.__init__)
+        _hints = get_type_hints(transform_cls.__init__)  # type: ignore[misc]
     except Exception:
         _hints = {}
 

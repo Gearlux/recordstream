@@ -1,8 +1,8 @@
 """``AlbumentationsOp`` — run `albumentations <https://albumentations.ai>`_ transforms as a SampleFlux op.
 
-One random draw is applied jointly to ``sample.input`` and (per the ``target`` mode) its
-segmentation mask / detection boxes, so a geometric augmentation moves image AND target
-consistently; metadata passes through untouched.
+One random draw is applied jointly to the primary input item and (per the ``target`` mode)
+its segmentation mask / detection boxes, so a geometric augmentation moves image AND target
+consistently; the aux fields pass through untouched.
 
 Transforms are authored **Confluid-natively** — nested ``!class:`` nodes, never
 albumentations' own ``to_dict`` format::
@@ -63,7 +63,7 @@ def _resolve_transform(entry: Any) -> Any:
 
 @configurable(category="op", group="augment", random=True)
 class AlbumentationsOp:
-    """Apply albumentations transforms to ``sample.input`` (and optionally the target).
+    """Apply albumentations transforms to the primary input item (and optionally the target).
 
     Pass EITHER ``transform`` (one transform, or a prebuilt ``A.Compose``) OR
     ``transforms`` (a list composed into an ``A.Compose`` lazily) — never both. Entries
@@ -75,9 +75,9 @@ class AlbumentationsOp:
 
     * ``"none"`` — input-only augmentation (color jitter, noise, blur); the sample's
       target passes through untouched.
-    * ``"mask"`` — ``sample.target`` is a segmentation mask (2-D array or PIL ``L``
+    * ``"mask"`` — the target-role item is a segmentation mask (2-D array or PIL ``L``
       image); image and mask receive the SAME spatial transform.
-    * ``"boxes"`` — ``sample.target`` is the torchvision detection dict
+    * ``"boxes"`` — the target-role item is the torchvision detection dict
       ``{"boxes": [N,4] xyxy-pixel, "labels": [N]}`` (what
       :class:`~sampleflux.ops.target.CocoToTorchVisionDetectionOp` /
       :class:`~sampleflux.ops.target.MasksToDetectionBoxesOp` emit). When the op builds

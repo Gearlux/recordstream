@@ -2,7 +2,7 @@
 
 Some op parameters are only known *per sample*. Two mechanisms cover this:
 
-- **`ConfigureOp(ops, target, param, key)`** — runs `ops` on the sample as a side-branch; the chain's final `sample.input` is written to `metadata[key]` and injected as `target.<param>`, then `target` is applied. Use it when the value is *derived from the sample itself* (e.g. a threshold from the sample's own max) — the whole derivation reads as one node/YAML block.
+- **`ConfigureOp(ops, target, param, key)`** — runs `ops` on the sample as a side-branch; the chain's final primary input value (`primary(sample, "input")`) is injected as `target.<param>` and also recorded as an `aux`-role field named `key`, then `target` is applied. Use it when the value is *derived from the sample itself* (e.g. a threshold from the sample's own max) — the whole derivation reads as one node/YAML block.
 - **`Capture` + `Apply`** (`sampleflux.ops.context`, see [graph.md](graph.md)) — when the value is an op's runtime **`@output`** (possibly stochastic — a random draw that can't be recomputed): `Capture(op, output, name)` applies the producer and records its live `@output` into a Context cell; a later `Apply(op, param, source)` sets the consumer's `param` from that cell and applies it. This is what graph exporters emit for `@output` → param wires, and the preferred form whenever the value already lives in a cell.
 
 ```yaml
@@ -32,4 +32,4 @@ ops:
     key: derived_threshold
 ```
 
-`ConfigureOp` also stamps the derived value into `metadata[key]` (traceability — it persists into a sink); `Capture`/`Apply` move values through the per-sample Context, which never touches `sample.metadata`.
+`ConfigureOp` also records the derived value as an `aux`-role field named `key` (traceability — it persists into a sink); `Capture`/`Apply` move values through the per-sample Context, which never alters the sample's fields.

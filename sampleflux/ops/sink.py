@@ -26,7 +26,7 @@ class SampleSinkOp:
     attached to a :class:`marainer.processing.DatasetProcessor` as the
     flux's terminal sink. This adapter lets the same sinks slot into any
     Sample-based op chain — notably the ``ops`` list of
-    :class:`waivefront.sinks.DetectionPredictionsSink`, where the model's
+    :class:`waivefront.sinks.SigMFPredictionsSink`, where the model's
     predictions arrive as a Sample whose metadata carries the new
     ``predicted_regions`` and need to be persisted to disk just like a
     segment-pipeline output.
@@ -35,7 +35,7 @@ class SampleSinkOp:
     subsequent call forwards the Sample to ``sink.write(sample)`` and returns
     the Sample unchanged. ``close()`` flushes (when present) and closes the
     underlying sink — propagated by :class:`sampleflux.ops.enable.Enable` and
-    :class:`waivefront.sinks.DetectionPredictionsSink` at end-of-run.
+    :class:`waivefront.sinks.SigMFPredictionsSink` at end-of-run.
 
     YAML::
 

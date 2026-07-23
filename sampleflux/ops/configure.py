@@ -27,7 +27,7 @@ class ConfigureOp:
 
     The ``ops`` chain runs on the incoming sample as a SIDE branch — its input/target
     transformations are discarded (the original sample continues), while metadata writes
-    survive (the shared metadata-bus convention). The final ``sample.input`` of that chain
+    survive (the shared metadata-bus convention). The chain's final primary input item
     becomes the VALUE: it is written to ``metadata[key]`` and set as the ``param``
     attribute of ``target``, then ``target`` is applied to the original sample.
 
@@ -47,7 +47,7 @@ class ConfigureOp:
           param: low_level
 
     Args:
-        ops: Value-computing op-chain; the chain's final ``sample.input`` is injected. Empty = the incoming input.
+        ops: Value-computing op-chain; the chain's final primary input item is injected. Empty = the incoming input.
         target: The op to configure and apply; required at call time, validated lazily.
         param: Target attribute name to set with the computed value (e.g. ``low_level``).
         key: Metadata key the value is also written to. Blank (default) = ``param``.

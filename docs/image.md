@@ -5,13 +5,13 @@ The single, modality-agnostic "any value → image" layer — generic so every c
 ```python
 from sampleflux.ops.image import ConvertToImageOp, value_to_image
 
-# Op: sample.input (2-D map / CHW tensor / PIL / bool mask) -> PIL image.
+# Op: the sample's primary input item (2-D map / CHW tensor / PIL / bool mask) -> an Image field.
 op = ConvertToImageOp(
     colormap="viridis",   # closed `Colormap` Literal -> enumerable in GUIs / schemas
     width=1024, height=512,  # exact resize when both > 0; else bound longest side by max_size
     flip_vertical=True,      # e.g. a spectrogram stores row 0 = f_min but display wants f_max on top
 )
-sample = op(sample)          # also publishes image_width_px / image_height_px to metadata
+sample = op(sample)          # writes an Image field; the pixel dimensions live in its array shape
 
 # Library function for ad-hoc previews (PIL / tensor / ndarray / mask -> (H, W, 3) uint8):
 rgb = value_to_image(some_value, colormap="magma", max_size=512)

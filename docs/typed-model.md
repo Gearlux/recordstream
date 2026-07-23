@@ -1,18 +1,15 @@
 # The typed-bag model — THE sampleflux data model
 
-> **Status: the data model (migration in progress).** The typed bag replaces the classic
-> `Sample(input, target, metadata)` triple; the legacy engine survives only until every consumer
-> has migrated (staged in the root `TASKS.md`), after which it is deleted and `TypedSample` is
-> renamed `Sample`. Import the typed surface from the PACKAGE TOP LEVEL
-> (`from sampleflux import TypedSample, Image, Transform, ...`) — internal module paths are
-> transitional. The design rationale is recorded in
-> [architecture.md](architecture.md#the-typed-bag-model-a-named-bag-of-typed-items-sampleflux-bag-poc-2026-07-21).
+Import the typed surface from the PACKAGE TOP LEVEL
+(`from sampleflux import Sample, Image, Mask, Regions, Label, Transform, Pipeline, primary, item_data, typed_collate, register_item, register_kernel, register_adapter, register_io, ...`).
+The design rationale is recorded in
+[architecture.md](architecture.md#the-typed-bag-model-a-named-bag-of-typed-items-sampleflux-bag-2026-07-21).
 
 ## Why
 
-In the classic model everything that is not literally the model input or target — a segmentation
-mask, `[f0,f1,t0,t1]` regions, a signal's samplerate, an image's canvas size, a label's class
-names — is jammed into one flat `metadata` dict keyed by string, disconnected from the value it
+If everything that is not literally the model input or target — a segmentation mask,
+`[f0,f1,t0,t1]` regions, a signal's samplerate, an image's canvas size, a label's class names — is
+jammed into one flat `metadata` dict keyed by string, it is disconnected from the value it
 describes. That makes two things hard: metadata has no natural home, and a transform cannot move
 several fields together consistently (flip an image → flip its mask → flip its boxes).
 
@@ -46,12 +43,12 @@ item_data(Image(arr))                  # -> the plain ndarray
 with_data(Image(a, layout="CHW"), b)   # a copy carrying b, layout preserved
 ```
 
-### `TypedSample` — a named bag with role tags
+### `Sample` — a named bag with role tags
 
 ```python
-from sampleflux import TypedSample
+from sampleflux import Sample
 
-sample = TypedSample(
+sample = Sample(
     {"image": Image(rgb), "regions": Regions(boxes), "class": Label("drone_x")},
     roles={"regions": "target", "class": "target"},   # default role is "input"
 )
@@ -61,7 +58,7 @@ sample.set_role("regions", "aux")   # copy-on-write; a field's role changes with
 ```
 
 `input` / `target` / `aux` / `pred` are **tags read at the train/collate/sink boundary**, not tuple
-positions. `TypedSample` is immutable — every mutator returns a new sample.
+positions. `Sample` is immutable — every mutator returns a new sample.
 
 ### Transforms — type dispatch with once-per-sample parameters
 
@@ -92,7 +89,7 @@ Pipeline([
 ])(sample)
 ```
 
-The coercion is a small **registry** (`sampleflux.bag.register_adapter` / `coerce_transform`): the
+The coercion is a small **registry** (`register_adapter` / `coerce_transform`, both top-level): the
 built-in torchvision-v2 and albumentations adapters register a matcher (by MRO module name, no eager
 import) at package load. Teach a `Pipeline` about your own library's transforms with one call:
 
@@ -143,7 +140,7 @@ drops into a `sampleflux.bag.Pipeline` alongside the generic transforms with no 
 
 ## Engines — Flux and FlowGraph carry the typed bag
 
-A `TypedSample` is **never coerced**: on every `Flux` route (sequential / parallel / streamed /
+A `Sample` is **never coerced**: on every `Flux` route (sequential / parallel / streamed /
 `__getitem__`) and in `FlowGraph`, a typed source item passes through verbatim and each op receives
 the whole bag (`Pipeline` transforms, structure ops, and the compose plane — `TransformChain`,
 `RandomApply`, `Enable`, `Apply`, `Capture` — all route typed carriers correctly).
@@ -154,10 +151,9 @@ Flux(source=typed_source, ops=[v2.RandomHorizontalFlip(p=0.5), Fourier()]).to_si
 
 ### Typed fan-in (`merge_from`) and field binds (`step[key]`)
 
-In a `flow:` document, the typed fan-in is **`merge_from`** — the UNION of the named steps' fields
-and roles, in slot order, last-write-wins on a key collision (the typed replacement for the legacy
-metadata dict-merge). The idiom for a derived-field branch: produce, `SelectFields` the new
-field(s), merge:
+In a `flow:` document, the fan-in is **`merge_from`** — the UNION of the named steps' fields
+and roles, in slot order, last-write-wins on a key collision. The idiom for a derived-field branch:
+produce, `SelectFields` the new field(s), merge:
 
 ```yaml
 flow:
@@ -171,29 +167,26 @@ flow:
 `bind:` references gain a field form: `step[key]` binds the named ITEM of that step's bag as an op
 parameter; a bare `step` reference binds the step's PRIMARY input-role item
 (`sampleflux.primary`). Lowering (`to_ops`) compiles `merge_from` to the `MergeFields` context op
-and key-binds to `Apply(key=...)`; lifting (`from_ops`) round-trips both. `target_from` /
-`metadata_from` stay legacy-`Sample`-only (a typed step using them raises; `merge_from` on a legacy
-carrier likewise).
+and key-binds to `Apply(key=...)`; lifting (`from_ops`) round-trips both.
 
 ## Storage — the typed field-group layout
 
 All three backends (`HDF5Sink`↔`HDF5Source`, `ZarrGroupSink`↔`ZarrGroupSource`,
-`DirectorySink`↔`DirectorySource`) write a `TypedSample` in ONE logical schema: per sample, one
+`DirectorySink`↔`DirectorySource`) write a `Sample` in ONE logical schema: per sample, one
 group per FIELD carrying the item's registered type name, its role, the payload as a dataset, and
 its attrs (scalars natively — queryable; arrays as sub-datasets; structured values JSON-tagged so
-tuples survive). The store is stamped `sampleflux_format = "typedsample-v1"`; a store holds ONE
-carrier — appending a legacy `Sample` to a typed store (or vice versa) raises. Backends never
-inspect item internals — everything serializes through the `sampleflux.bag.io` codec
-(`encode_item`/`decode_item`), so an externally-registered item type round-trips with zero storage
+tuples survive). The store is stamped `sampleflux_format = "typedsample-v1"`. Backends never
+inspect item internals — everything serializes through the item codec (`encode_item` / `decode_item`,
+top-level), so an externally-registered item type round-trips with zero storage
 edits; `register_io(MyItem, encode=..., decode=...)` overrides the default structural codec when
 needed.
 
 ```python
 sink = HDF5Sink(path="out.h5", overwrite=True)
 with sink:
-    for sample in flux:           # TypedSamples
+    for sample in flux:           # Samples
         sink.write(sample)
-back = list(HDF5Source(path="out.h5"))   # exact TypedSamples: fields, roles, order, tuple attrs
+back = list(HDF5Source(path="out.h5"))   # exact Samples: fields, roles, order, tuple attrs
 ```
 
 `ZarrBatchSink` (the uniform single-array sink) appends the PRIMARY input field's payload per row
@@ -212,18 +205,19 @@ Array-valued attrs appear as shape/dtype stubs (presence/shape testable, never l
 named like a Python keyword (e.g. `class`) can't be addressed in an expression — use the
 programmatic `predicate` or a non-keyword field name.
 
-## Interop with the classic `Sample`
+## Interop with plain `(input, target, metadata)` tuples
 
-Run a typed pipeline against the existing sources/sinks by bridging both ways. The lowering is
-lossless — the whole bag is encoded in the legacy metadata while `input` / `target` still expose the
-primary payloads for a legacy consumer:
+Bridge to and from a plain 3-tuple — for an external consumer that expects one, or when adopting a
+non-typed dataset. The bridge is lossless: `to_legacy` flattens the bag into an
+`(input, target, metadata)` tuple (the whole bag encoded in the metadata, while `input` / `target`
+still expose the primary payloads), and `to_typed` reconstructs the exact bag:
 
 ```python
-from sampleflux.bag.interop import to_legacy, to_typed
-legacy = to_legacy(sample)        # a classic Sample; to_typed(legacy) == sample
-typed = to_typed(legacy)          # exact reconstruction
-# adopting an arbitrary legacy dataset needs a per-dataset builder:
-to_typed(raw_sample, builder=lambda s: TypedSample({"image": Image(s.input), "class": Label(s.target)}))
+from sampleflux import to_legacy, to_typed
+plain = to_legacy(sample)         # (input, target, metadata); to_typed(plain) == sample
+typed = to_typed(plain)           # exact reconstruction
+# adopting an arbitrary external dataset needs a per-dataset builder:
+to_typed(record, builder=lambda r: Sample({"image": Image(r.image), "class": Label(r.label)}))
 ```
 
 ## What is NOT here yet (follow-ups)

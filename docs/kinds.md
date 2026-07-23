@@ -1,88 +1,68 @@
-# The transform taxonomy, multi-type carriers & expanding ops (`sampleflux.kinds`)
+# Transforms, batching & expanding ops (`sampleflux.bag` / `sampleflux.collate`)
 
-## What an op processes, how it's called
+## What a transform processes — dispatch on item type
 
-A **sample** is the triple `(input, target, metadata)`; the classic AI tuple is the **pair** `(input, target)`. A transform declares — via its `__call__` signature alone — exactly which *slice* of the triple it processes, and the engine binds that view and merges the result back (untouched fields preserved):
-
-| scope | without metadata | with metadata |
-|---|---|---|
-| input only | `input` — the bare value | `input_meta` — `InputMeta(input, metadata)` |
-| target only | `target` — the bare value | `target_meta` — `TargetMeta(target, metadata)` |
-| both | `pair` — `(input, target)` / `Pair` | `sample` — the full `Sample` |
-| metadata only | — | `metadata` — the bare dict (`m: dict` / `MetaDict`) |
-
-Each scope works in **two calling styles** — packed (one argument) or unpacked (the fields as separate arguments) — and unpacked arguments COMBINE freely: each parameter binds its own view (annotation first, then the name, then the classic `f(input, target, metadata)` positional defaults):
+A **sample** is a named bag of typed items (`Image`, `Mask`, `Regions`, `Label`, … — see [typed-model.md](typed-model.md)). A transform declares which item TYPES it handles and registers a per-type **kernel**; it samples its parameters ONCE per sample, then applies the matching kernel to every field whose item type it handles, passing untouched fields through:
 
 ```python
-class A:  # bare input value — any array/tensor/dict; target+metadata pass through
-    def __call__(self, x: Input): return x / 255.0            # Annotated[T, INPUT] keeps a real T
+from sampleflux import Transform, Image
 
-class B:  # the classic AI signature, unpacked
-    def __call__(self, input, target): return aug(input), target
+class Recenter(Transform):
+    handles = (Image,)                       # which item types this transform touches
 
-class C:  # input with its metadata, unpacked (2nd arg named `metadata`/`meta`)
-    def __call__(self, input, metadata): return crop(input, metadata["roi"]), metadata
+    def params(self):                        # sampled ONCE per sample, shared across fields
+        return {"mean": 0.5}
 
-class D:  # packed named view
-    def __call__(self, v: TargetMeta) -> TargetMeta: return TargetMeta(encode(v.target), v.metadata)
-
-class E:  # the full triple, unpacked
-    def __call__(self, input, target, metadata): return input, target, {**metadata, "seen": True}
-
-class F:  # today's classic — completely unchanged
-    def __call__(self, sample: Sample) -> Sample: ...
-
-class G:  # COMBINED views: input WITH its metadata + target WITH its metadata
-    def __call__(self, im: InputMeta, tm: TargetMeta):
-        return InputMeta(aug(im.input), im.metadata), TargetMeta(remap(tm.target), tm.metadata)
-
-class H:  # metadata-only transform
-    def __call__(self, m: dict) -> dict: return {**m, "canonical": True}
+@Recenter.kernel(Image)                       # per-type behaviour
+def _(item, params):
+    return item - params["mean"]
 ```
 
-Detection rules: arity counts **required** parameters (optional extras don't change anything); 3 args → unpacked `sample`; 2 args → `input_meta`/`target_meta` when the 2nd is named `metadata`/`meta` (or annotated `dict`), first-arg name `target` selects the target side, else the `pair`; 1 arg → the annotation (`Sample`, `tuple`/`Pair`, `InputMeta`/`TargetMeta`, `Input`/`Target` marks; untyped = **any** — exactly today's behavior). `op_contract(op)` exposes the result — `OpContract(accepts, produces, expands, style, bindings)`, where `bindings` lists each unpacked parameter's scope in order (e.g. `("input_meta", "target_meta")`) and `accepts` is the grid summary of the covered fields — the vocabulary a visual editor can surface as socket types. Escape hatches: `SAMPLE_KIND_IN`/`SAMPLE_KIND_OUT`/`CALL_STYLE`/`EXPANDS` class attrs.
+Because the parameters are sampled once and shared, a transform that handles several types moves those fields **consistently** — one flip decision applies to `Image`, `Mask` and `Regions` together, the thing a flat `(input, target, metadata)` triple could not express. Dispatch is MRO-aware: a kernel registered for a base item type also serves its subclasses, and a subclass transform inherits its base's kernels until it overrides them.
 
-Merge-back: `None` drops the sample; a returned `Sample` takes over; otherwise only the declared fields update (a `pair` op keeps metadata; an `input` op keeps target+metadata; the meta variants receive the *actual* metadata dict, so in-place mutation propagates). The views are real NamedTuples (`Pair`/`InputMeta`/`TargetMeta`), recognized by `Sample.from_any`/`classify_carrier` *before* the generic tuple rule, flow natively under `Flux(native=True)`, and have default collates.
+Two smaller shapes round it out:
 
-## Multi-type carriers & the collate registry (`sampleflux.collate`)
+- **A plain function** becomes a transform via `as_transform(fn, handles=(Image,), only=["image"])` — `only=` narrows a transform to specific field keys.
+- **A type-changing transform** — read one field, write a differently-typed item (`array → Image`, `Signal → Spectrogram`, `Mask → Regions`) — subclasses `Transform` and overrides `__call__` instead of registering a same-type kernel.
 
-Pipelines can carry more than `Sample` triplets: **`Flux(native=True)`** (opt-in) keeps each carrier's own kind — a metadata-free **pair** (`(image, label)`, `(tensor, mask)`, `(tensor, coco_dict)`) or a bare **value** — and adapts every op via its introspected contract:
+Bare library transforms (torchvision `transforms.v2` dispatching by type, albumentations by keyword name) drop straight into a `Pipeline` through registered adapters — each one hits only the field(s) it handles. See [typed-model.md](typed-model.md#mixing-libraries--one-pipeline-many-worlds).
 
 ```python
-from confluid import configurable
-from sampleflux import Flux, Sample, op_contract
+from sampleflux import Sample, Image, Mask, Regions, Label, Pipeline
+from torchvision.transforms import v2
+import albumentations as A
 
-@configurable
-class NormalizePair:                          # a pair-native op — no metadata anywhere
-    def __call__(self, pair: tuple) -> tuple:
-        img, label = pair
-        return img / 255.0, label
-
-@configurable
-class StampOp:                                # a classic Sample op — unchanged
-    def __call__(self, sample: Sample) -> Sample: ...
-
-flux = Flux(source=[(img_a, 3), (img_b, 7)], ops=[NormalizePair(), StampOp()], native=True)
-# NormalizePair receives the raw pair; StampOp receives a PROMOTED Sample view
-# (promotion is one-way and sticky, so op-written metadata is never dropped).
-
-op_contract(NormalizePair())   # OpContract(accepts='pair', produces='pair', expands=False)
+out = Pipeline([
+    v2.RandomHorizontalFlip(p=1.0),          # Image + Mask + Regions together (one library draw)
+    v2.Normalize(mean, std),                 # Image only — wrapped by a registered adapter
+    A.GaussNoise(p=1.0),                     # Image only — wrapped by a registered adapter
+])(sample)
+# a Label field is untouched (no kernel handles it); roles are preserved.
 ```
 
-Detection reads the `__call__` annotations (`Sample` → sample-op, `tuple[...]` → pair-op, untyped → works-on-anything — **untyped ops behave exactly as today**); the class attrs `SAMPLE_KIND_IN` / `SAMPLE_KIND_OUT` / `EXPANDS` override detection where introspection can't see. `native=False` (the default) coerces everything to `Sample` exactly as before — no consumer changes.
+## Batching — `typed_collate` & the collate registry (`sampleflux.collate`)
 
-**Collation** is a pluggable registry keyed by representation:
+Transforms are per-sample; batching is a separate stage. **`typed_collate`** (auto-dispatched for `Sample` batches) stacks each field's payload and collects each item's per-sample attributes into a list, preserving roles — the ONE batch convention:
 
 ```python
-from sampleflux import collate, get_collate, register_collate
+from sampleflux import typed_collate
+from torch.utils.data import DataLoader
 
-batch = collate(list(flux))                   # dispatches on the detected kind
-@register_collate("yolo")                     # task aliases are additive
+batch = typed_collate(list(flux))            # a batched Sample: payloads stacked per field
+loader = DataLoader(flux, collate_fn=typed_collate)
+```
+
+Collation is a pluggable registry keyed by name, so a task can register its own convention additively:
+
+```python
+from sampleflux import register_collate, get_collate
+
+@register_collate("yolo")                    # task aliases are additive
 def yolo_collate(items): ...
 loader = DataLoader(flux, collate_fn=get_collate("yolo"))
 ```
 
-Defaults: `"sample"` (stacked input/target + list-form batched metadata — the `is_batched` convention), `"pair"` (`(stacked_inputs, stacked_targets)`), `"value"`, and the view forms `"input_meta"`/`"target_meta"`. Consumer collates (classification/segmentation/detection) register additively and keep their own conventions. The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path; the full rationale is recorded in [architecture.md](architecture.md#batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17).
+The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17).
 
 ## 1→N expanding ops (iterable-only pipelines)
 
@@ -90,12 +70,14 @@ An op may return **several** carriers — a windowing op splitting one capture i
 
 ```python
 from typing import Iterator
+from sampleflux import Sample, Transform, primary, with_data
 
 @configurable
-class SlidingWindowOp:
+class SlidingWindowOp(Transform):
     def __call__(self, sample: Sample) -> Iterator[Sample]:
-        for w in sliding_windows(sample.input, self.size, self.stride):
-            yield sample._replace(input=w)
+        key, item = primary(sample, "input")
+        for w in sliding_windows(item, self.size, self.stride):
+            yield sample.replace_field(key, with_data(item, w))
 ```
 
 Expansion is detected from the return annotation (`Iterator[...]` / `Iterable[...]` / `List[...]`; or the explicit `EXPANDS = True` marker) and flattened in every iteration route — sequential, spawn-parallel, and streamed — depth-first, so sibling order matches the nested-loop intuition. Each child continues through the remaining ops with its own (shallow-copied) Context; a child filtered to `None` just drops.

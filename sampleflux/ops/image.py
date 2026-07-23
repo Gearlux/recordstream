@@ -13,7 +13,7 @@ Domain-specific rendering stays in the consuming package: waivefront's
 op produces, and ``RenderSignalPlotOp`` builds IQ time/freq/constellation panels.
 Those need signal semantics; this op does not.
 
-PIL is a hard dependency here (already used by ``sampleflux.typespec``). Matplotlib
+PIL is a hard dependency here (used directly for the image rendering). Matplotlib
 is imported lazily inside :func:`_apply_colormap` — only non-``"gray"`` colormaps
 need it, so the pure-greyscale path stays matplotlib-free.
 """
@@ -599,7 +599,7 @@ class ConvertToImage(Transform):
     """Typed twin of :class:`ConvertToImageOp` — an array-bearing field → an ``Image`` item.
 
     The typed-bag counterpart of :class:`ConvertToImageOp`: instead of rendering
-    ``sample.input`` into a PIL image in place, it reads an array-bearing field from a
+    the primary input item into a PIL image in place, it reads an array-bearing field from a
     :class:`~sampleflux.Sample` and writes a fresh :class:`~sampleflux.Image` item
     (HWC ``uint8`` RGB) under ``output``, tagged with the ``input`` role (it is the
     pipeline's working image). Any other field passes through untouched.

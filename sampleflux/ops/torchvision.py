@@ -1,9 +1,9 @@
 """``TorchvisionTransformOp`` — run torchvision ``transforms.v2`` transforms as a SampleFlux op.
 
 v2 transforms draw their random parameters ONCE per call and apply them to every
-``tv_tensors`` carrier passed in, so a geometric augmentation moves ``sample.input`` AND
-(per the ``target`` mode) its segmentation mask / detection boxes consistently; metadata
-passes through untouched.
+``tv_tensors`` carrier passed in, so a geometric augmentation moves the primary input item
+AND (per the ``target`` mode) its segmentation mask / detection boxes consistently; the
+aux fields pass through untouched.
 
 Transforms are authored **Confluid-natively** as nested ``!class:`` nodes::
 
@@ -53,7 +53,7 @@ def _import_v2() -> Any:
 
 @configurable(category="op", group="augment", random=True)
 class TorchvisionTransformOp:
-    """Apply torchvision ``transforms.v2`` transforms to ``sample.input`` (and optionally the target).
+    """Apply torchvision ``transforms.v2`` transforms to the primary input item (and optionally the target).
 
     Pass EITHER ``transform`` (one v2 transform, or a prebuilt ``v2.Compose``) OR
     ``transforms`` (a list composed into a ``v2.Compose`` lazily) — never both. Entries
@@ -64,10 +64,10 @@ class TorchvisionTransformOp:
     Target modes (the ``target`` knob):
 
     * ``"none"`` — input-only augmentation; the sample's target passes through untouched.
-    * ``"mask"`` — ``sample.target`` is a segmentation mask (2-D array / tensor or PIL
+    * ``"mask"`` — the target-role item is a segmentation mask (2-D array / tensor or PIL
       ``L`` image), wrapped as ``tv_tensors.Mask`` so image and mask receive the SAME
       spatial transform.
-    * ``"boxes"`` — ``sample.target`` is the torchvision detection dict
+    * ``"boxes"`` — the target-role item is the torchvision detection dict
       ``{"boxes": [N,4] xyxy-pixel, "labels": [N]}`` (what
       :class:`~sampleflux.ops.target.CocoToTorchVisionDetectionOp` /
       :class:`~sampleflux.ops.target.MasksToDetectionBoxesOp` emit); boxes are wrapped as

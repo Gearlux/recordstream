@@ -1,7 +1,7 @@
-"""``FormulaOp`` — evaluate a math formula over ``sample.input``.
+"""``FormulaOp`` — evaluate a math formula over the primary input item.
 
 The op-form of a visual canvas *Math* node: a restricted Python expression over one
-named variable bound to the incoming ``sample.input`` (plus the stdlib ``math`` namespace
+named variable bound to the incoming primary input item (plus the stdlib ``math`` namespace
 and the scalar helpers ``abs``/``min``/``max``/``round``/``pow`` — no builtins, so
 ``__import__``/``open``/``exec`` are unavailable). Its main consumer is the ops-export's
 value-chain compilation: an on-canvas ``… → Extract → Math → widget`` wire becomes
@@ -25,11 +25,11 @@ _FORMULA_NAMESPACE.update({"abs": abs, "min": min, "max": max, "round": round, "
 
 @configurable(category="op", group="compose")
 class FormulaOp:
-    """Replace ``sample.input`` with ``formula`` evaluated over it.
+    """Replace the primary input item with ``formula`` evaluated over it.
 
     Args:
         formula: Expression over ``var`` (e.g. ``"a * 0.2"``); ``math.*`` + ``abs``/``min``/``max``/``round`` allowed.
-        var: Variable name the incoming ``sample.input`` binds to. Defaults to ``a``.
+        var: Variable name the incoming primary input item binds to. Defaults to ``a``.
     """
 
     def __init__(self, formula: str = "a", var: str = "a") -> None:

@@ -36,9 +36,10 @@ and **two divergent batched-metadata conventions** emerged — the list-form
 
 `sampleflux/collate.py` is a **pluggable registry of collate functions keyed by representation**:
 `register_collate(key)` / `get_collate(key)` / `collate(items, key=None)`, where an omitted key
-dispatches on the *detected* kind of the first item (`sampleflux.kinds.classify_carrier`).
-sampleflux registers the five kind defaults (`"sample"`, `"pair"`, `"value"`, `"input_meta"`,
-`"target_meta"`); consuming projects may register task aliases (`"yolo"`, `"segmentation"`, …)
+uses the default `"typed"` collate (`typed_collate`) — batching a list of typed-bag `Sample`s into
+one batched `Sample` (per-item type dispatch itself is the sibling kernel registry
+`sampleflux.bag.dispatch`, which walks each item's MRO). sampleflux registers the `"typed"`
+default; consuming projects may register task aliases (`"yolo"`, `"segmentation"`, …)
 **additively**. Re-registering a key deliberately overwrites (logged at debug) so a consumer can
 replace a default.
 
@@ -227,7 +228,7 @@ module to introspect every callable *defined in it* — registered or not.
   `resolve_callable(path)` back to the live object (module import, `.py`-file load, or an
   already-callable passthrough).
 - **Introspection** — `introspect_callable(fn)` → a JSON-serializable schema (path, name, doc,
-  per-parameter type/default/required, the declared `ACCEPTS`/`PRODUCES` typespec contract), and
+  per-parameter type/default/required), and
   `scan_module(module_or_py)` applying it to every callable *defined in* a module
   (`__module__`-filtered, so imports don't leak in).
 
@@ -335,13 +336,13 @@ both = Flux.joint([flux_a, flux_b])              # Flux(source=JointFlux([flux_a
 
 ---
 
-## The typed-bag model: a named bag of typed items (`sampleflux.bag`, PoC, 2026-07-21)
+## The typed-bag model: a named bag of typed items (`sampleflux.bag`, 2026-07-21)
 
 ### Context
 
-The classic carrier is `Sample(input, target, metadata)` — a fixed 3-tuple where `metadata` is one
-flat `dict` shared by the whole sample. Everything that is not literally the model input or target
-rides that dict by string key: segmentation masks, `[f0,f1,t0,t1]` region lists, window locators,
+Before the typed model, the carrier was a fixed `(input, target, metadata)` 3-tuple where `metadata`
+was one flat `dict` shared by the whole sample. Everything that is not literally the model input or
+target rode that dict by string key: segmentation masks, `[f0,f1,t0,t1]` region lists, window locators,
 `spectrogram_params`, power stats, `snr_db`, a signal's samplerate, an image's canvas size, a
 label's class names. Two structural costs follow. First, **metadata has no owner** — `samplerate`
 belongs to *the signal*, `canvas` to *the image*, but the flat dict severs that link. Second, **a
@@ -364,10 +365,10 @@ dispatches transforms on item TYPE via a kernel registry:
   pair hides the difference from kernels. sampleflux ships only MODALITY-NEUTRAL items; signal-domain
   items (`Signal`, `Spectrogram`) live in the domain package and register into the same registry (see
   "Consequences").
-- **`TypedSample` is a named bag; `input`/`target` are role TAGS, not positions.** A field carries a
+- **`Sample` is a named bag; `input`/`target` are role TAGS, not positions.** A field carries a
   role (`input`/`target`/`aux`/`pred`); `inputs()`/`targets()`/`aux()` read them at the
-  train/collate/sink boundary. A field changes role without moving keys. The sample is immutable
-  (copy-on-write), mirroring `Sample._replace`.
+  train/collate/sink boundary. A field changes role without moving keys. The sample is immutable —
+  every mutator returns a new sample (copy-on-write).
 - **Transforms sample params ONCE, then dispatch a kernel per item type** (the torchvision-v2
   `_KERNEL_REGISTRY` pattern, structurally the same registry idea as `sampleflux.collate`). Kernels
   are registered per `(transform, item type)` and resolved by MRO. Targeting is by type, with an
@@ -381,23 +382,23 @@ dispatches transforms on item TYPE via a kernel registry:
   transform with one `@Transform.kernel(NewType)` registration. This keeps consumer-dialect knowledge
   (how to recognise/adapt a library) OUT of the core and open for any user library.
 
-This is a **coexisting proof of concept**, not a replacement: it lives beside the classic engine and
-changes none of it. The existing "Functional Purity", "Sample Triplet", and "Stored Type Is Derived"
-mandates are scoped to the classic engine (see `AGENTS.md`), because the typed model deliberately
-introduces a `Transform` base and typed item classes.
+This is **THE sampleflux data model** — the one carrier every source, op, engine and sink handles.
+It deliberately introduces a `Transform` base and typed item classes; the "Functional Purity" mandate
+(see `AGENTS.md`) holds because that base is a thin type-dispatch shell and the per-type kernels stay
+plain callables.
 
 ### Consequences
 
 - **Cross-field consistency is free** — one sampled decision flips image + mask + boxes together,
-  the thing the flat-metadata model could not do.
-- **Names and types coexist**, so the "torchvision uses types / albumentations uses names" split is
-  resolved by one container: the key is the name, the item is the type.
-- **The subpackage is `bag`, not `typed`** — `sampleflux.typespec.typed` (the `@typed(...)` contract
-  decorator) is re-exported at the package root as `sampleflux.typed`, so a `sampleflux/typed/`
-  submodule would shadow it. `bag` is collision-free; `TypedSample` / dispatch / docstrings carry the
-  "typed" concept.
-- **Batching stays in `sampleflux.collate`** (transforms are per-sample); the classic model's
-  `list[dict]` batch-in-metadata form is not carried into the bag model.
+  the thing a flat-metadata triple could not do.
+- **Names and types work together**, so the "torchvision uses types / albumentations uses names"
+  split is resolved by one container: the key is the name, the item is the type.
+- **The subpackage is `bag`, an internal module home** — the whole typed surface is imported from
+  the package top level (`from sampleflux import Sample, ...`), so the module layout is never in a
+  consumer's import path and can move without touching consumers.
+- **Batching is `typed_collate`** — it returns a batched `Sample` (payloads stacked per field,
+  per-item attrs collected as lists, roles preserved); there is no `list[dict]` batch-in-metadata
+  form.
 - **Deliberately deferred** (see root `TASKS.md`): a torch-`Tensor`-subclass item base (torch
   payloads ride wrapper items for now), confluid-native item-type discovery, the generated
   `Tv*`/`Alb*` families in this namespace, FluxStudio typed side sockets, and the `decode` path.
@@ -405,11 +406,11 @@ introduces a `Transform` base and typed item classes.
 ### Example
 
 ```python
-from sampleflux import TypedSample, Image, Mask, Regions, Label, Pipeline
+from sampleflux import Sample, Image, Mask, Regions, Label, Pipeline
 from torchvision.transforms import v2
 import albumentations as A
 
-sample = TypedSample(
+sample = Sample(
     {"image": Image(rgb), "mask": Mask(seg), "regions": Regions(boxes, canvas=(H, W)), "class": Label("drone_x")},
     roles={"mask": "target", "regions": "target", "class": "target"},
 )
@@ -430,10 +431,9 @@ out = Pipeline([
   it is array-backed, subclass `NDArrayItem` and declare `_item_attrs`.
 - **A new per-type behaviour for an existing transform** — register a kernel
   (`@Transform.kernel(ItemType)`), no core edit.
-- **Do not name the `bag` subpackage `typed`** — it shadows `sampleflux.typed` (the `@typed`
-  decorator). The rename rationale is pinned here and in the module docstrings.
-- **Promoting this from PoC to the default model** is a workspace-wide decision that would re-scope
-  the classic-engine mandates and port every consumer — out of scope for the proof of concept.
+- **The typed surface is imported from the package top level** — `bag/*` is the internal module
+  home; never teach a `sampleflux.bag.*` import path, so the module layout can change without
+  touching consumers.
 
 ---
 
@@ -452,10 +452,10 @@ But a running detection/segmentation front-end needs a different shape: **read o
 field of a DIFFERENT type**. Turning a numeric array into a displayable image, thresholding an
 array into a boolean mask, and labelling that mask into a set of bin boxes are each a *type
 change* (`array → Image`, `array → Mask`, `Mask → Regions`), not an in-place per-type edit. No
-library provides them, and the legacy classic-engine ops that do (`ConvertToImageOp`,
-`ThresholdOp`, `ConnectedComponentsOp`) operate on the `Sample(input, target, metadata)` triple,
-which the typed world does not carry. Without typed equivalents a `TypedSample` pipeline could not
-reach `Regions` from a raw array — the critical path for typed detection was blocked.
+library provides them, and the earlier ops that did (`ConvertToImageOp`, `ThresholdOp`,
+`ConnectedComponentsOp`) operated on a flat `(input, target, metadata)` triple, which the typed
+model does not carry. Without typed equivalents a `Sample` pipeline could not reach `Regions` from a
+raw array — the critical path for typed detection was blocked.
 
 ### Decision
 
@@ -488,7 +488,7 @@ coordinate frame, so the tuple order is load-bearing, not incidental.
 
 ### Consequences
 
-- A `TypedSample` carrying a raw 2-D array runs `ConvertToImage → Threshold → ConnectedComponents`
+- A `Sample` carrying a raw 2-D array runs `ConvertToImage → Threshold → ConnectedComponents`
   end-to-end and arrives at a `Regions` field with no legacy `Sample` anywhere — the typed
   detection/segmentation front-end is unblocked.
 - Parity is free and provable: because each twin reuses the legacy math, a twin's output is
@@ -519,11 +519,11 @@ coordinate frame, so the tuple order is load-bearing, not incidental.
 ### Example
 
 ```python
-from sampleflux import TypedSample, Mask
+from sampleflux import Sample, Mask
 from sampleflux.ops.image import ConvertToImage
 from sampleflux.ops.numpy import Threshold, ConnectedComponents
 
-sample = TypedSample({"spec": Mask(db_spectrogram)})            # a raw 2-D array item
+sample = Sample({"spec": Mask(db_spectrogram)})            # a raw 2-D array item
 sample = ConvertToImage()(sample)                               # + Image field (role "input")
 sample = Threshold(field="spec", low_level=-30.0)(sample)       # + Mask field (role "aux")
 sample = ConnectedComponents(field="mask")(sample)              # + Regions field (role "aux")
@@ -549,8 +549,8 @@ sample["boxes"].boxes  # [(row_min, row_max, col_min, col_max), ...] — the pin
 
 The typed detection twins above reach `Regions`; a typed CLASSIFICATION front-end needs the other
 two shapes: turn the working image into the model's **input tensor**, and turn the class-name label
-into the encoded **target id**. The legacy ops that do this (`ToTensorOp`, `MetadataToTargetOp`,
-`EncodeTargetOp` / `DecodeTargetOp`) operate on the `Sample(input, target, metadata)` triple. Two
+into the encoded **target id**. The earlier ops that did this (`ToTensorOp`, `MetadataToTargetOp`,
+`EncodeTargetOp` / `DecodeTargetOp`) operated on a flat `(input, target, metadata)` triple. Two
 facts of the typed model shape the twins: (1) there is NO shared metadata dict — the label already
 rides a `Label` field that owns its metadata; (2) an array item is an `np.ndarray` SUBCLASS whose
 `__new__` runs `np.asarray(data)`, so **a field payload is coerced to numpy** — an `Image` cannot
@@ -571,7 +571,7 @@ detection twins), each reusing its legacy op VERBATIM on a shim `Sample` for byt
   new field tagged `input` instead). `typed_collate` stacks these payloads with `np.stack`; the
   numpy→tensor conversion is the collate / model boundary's job, exactly as for any numpy dataset. A
   Tensor-subclass item that would let a field carry a live tensor is the documented follow-up
-  (`bag/items.py` PoC note + root TASKS.md).
+  (`bag/items.py` note + root TASKS.md).
 - **`EncodeTarget` / `DecodeTarget`** (`ops/target.py`, `group="structure"`) resolve a `Label` field,
   map its `.value` through the config-pinned `mapping` by delegating to `EncodeTargetOp` /
   `DecodeTargetOp` (so the non-empty-mapping validation AND the shared `_lookup` are byte-identical),
@@ -585,11 +585,11 @@ detection twins), each reusing its legacy op VERBATIM on a shim `Sample` for byt
 
 ### Consequences
 
-- A `TypedSample` carrying an HWC `Image` (role input) + a name `Label` (role target) runs
+- A `Sample` carrying an HWC `Image` (role input) + a name `Label` (role target) runs
   `ToTensor → EncodeTarget` into a CHW-float input field + an int-id target field, with no legacy
   `Sample` anywhere — the typed classification front-end is unblocked.
 - The model-input payload is CHW-float **numpy**, not a live `torch.Tensor`; a consumer / trainer
-  tensorizes at the collate or forward boundary. This is a deliberate PoC limitation, not a bug —
+  tensorizes at the collate or forward boundary. This is a deliberate current limitation, not a bug —
   it disappears when the Tensor-subclass item lands.
 - The twins carry `category="op"` + the legacy `group`, so they are discoverable like the legacy ops
   (their modules — `sampleflux-ops-torch` / `sampleflux-ops-target` — are already entry-pointed; a
@@ -598,11 +598,11 @@ detection twins), each reusing its legacy op VERBATIM on a shim `Sample` for byt
 ### Example
 
 ```python
-from sampleflux import TypedSample, Image, Label
+from sampleflux import Sample, Image, Label
 from sampleflux.ops.torch import ToTensor
 from sampleflux.ops.target import EncodeTarget
 
-sample = TypedSample(
+sample = Sample(
     {"image": Image(hwc_uint8), "class": Label("cat")},
     roles={"image": "input", "class": "target"},
 )
@@ -613,7 +613,7 @@ sample = EncodeTarget(mapping={"cat": 0, "dog": 1}, field="class")(sample)  # cl
 ### What you may change (and where it's documented)
 
 - **The Tensor-subclass item follow-up** — once a field can carry a live tensor, `ToTensor` should
-  store it directly; update this record and the `bag/items.py` PoC note together.
+  store it directly; update this record and the `bag/items.py` note together.
 - **`ToTensor`'s replace-in-place default vs a new output field** — keep role preservation (in place)
   as the default; a new `output` field is tagged `input`.
 - **Do not modify the legacy ops or reimplement their math in a twin** — the twins delegate to the

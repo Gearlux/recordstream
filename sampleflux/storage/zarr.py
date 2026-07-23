@@ -112,8 +112,8 @@ class ZarrGroupSource(Storage, DataSource):
 
     Args:
         path: Path to the Zarr group written by ZarrGroupSink.
-        sample_key: Name of the per-sample array holding ``Sample.input``.
-        target_key: Name of the per-sample array holding ``Sample.target`` (absent when the sample had no target).
+        sample_key: Name of the per-sample array holding the primary input item's payload.
+        target_key: Name of the per-sample array holding the target-role item's payload (absent when no target).
     """
 
     def __init__(

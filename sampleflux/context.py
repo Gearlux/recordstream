@@ -7,11 +7,11 @@ list: branch snapshots (a cell holding a :class:`~sampleflux.sample.Sample`), ca
 ``Mix``) move data between the linear sample stream and these cells, which is what lets
 a plain sequential op list execute a fan-out/fan-in graph.
 
-Deliberately NOT ``sample.metadata``: metadata rides *inside* each sample and is the
-shared accumulating bus ops hand values to each other on. The Context is the *wiring*
-plane — engine-created, per sample, empty again by the end of a well-formed graph (every
-cell freed after its last read). Nothing here is ``@configurable``; a Context never
-appears in YAML.
+The context ops route graph data through these per-sample Context CELLS and never touch
+the sample's own fields — each typed item still owns its own metadata inside the sample.
+The Context is the *wiring* plane — engine-created, per sample, empty again by the end of
+a well-formed graph (every cell freed after its last read). Nothing here is
+``@configurable``; a Context never appears in YAML.
 
 The engine (``Flux`` — and ``FlowGraph``, which manages its env directly) creates one
 Context per source item and activates it around the op loop via a
@@ -35,8 +35,7 @@ class Context:
     """Named-cell store for one sample's trip through a graph-shaped pipeline.
 
     Cells are stored and returned **by reference** — copy semantics are the reading
-    op's decision (``Use`` deep-copies unless it drops the cell), mirroring the stash
-    family's copy-on-restore convention.
+    op's decision (``Use`` deep-copies unless it drops the cell).
     """
 
     __slots__ = ("_cells",)

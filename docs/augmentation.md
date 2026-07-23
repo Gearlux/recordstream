@@ -14,8 +14,8 @@ its own first-class op:
 All are ordinary sample-scoped ops (`__call__(sample)`): they chain in a `Flux` ops list,
 inside `TransformChain` / `RandomApply` / `Enable`, in Confluid YAML, and as individual
 nodes on a visual canvas (palette groups `augment`, `augment/albumentations`,
-`augment/torchvision`). One library draw applies jointly to `sample.input` and — per the
-`target` mode — its mask / boxes; metadata passes through untouched.
+`augment/torchvision`). One library draw applies jointly to the input-role field and — per the
+`target` mode — its mask / boxes; other fields pass through untouched.
 
 Torchvision requires the `vision` extra: `pip install "sampleflux[vision]"`
 (albumentations is a core dependency; without torchvision the `Tv*` family is simply
@@ -25,11 +25,11 @@ empty and everything else works).
 
 The `target` knob is a closed `Literal["none", "mask", "boxes"]` on every op above:
 
-- `"none"` (default) — input-only augmentation (color jitter, noise, blur); the sample's
-  target passes through untouched.
-- `"mask"` — `sample.target` is a segmentation mask (2-D array or PIL `L` image); image
+- `"none"` (default) — input-only augmentation (color jitter, noise, blur); the target-role
+  field passes through untouched.
+- `"mask"` — the target-role field is a segmentation mask (2-D array or PIL `L` image); image
   and mask receive the SAME spatial transform.
-- `"boxes"` — `sample.target` is the torchvision detection dict
+- `"boxes"` — the target-role field is the torchvision detection target
   `{"boxes": [N,4] xyxy-pixel, "labels": [N]}` — exactly what `CocoToTorchVisionDetectionOp`
   and `MasksToDetectionBoxesOp` emit — and boxes move with the image. The required
   albumentations `bbox_params` are added automatically when the op builds the Compose;

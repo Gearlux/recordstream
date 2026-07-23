@@ -12,7 +12,7 @@ from sampleflux import ProjectionField  # Literal["input", "target", "metadata"]
 # unrequested fields — e.g. an image dataset reads only the label column for a
 # target-only walk, never decoding an image.
 for sample in project(my_source, ("target",)):
-    ...                       # sample.input is None; sample.target populated
+    ...                       # only target-role fields are built; input-role fields are skipped
 
 labels = list(iter_targets(my_source))     # lazy
 n = num_classes(my_source)                 # max(class_id) + 1 — always walks

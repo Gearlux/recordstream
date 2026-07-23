@@ -99,7 +99,7 @@ class HDF5Source(Storage, DataSource):
 # category="sink": surfaced by visual editors as a sink node docking into a DatasetProcessor's sink slot.
 @configurable(category="sink")
 class HDF5Sink(Storage, DataSink):
-    """High-performance HDF5 data sink focused on Sample triplets."""
+    """High-performance HDF5 data sink focused on typed-bag ``Sample``s."""
 
     def __init__(
         self,

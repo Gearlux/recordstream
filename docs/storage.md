@@ -15,35 +15,37 @@ Flux.from_source(HDF5Source("input.h5")) \
 
 ## Sinks and their matching sources
 
-Every sink has a source that reads its layout back into `Sample` triplets:
+Every sink has a source that reads its layout back into typed `Sample` bags:
 
 | Backend | Sink | Source | Round-trips |
 |---|---|---|---|
-| HDF5 (sequential) | `HDF5Sink` | `HDF5Source` | input + target + metadata |
-| Zarr group (one group / sample) | `ZarrGroupSink` | `ZarrGroupSource` | input + target + metadata |
-| Zarr batch (one stacked array) | `ZarrBatchSink` | `ZarrBatchSource` | input only (uniform shape) |
-| Directory (one dir / sample) | `DirectorySink` | — | — |
+| HDF5 (sequential) | `HDF5Sink` | `HDF5Source` | all fields + roles |
+| Zarr group (one group / sample) | `ZarrGroupSink` | `ZarrGroupSource` | all fields + roles |
+| Zarr batch (one stacked array) | `ZarrBatchSink` | `ZarrBatchSource` | primary input field only (uniform shape) |
+| Directory (one dir / sample) | `DirectorySink` | `DirectorySource` | all fields + roles |
 
 ```python
 from sampleflux.storage.zarr import ZarrGroupSink, ZarrGroupSource
 
 Flux(samples).to_sink(ZarrGroupSink("ds.zarr", overwrite=True))
-for sample in ZarrGroupSource("ds.zarr"):   # input/target as before, metadata from .zattrs
+for sample in ZarrGroupSource("ds.zarr"):   # exact fields, roles and item attrs reconstructed
     ...
 ```
 
 > Domain-specific storage formats implement the same `DataSink`/`DataSource` protocols in their own package — e.g. the SigMF waveform-recording pair (`SigMFSink`/`SigMFSource`) lives in `waivefront.sigmf`, not here. The engine never couples to a specific format.
 
-## Array-valued metadata (e.g. segmentation masks)
+## Array-valued item attributes
 
-`HDF5Sink` stores scalar/string metadata as HDF5 **attributes**, but HDF5 caps attribute size — a large array (a segmentation mask, a per-sample weight map) put in `Sample.metadata` would overflow that limit. So **array-valued metadata (`np.ndarray` / `torch.Tensor`) is written as its own dataset** under a per-sample group `{prefix}_meta/<key>`, and `HDF5Source` merges it back into `Sample.metadata` on read. This is fully backward-compatible: files written before this layout (no `{prefix}_meta` group) read exactly as before.
+Each field is stored as its own group: the item's payload as a `data` dataset and its scalar attributes as HDF5 **attributes**. HDF5 caps attribute size, so any **array-valued attribute** (`np.ndarray` / `torch.Tensor`, e.g. a per-sample weight map) is written as its own sub-dataset under `attrs/` instead — a large array never overflows the attribute limit, and `HDF5Source` restores every attribute on read. A segmentation mask is not an attribute at all: it is a first-class `Mask` field with its own payload.
 
 ```python
-sample = Sample(input=data, target=label, metadata={"mask": mask_2d, "snr": 12.0})
+from sampleflux import Sample, Image, Mask, item_data
+
+sample = Sample({"image": Image(data), "mask": Mask(mask_2d)}, roles={"mask": "target"})
 Flux([sample]).to_sink(HDF5Sink("ds.h5", overwrite=True))
 loaded = next(iter(HDF5Source("ds.h5")))
-loaded.metadata["mask"]   # the full array, byte-exact (not a truncated repr)
-loaded.metadata["snr"]    # scalar, via attributes as before
+item_data(loaded["mask"])   # the full mask array, byte-exact (not a truncated repr)
+loaded.role_of("mask")      # "target" — roles round-trip too
 ```
 
 ## Queryable metadata (`sampleflux.storage.query`)

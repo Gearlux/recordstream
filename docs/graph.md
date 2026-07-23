@@ -41,7 +41,7 @@ flow2  = from_ops(ops)                                   # flat ops -> flow (lif
 
 ## Graph pipelines on a flat op list (Context ops)
 
-A branchy pipeline — fan-out, fan-in, a value computed on one branch feeding a parameter on another — runs on the **plain sequential `Flux` engine** via six *context ops* (`sampleflux.ops.context`). The engine creates one per-sample **`Context`** (a named-cell store, `sampleflux.context`) around each sample's trip through the op list; the context ops move data between the linear stream and those cells. Graph wiring never touches `sample.metadata` — the metadata bus stays byte-identical to a linear run.
+A branchy pipeline — fan-out, fan-in, a value computed on one branch feeding a parameter on another — runs on the **plain sequential `Flux` engine** via six *context ops* (`sampleflux.ops.context`). The engine creates one per-sample **`Context`** (a named-cell store, `sampleflux.context`) around each sample's trip through the op list; the context ops move data between the linear stream and those cells. Graph wiring never mutates the sample's fields — a linear run's fields stay byte-identical whether or not context threading exists.
 
 | Op | Semantics |
 |---|---|
@@ -74,9 +74,9 @@ with activate(Context()):
         sample = op(sample)
 ```
 
-Cells hold whole `Sample`s (from `Save`) or raw values (from `Capture`); `Apply` reads a Sample cell's `input`, `Mix` reads each cell's corresponding field. Copy discipline mirrors the stash family: stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-sample store instead of `sample.metadata` (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#the-per-sample-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17).
+Cells hold whole `Sample`s (from `Save`) or raw values (from `Capture`); `Apply` reads a Sample cell's primary input item, `Mix` reads each cell's corresponding field. Copy discipline: cells are stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-sample store instead of extra fields on the sample (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#the-per-sample-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17).
 
-> **What about the stash family?** `sampleflux.ops.stash` (`StashInputOp`/`UnstashInputOp`/`StashTargetOp`/`UnstashTargetOp`) snapshots a field into `sample.metadata` instead of a cell. It is NOT a wiring mechanism — the context ops are — and remains only for the two jobs cells cannot do: carrying a snapshot **across a `Parallel` boundary** (metadata rides the sample through the stream split; cells deliberately raise there) and deliberately **persisting a snapshot into a sink**. Everything else — fan-out, fan-in, cross-branch values — uses the context ops above.
+> **Carrying a snapshot the context ops cannot?** Context cells are the wiring plane, but they deliberately raise across a `Parallel` boundary and never persist into a sink. For the two jobs cells cannot do — carrying a snapshot **across a `Parallel` boundary** and deliberately **persisting a snapshot into a sink** — copy the field into its own `aux`-role field with the structure ops (`CopyField` + `SetRole`, `sampleflux.ops.structure`); the snapshot then rides the sample as a real field. Everything else — fan-out, fan-in, cross-branch values — uses the context ops above.
 
 ## Reattach an ops-only YAML (`Flux.from_ops_yaml`)
 

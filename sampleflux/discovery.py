@@ -10,10 +10,10 @@ wire pipeline pieces without any hand-written tool definitions (the workspace's
   :func:`resolve_callable` imports it back. This is how a pipeline step is
   referenced in a Confluid manifest and resurrected later for reproducibility.
 * **Discovery** (callable -> JSON schema): :func:`introspect_callable` reflects
-  a single callable into a schema (signature + docstring + the ``ACCEPTS`` /
-  ``PRODUCES`` typespec contract), and :func:`scan_module` does the same for
-  every callable *defined in* a module — a visual editor's node bridge reads
-  these to auto-generate canvas nodes and their property panels.
+  a single callable into a schema (signature + docstring), and
+  :func:`scan_module` does the same for every callable *defined in* a module — a
+  visual editor's node bridge reads these to auto-generate canvas nodes and
+  their property panels.
 
 The serialization half doubles as the workspace's generic string-callable hook
 pattern (:class:`~sampleflux.core.WrappedOp` stores its ``f`` this way; consuming
@@ -30,7 +30,7 @@ import inspect
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union, cast
+from typing import Any, Callable, Dict, List, Union, cast
 
 
 def get_callable_path(func: Callable) -> str:
@@ -113,8 +113,7 @@ def introspect_callable(func: Callable) -> Dict[str, Any]:
     Build a JSON-serializable schema for a callable by reflecting over its
     signature: ``path``, ``name``, ``doc``, per-parameter info (``name`` /
     ``type`` / ``default`` / ``required``, skipping ``self`` / ``cls`` /
-    ``*args`` / ``**kwargs``), plus the declared ``ACCEPTS`` / ``PRODUCES``
-    typespec contract when present.
+    ``*args`` / ``**kwargs``).
 
     Use: a visual editor reads this to render a node and its property-panel widgets.
     """
@@ -141,16 +140,7 @@ def introspect_callable(func: Callable) -> Dict[str, Any]:
         "name": getattr(func, "__name__", str(func)),
         "doc": func.__doc__.strip() if func.__doc__ else "",
         "parameters": params,
-        "accepts": _spec_dict(getattr(func, "ACCEPTS", None)),
-        "produces": _spec_dict(getattr(func, "PRODUCES", None)),
     }
-
-
-def _spec_dict(spec: Any) -> Optional[Dict[str, Any]]:
-    """JSON-serialize a declared ``ACCEPTS`` / ``PRODUCES`` (a :class:`~sampleflux.typespec.SampleType`),
-    or ``None`` when undeclared. Duck-typed so ``discovery`` needn't import ``typespec``."""
-    to_dict = getattr(spec, "to_dict", None)
-    return cast(Dict[str, Any], to_dict()) if callable(to_dict) else None
 
 
 def scan_module(path_or_name: Union[str, Path]) -> List[Dict[str, Any]]:
