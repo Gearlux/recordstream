@@ -23,7 +23,7 @@ class SampleSinkOp:
 
     Sinks (``JsonPerWindowSink``, ``JsonSink``, ``HDF5Sink`` …) implement the
     ``open()`` / ``write(sample)`` / ``close()`` protocol and are normally
-    attached to a :class:`marainer.processing.DatasetProcessor` as the
+    attached to a :class:`sampleflux.processing.DatasetProcessor` as the
     flux's terminal sink. This adapter lets the same sinks slot into any
     Sample-based op chain — notably the ``ops`` list of
     :class:`waivefront.sinks.SigMFPredictionsSink`, where the model's

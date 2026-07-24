@@ -47,9 +47,9 @@ class Enable:
 
     .. code-block:: bash
 
-        marainer process pipeline.yaml --visualize true
-        marainer process pipeline.yaml --visualize+        # polarity shorthand → True
-        marainer process pipeline.yaml --visualize-        # polarity shorthand → False
+        sampleflux run pipeline.yaml --visualize true
+        sampleflux run pipeline.yaml --visualize+        # polarity shorthand → True
+        sampleflux run pipeline.yaml --visualize-        # polarity shorthand → False
 
     Inner ops stay deferred (not materialized) until the wrapper actually
     fires for the first time, so guarding expensive-to-construct ops with
@@ -78,10 +78,10 @@ class Enable:
     .. code-block:: bash
 
         # Targeted — only the overlay chain fires.
-        marainer process pipeline.yaml --overlay.visualize true
+        sampleflux run pipeline.yaml --overlay.visualize true
 
         # Broadcast — every Fluid with a `visualize` kwarg flips.
-        marainer process pipeline.yaml --visualize true
+        sampleflux run pipeline.yaml --visualize true
 
     ``name`` is a plain string on the instance; Confluid's post-construction
     paradigm setattr's it automatically from YAML with no ctor change.
