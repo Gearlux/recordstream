@@ -452,7 +452,7 @@ But a running detection/segmentation front-end needs a different shape: **read o
 field of a DIFFERENT type**. Turning a numeric array into a displayable image, thresholding an
 array into a boolean mask, and labelling that mask into a set of bin boxes are each a *type
 change* (`array → Image`, `array → Mask`, `Mask → Regions`), not an in-place per-type edit. No
-library provides them, and the earlier ops that did (`ConvertToImageOp`, `ThresholdOp`,
+library provides them, and the earlier ops that did (`ConvertToImage`, `ThresholdOp`,
 `ConnectedComponentsOp`) operated on a flat `(input, target, metadata)` triple, which the typed
 model does not carry. Without typed equivalents a `Sample` pipeline could not reach `Regions` from a
 raw array — the critical path for typed detection was blocked.
@@ -549,7 +549,7 @@ sample["boxes"].boxes  # [(row_min, row_max, col_min, col_max), ...] — the pin
 
 The typed detection twins above reach `Regions`; a typed CLASSIFICATION front-end needs the other
 two shapes: turn the working image into the model's **input tensor**, and turn the class-name label
-into the encoded **target id**. The earlier ops that did this (`ToTensorOp`, `MetadataToTargetOp`,
+into the encoded **target id**. The earlier ops that did this (`ToTensor`, `MetadataToTargetOp`,
 `EncodeTargetOp` / `DecodeTargetOp`) operated on a flat `(input, target, metadata)` triple. Two
 facts of the typed model shape the twins: (1) there is NO shared metadata dict — the label already
 rides a `Label` field that owns its metadata; (2) an array item is an `np.ndarray` SUBCLASS whose
@@ -564,9 +564,9 @@ Add native typed twins subclassing `Transform` and overriding `__call__` (the sa
 detection twins), each reusing its legacy op VERBATIM on a shim `Sample` for byte-parity:
 
 - **`ToTensor`** (`ops/torch.py`, `group="torch"`) resolves an array-bearing field (explicit `field`
-  or the first array/PIL item), runs `ToTensorOp` (HWC→CHW + `normalize`), and writes an `Image`
+  or the first array/PIL item), runs `ToTensor` (HWC→CHW + `normalize`), and writes an `Image`
   with `layout="CHW"`. Because `NDArrayItem` coerces the payload, the stored value is a CHW `float32`
-  **numpy** array whose values equal `ToTensorOp(...).input.numpy()` — NOT a live tensor. By default
+  **numpy** array whose values equal `ToTensor(...).input.numpy()` — NOT a live tensor. By default
   it REPLACES the source field in place so the field's `input` role is preserved (`output` writes a
   new field tagged `input` instead). `typed_collate` stacks these payloads with `np.stack`; the
   numpy→tensor conversion is the collate / model boundary's job, exactly as for any numpy dataset. A

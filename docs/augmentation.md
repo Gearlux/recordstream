@@ -102,9 +102,9 @@ The two libraries disagree about layout, and the ops keep each library's native
 convention instead of hiding it:
 
 - **albumentations** (`AlbumentationsOp`, `Alb*`) consumes numpy **HWC** (PIL converts on
-  entry) and emits numpy HWC — put it BEFORE `ToTensorOp` in the chain.
+  entry) and emits numpy HWC — put it BEFORE `ToTensor` in the chain.
 - **torchvision** (`TorchvisionTransformOp`, `Tv*`) emits **CHW torch tensors** (numpy
-  HWC converts on entry, PIL passes through as PIL) — no `ToTensorOp` needed after it.
+  HWC converts on entry, PIL passes through as PIL) — no `ToTensor` needed after it.
 
 Don't chain one library's output straight into the other without accounting for this.
 

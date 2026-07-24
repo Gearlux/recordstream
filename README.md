@@ -47,7 +47,7 @@ for sample in flux:
 | [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing |
 | [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources, array-valued metadata, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](docs/projection.md) | Field projection (`SupportsProjection`), lazy target walks, `num_classes`, the fittable `LabelMap` |
-| [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImageOp`, `NormalizeToUint8Op`), array introspection helpers |
+| [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImage`, `NormalizeToUint8Op`), array introspection helpers |
 | [docs/configure.md](docs/configure.md) | Per-sample op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
 | [docs/augmentation.md](docs/augmentation.md) | Augmentation via albumentations / torchvision `transforms.v2` — joint input+target (mask/boxes) adapters, the generated `Alb*`/`Tv*` per-transform ops, seeding, Confluid-native YAML |
 | [docs/typed-model.md](docs/typed-model.md) | The typed-bag data model: a `Sample` is a named bag of typed items (each owning its metadata), type-dispatched transforms, torchvision/albumentations adapters, custom item types |

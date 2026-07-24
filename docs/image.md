@@ -3,10 +3,10 @@
 The single, modality-agnostic "any value → image" layer — generic so every consuming project (spectrogram previews, dataset browsers, GUI viewers) reuses one implementation. Domain-specific rendering (overlays, signal plots) stays in the consuming package.
 
 ```python
-from sampleflux.ops.image import ConvertToImageOp, value_to_image
+from sampleflux.ops.image import ConvertToImage, value_to_image
 
 # Op: the sample's primary input item (2-D map / CHW tensor / PIL / bool mask) -> an Image field.
-op = ConvertToImageOp(
+op = ConvertToImage(
     colormap="viridis",   # closed `Colormap` Literal -> enumerable in GUIs / schemas
     width=1024, height=512,  # exact resize when both > 0; else bound longest side by max_size
     flip_vertical=True,      # e.g. a spectrogram stores row 0 = f_min but display wants f_max on top
