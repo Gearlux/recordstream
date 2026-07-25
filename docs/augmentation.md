@@ -1,129 +1,120 @@
-# Augmentation — well-known libraries as SampleFlux ops
+# Augmentation — well-known libraries run AS-IS
 
-SampleFlux does not reimplement augmentations. Two adapter ops wrap the established
-libraries — and a **generated op family** turns every individual library transform into
-its own first-class op:
-
-| Surface | What it is | Example |
-|---|---|---|
-| `sampleflux.ops.albumentations.AlbumentationsOp` | Adapter running one/many [albumentations](https://albumentations.ai) transforms | `AlbumentationsOp(transforms=[...], target="mask", seed=0)` |
-| `sampleflux.ops.torchvision.TorchvisionTransformOp` | Adapter running one/many torchvision `transforms.v2` transforms | `TorchvisionTransformOp(transforms=[...], target="mask")` |
-| `sampleflux.ops.albumentations_transforms` | **Auto-generated**: one `Alb<Name>` op per albumentations transform (~115) | `AlbHorizontalFlip(p=0.5, target="mask")` |
-| `sampleflux.ops.torchvision_transforms` | **Auto-generated**: one `Tv<Name>` op per v2 transform (~55) | `TvRandomHorizontalFlip(p=0.5, target="mask")` |
-
-All are ordinary sample-scoped ops (`__call__(sample)`): they chain in a `Flux` ops list,
-inside `TransformChain` / `RandomApply` / `Enable`, in Confluid YAML, and as individual
-nodes on a visual canvas (palette groups `augment`, `augment/albumentations`,
-`augment/torchvision`). One library draw applies jointly to the input-role field and — per the
-`target` mode — its mask / boxes; other fields pass through untouched.
-
-Torchvision requires the `vision` extra: `pip install "sampleflux[vision]"`
-(albumentations is a core dependency; without torchvision the `Tv*` family is simply
-empty and everything else works).
-
-## Target modes
-
-The `target` knob is a closed `Literal["none", "mask", "boxes"]` on every op above:
-
-- `"none"` (default) — input-only augmentation (color jitter, noise, blur); the target-role
-  field passes through untouched.
-- `"mask"` — the target-role field is a segmentation mask (2-D array or PIL `L` image); image
-  and mask receive the SAME spatial transform.
-- `"boxes"` — the target-role field is the torchvision detection target
-  `{"boxes": [N,4] xyxy-pixel, "labels": [N]}` — exactly what `CocoToTorchVisionDetectionOp`
-  and `MasksToDetectionBoxesOp` emit — and boxes move with the image. The required
-  albumentations `bbox_params` are added automatically when the op builds the Compose;
-  only a prebuilt `A.Compose` must carry its own.
+SampleFlux does not reimplement augmentations, and it does not wrap them either. A bare
+[albumentations](https://albumentations.ai) transform or a bare torchvision `transforms.v2`
+transform drops **as-is** into any ops list — `Flux(ops=[...])`, a `Pipeline`, a `flow:` step,
+inside `RandomApply` / `Enable` — and the engine's op-family dispatch
+(`sampleflux.core._apply_op`) invokes it the way its own library expects. There are no adapter
+classes and no generated per-transform op families.
 
 ```python
 import albumentations as A
-from sampleflux import Flux
-from sampleflux.ops.albumentations import AlbumentationsOp
-from sampleflux.ops.albumentations_transforms import AlbRandomBrightnessContrast
+from torchvision.transforms import v2
+from sampleflux import Flux, Pipeline
 
-flux = Flux(source=samples, ops=[
-    AlbumentationsOp(  # several transforms, one op
-        transforms=[A.HorizontalFlip(p=0.5), A.Affine(translate_percent=0.1, p=1.0)],
-        target="mask", seed=0,
-    ),
-    AlbRandomBrightnessContrast(p=0.5),  # or one generated op per transform
+flux = Flux(source=records, ops=[
+    A.HorizontalFlip(p=0.5),          # bare albumentations
+    A.GaussNoise(p=1.0),              # bare albumentations
+    my_native_op,                     # native sampleflux op — same list
 ])
+
+Pipeline([v2.ToImage(), v2.RandomCrop(8)])(record)   # bare torchvision v2
 ```
 
-## YAML — Confluid-native, both directions
+Torchvision is optional (`pip install "sampleflux[vision]"`); albumentations is a core
+dependency. The family check is by MRO module name — neither library is imported until you
+actually put one of its transforms in a pipeline.
 
-Transforms are ordinary nested `!class:` nodes (dotted paths or registered short names) —
-no library-specific serialization formats. `confluid.dump` round-trips both forms.
+## How each family is invoked
+
+- **albumentations** dispatches by KWARG NAME: the op receives exactly its own target keys
+  present in the record — `image` / `mask` / `masks` / `bboxes` / `keypoints` / `labels` — and
+  nothing else, so extra record entries (scalars, domain items) never reach a library that would
+  reject them. One call = **one joint draw** across those keys: image, mask and boxes move with
+  the same decision. Array outputs are re-wrapped in the incoming value's item type, so an
+  `Image` / `Mask` keeps its type and metadata through the library. A record with none of the
+  known keys passes through untouched (logged at debug).
+- **torchvision `transforms.v2`** natively walks dicts: the op is called on the record as-is,
+  samples its parameters once, transforms tensor / tv_tensor / PIL leaves and passes everything
+  else (labels, scalars) through.
+- **everything else** is a native/wiring op `record -> Optional[Record]` (`None` drops the
+  record).
+
+## The key vocabulary — and routing into it
+
+Key names carry meaning: albumentations sees only its own vocabulary, so a value augments only if
+it rides one of those keys. If your pipeline produced the value under another name, route it with
+`RenameField` (`sampleflux.ops.structure`) before the library op:
 
 ```yaml
-# Adapter with a transforms list (dotted library paths):
-- !class:sampleflux.ops.albumentations.AlbumentationsOp
-  target: mask
-  seed: 0
-  transforms:
-    - !class:albumentations.HorizontalFlip
-      p: 0.5
-    - !class:albumentations.Affine
-      translate_percent: 0.1
-
-# Generated per-transform ops (registered short names):
-- !class:AlbHorizontalFlip
-  p: 0.5
-  target: mask
-- !class:TvRandomHorizontalFlip
-  p: 0.5
-  target: mask
+ops:
+  - !class:sampleflux.ops.structure.RenameField {src: spec_view, dst: image}
+  - !class:albumentations.GaussNoise
+    p: 1.0
 ```
 
-## The generated op families
+## Boxes: use the library's own Compose
 
-`sampleflux.ops._augment_bridge` walks each library's public transform classes at import
-time and generates one op per transform (the waivefront-helios auto-bridge pattern): a
-subclass of the adapter whose constructor mirrors the transform's own parameters (plus
-`target` / `seed`), with a synthesized signature and `Args:` docstring so form-specs,
-MCP schemas, and canvas widgets see the real parameters.
+Box-carrying augmentation is albumentations' `Compose` job — drop a prebuilt `A.Compose` with its
+own `bbox_params` into the ops list (the record supplies `bboxes` + `labels` under exactly those
+keys):
 
-- The `Alb` / `Tv` name prefixes are MANDATORY: the confluid registry is flat and
-  name-keyed, and the two libraries share many bare names (`ColorJitter`, `Normalize`,
-  `Resize`, …).
-- Zero-arg construction always works; a transform's required parameter (e.g.
-  `AlbRandomCrop.height`) surfaces lazily as the library's own missing-argument error on
-  first call.
-- Composition/container transforms (`Compose`, `OneOf`, v2 `RandomApply`, …) are NOT
-  generated — chaining ops is native SampleFlux (`ops:` lists, `TransformChain`,
-  `RandomApply`).
-- A generated op wired into an adapter's `transforms` list unwraps to its inner library
-  transform (`raw_transform`), so canvas graphs can feed transform nodes into one
-  Compose-style adapter node too.
+```python
+import albumentations as A
+
+flip = A.Compose(
+    [A.HorizontalFlip(p=1.0)],
+    bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+)
+out = Pipeline([flip])(record)      # image + mask + bboxes flipped together, one draw
+```
+
+Format handling (`pascal_voc` / `coco` / `yolo` / `albumentations`) is `BboxParams`' knob — the
+engine adds nothing on top. The detection-target ops (`CocoToTorchVisionDetection` /
+`MasksToDetectionBoxes`) produce a `Regions` item for the training boundary; the plain
+`bboxes`/`labels` list keys are the augmentation-time form the library consumes.
+
+## YAML — bare library transforms are ordinary `!class:` nodes
+
+No library-specific serialization format — a transform is a Confluid `!class:` node like any op,
+in mapping form or call form. `Flux` flows deferred markers at route entry, and composing ops
+(`Pipeline` / `Enable` / `RandomApply`) flow theirs lazily:
+
+```yaml
+ops:
+  - !class:albumentations.HorizontalFlip
+    p: 0.5
+  - !class:albumentations.GaussNoise {p: 1.0}
+  - !class:sampleflux.ops.numpy.Threshold
+    low_level: 0.5
+```
 
 ## Layout contract (the main footgun)
 
-The two libraries disagree about layout, and the ops keep each library's native
-convention instead of hiding it:
+The two libraries disagree about layout, and the engine keeps each library's native convention
+instead of hiding it — **conversions are always explicit library transforms, never silent**:
 
-- **albumentations** (`AlbumentationsOp`, `Alb*`) consumes numpy **HWC** (PIL converts on
-  entry) and emits numpy HWC — put it BEFORE `ToTensor` in the chain.
-- **torchvision** (`TorchvisionTransformOp`, `Tv*`) emits **CHW torch tensors** (numpy
-  HWC converts on entry, PIL passes through as PIL) — no `ToTensor` needed after it.
+- **albumentations** consumes and emits numpy **HWC** — run it while your values are still numpy
+  arrays (an `Image`/`Mask` is an ndarray subclass, so it feeds straight in).
+- **torchvision v2** wants **CHW tensors** — put the library's own `v2.ToImage()` (numpy HWC →
+  CHW tv_tensor) in the list first, then any v2 transform; exactly like a plain torchvision
+  pipeline.
 
-Don't chain one library's output straight into the other without accounting for this.
+Don't chain one library's output straight into the other without an explicit conversion step.
 
 ## Randomness & seeding
 
-All augmentation ops carry `random=True` (the confluid stochastic mark). Stochasticity
-lives where each library puts it:
+Stochasticity lives where each library puts it — the engine adds no seed plumbing:
 
-- albumentations: the `seed` knob (maps onto `A.Compose(seed=N)`); a prebuilt
-  `A.Compose` carries its own seed instead.
+- albumentations: `A.Compose(seed=N)` on a prebuilt Compose (individual transforms keep their own
+  `p`).
 - torchvision v2: the global torch RNG — `torch.manual_seed(N)`.
-- per-sample gating: wrap in `RandomApply(op=..., probability=..., random_state=N)`
-  (each albumentations transform also carries its own `p`).
+- per-record gating of any op (native or library): `RandomApply(op=..., probability=...,
+  random_state=N)`.
 
-## Examples
+## Example
 
-- [`examples/augmentation_ops.py`](../examples/augmentation_ops.py) — the tour: all
-  three target modes, cross-library parity, boxes mirroring, target-side encoding, the
-  generated op families, gated composition, and the Confluid-native YAML round-trip.
-- [`examples/augmentation_training.py`](../examples/augmentation_training.py) — end to
-  end: synthetic images+masks → joint geometric + gated photometric augmentation →
-  `DataLoader` (registry collate) → a tiny CNN trained for 3 epochs with improving loss.
+[`examples/record_pipeline.py`](../examples/record_pipeline.py) — the tour: a bare
+`A.Compose` with `bbox_params` + `A.GaussNoise` + a native type-dispatched op in ONE `Pipeline`
+(image/mask/bboxes moved jointly, types preserved), `field=` pinning, and torchvision v2 as-is
+after an explicit `v2.ToImage()`.

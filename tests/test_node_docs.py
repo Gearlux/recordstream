@@ -1,9 +1,9 @@
 """Guard: every node-facing sampleflux Source/Op documents all its constructor params.
 
-These classes surface in FluxStudio (as widget tooltips) and navigaitor (as
-pydantic ``Field(description=...)`` in the form-spec) purely from their docstring
-``Args:`` block — see ``confluid.parse_param_docs``. A param that loses its doc
-silently loses its tooltip/description, so this pins the coverage.
+These classes surface in visual editors (as widget tooltips) and MCP form-specs (as
+pydantic ``Field(description=...)``) purely from their docstring ``Args:`` block — see
+``confluid.parse_param_docs``. A param that loses its doc silently loses its
+tooltip/description, so this pins the coverage.
 """
 
 import inspect
@@ -12,12 +12,18 @@ from typing import List
 import pytest
 from confluid import parse_param_docs  # type: ignore[import-not-found]
 
+from sampleflux import Pipeline, Transform
 from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from sampleflux.ops.albumentations import AlbumentationsOp
 from sampleflux.ops.configure import ConfigureOp
+from sampleflux.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
+from sampleflux.ops.debug import PrintSampleOp
+from sampleflux.ops.enable import Enable
+from sampleflux.ops.formula import FormulaOp
 from sampleflux.ops.image import ConvertToImage
 from sampleflux.ops.numpy import ConnectedComponents, Threshold
-from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields, SetRole
+from sampleflux.ops.parallel import Parallel
+from sampleflux.ops.random_apply import RandomApply
+from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
 from sampleflux.ops.target import (
     CocoToTorchVisionDetection,
     DecodeTarget,
@@ -26,8 +32,6 @@ from sampleflux.ops.target import (
     MetadataToTarget,
 )
 from sampleflux.ops.torch import ToTensor
-from sampleflux.ops.torchvision import TorchvisionTransformOp
-from sampleflux.ops.transform_chain import TransformChain
 from sampleflux.sources import HuggingFaceSource
 
 _NODE_CLASSES = [
@@ -36,6 +40,8 @@ _NODE_CLASSES = [
     JointFlux,
     FilterOp,
     WrappedOp,
+    Transform,
+    Pipeline,
     Threshold,
     ConnectedComponents,
     ConvertToImage,
@@ -45,15 +51,22 @@ _NODE_CLASSES = [
     DecodeTarget,
     CocoToTorchVisionDetection,
     MasksToDetectionBoxes,
-    SetRole,
     RenameField,
     DropField,
     CopyField,
     SelectFields,
+    Save,
+    Use,
+    Drop,
+    Apply,
+    Capture,
+    MergeFields,
     ConfigureOp,
-    TransformChain,
-    AlbumentationsOp,
-    TorchvisionTransformOp,
+    FormulaOp,
+    Enable,
+    Parallel,
+    RandomApply,
+    PrintSampleOp,
 ]
 
 

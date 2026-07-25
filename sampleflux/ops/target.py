@@ -1,4 +1,4 @@
-"""Typed-bag target-shaping transforms.
+"""Target-shaping transforms over plain-dict records.
 
 * :class:`MetadataToTarget` promotes a field / attr value into a target ``Label``.
 * :class:`EncodeTarget` / :class:`DecodeTarget` map a class-name ``Label`` to a class-id
@@ -20,9 +20,8 @@ from typing import Any, Dict, Literal, Optional
 import numpy as np
 from confluid import configurable
 
-from sampleflux.bag.items import Label, Mask, Regions, item_data
-from sampleflux.bag.sample import Sample
-from sampleflux.bag.transform import Transform
+from sampleflux.items import Label, Mask, Record, Regions, item_data
+from sampleflux.transform import Transform
 
 #: COCO / HuggingFace bounding-box layouts (all in absolute pixels). Closed set so a typo
 #: fails at the call site and UIs / form-specs enumerate the choices.
@@ -143,16 +142,16 @@ class MetadataToTarget(Transform):
     Reads a value from a SOURCE field (``field``; blank picks the first ``Label``, else the
     first field) — either the field's natural value (a ``Label``'s ``.value``, otherwise the
     item's array payload) or, when ``key`` is set, the named ATTRIBUTE of the source item —
-    and writes a fresh :class:`~sampleflux.Label` under ``output`` tagged ``target``.
+    and writes a fresh :class:`~sampleflux.Label` under ``output``.
 
-    In a typical typed classification pipeline the source emits the label directly as a
-    ``Label`` field already tagged ``target``, so this op is usually a NO-OP-ish re-home; it
+    In a typical classification pipeline the source emits the label directly as a
+    ``Label`` field, so this op is usually a NO-OP-ish re-home; it
     exists for the case where a label rode as another item's attribute (``key=``).
 
     Args:
         field: Source field to read; blank (default) picks the first ``Label`` field, else the first field.
         key: Optional attribute name to read off the source item; blank (default) reads the item's natural value.
-        output: Field the target ``Label`` is written to (added if new); its role is set to ``target``.
+        output: Key the target ``Label`` is written to (added if new).
     """
 
     handles = (Label,)
@@ -165,23 +164,21 @@ class MetadataToTarget(Transform):
         self.key = str(key)
         self.output = str(output)
 
-    def _find_source(self, sample: Sample) -> str:
+    def _find_source(self, record: Record) -> str:
         """Resolve the KEY of the source field (``self.field``, else first ``Label``, else first field)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(
-                    f"MetadataToTarget: field {self.field!r} not in sample (fields: {list(sample.keys())})"
-                )
+            if self.field not in record:
+                raise ValueError(f"MetadataToTarget: field {self.field!r} not in record (keys: {list(record)})")
             return self.field
-        for key, _item in sample.items_of_type(Label):
+        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
             return key
-        for key in sample.keys():
+        for key in record:
             return key
-        raise ValueError("MetadataToTarget: sample is empty — no source field to read")
+        raise ValueError("MetadataToTarget: record is empty — no source field to read")
 
-    def __call__(self, sample: Sample) -> Sample:
-        key = self._find_source(sample)
-        item = sample[key]
+    def __call__(self, record: Record) -> Record:
+        key = self._find_source(record)
+        item = record[key]
         if self.key:
             if not hasattr(item, self.key):
                 raise AttributeError(
@@ -192,19 +189,18 @@ class MetadataToTarget(Transform):
             value = item.value
         else:
             value = item_data(item)
-        out = sample.replace_field(self.output, Label(value))
-        return out.set_role(self.output, "target")
+        return {**record, self.output: Label(value)}
 
 
 @configurable(category="op", group="structure")
 class EncodeTarget(Transform):
-    """A class-NAME ``Label`` → a class-ID ``Label`` (role ``target``).
+    """A class-NAME ``Label`` → a class-ID ``Label``.
 
     Reads a :class:`~sampleflux.Label` field (``field``; blank picks the first ``Label``)
     whose ``.value`` is a raw class name and maps it to its class id through the config-pinned
     ``mapping`` — the declarative ``LabelEncoder`` analogue. The result is a new
     :class:`~sampleflux.Label` (carrying the source label's ``classes`` vocabulary) written
-    under ``output`` — blank (default) replaces the source field in place — tagged ``target``.
+    under ``output`` — blank (default) replaces the source field in place.
 
     Args:
         mapping: Lookup from raw label name → class id, e.g. ``{"DJI AVATA2": 2, ...}``. Must be non-empty.
@@ -212,8 +208,7 @@ class EncodeTarget(Transform):
             ``True``, substitute ``default``.
         default: Value written for an unknown label when ``ignore_unknown=True`` (default ``0``).
         field: ``Label`` field to encode; blank (default) picks the first ``Label`` field.
-        output: Field the encoded ``Label`` is written to; blank (default) replaces the source field
-            in place. Its role is set to ``target``.
+        output: Key the encoded ``Label`` is written to; blank (default) replaces the source field in place.
     """
 
     handles = (Label,)
@@ -236,28 +231,27 @@ class EncodeTarget(Transform):
         self.field = str(field)
         self.output = str(output)
 
-    def _find_label(self, sample: Sample) -> str:
+    def _find_label(self, record: Record) -> str:
         """Resolve the KEY of the ``Label`` field to encode (``self.field`` or the first ``Label``)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(f"EncodeTarget: field {self.field!r} not in sample (fields: {list(sample.keys())})")
-            item = sample[self.field]
+            if self.field not in record:
+                raise ValueError(f"EncodeTarget: field {self.field!r} not in record (keys: {list(record)})")
+            item = record[self.field]
             if not isinstance(item, Label):
                 raise TypeError(f"EncodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label")
             return self.field
-        for key, _item in sample.items_of_type(Label):
+        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
             return key
-        raise ValueError(f"EncodeTarget: no Label field in sample (fields: {list(sample.keys())})")
+        raise ValueError(f"EncodeTarget: no Label field in record (keys: {list(record)})")
 
-    def __call__(self, sample: Sample) -> Sample:
+    def __call__(self, record: Record) -> Record:
         if not self.mapping:
             raise ValueError("EncodeTarget: mapping must contain at least one entry.")
-        key = self._find_label(sample)
-        label = sample[key]
+        key = self._find_label(record)
+        label = record[key]
         encoded = _lookup(label.value, self.mapping, self.ignore_unknown, self.default, "EncodeTarget")
         out_key = self.output or key
-        out = sample.replace_field(out_key, Label(encoded, classes=label.classes))
-        return out.set_role(out_key, "target")
+        return {**record, out_key: Label(encoded, classes=label.classes)}
 
 
 @configurable(category="op", group="structure")
@@ -267,7 +261,7 @@ class DecodeTarget(Transform):
     Reads a :class:`~sampleflux.Label` field (``field``; blank picks the first ``Label``)
     whose ``.value`` is an encoded class id and maps it back to its label name through
     ``mapping`` — the readback half used in prediction / reporting. The result is a new
-    :class:`~sampleflux.Label` written under ``output`` (blank replaces in place) tagged ``target``.
+    :class:`~sampleflux.Label` written under ``output`` (blank replaces in place).
 
     Args:
         mapping: Lookup from class id → label name, e.g. ``{2: "DJI AVATA2", ...}``. Must be non-empty.
@@ -275,8 +269,7 @@ class DecodeTarget(Transform):
             ``True``, substitute ``default``.
         default: Value written for an unknown id when ``ignore_unknown=True`` (default ``None``).
         field: ``Label`` field to decode; blank (default) picks the first ``Label`` field.
-        output: Field the decoded ``Label`` is written to; blank (default) replaces the source field
-            in place. Its role is set to ``target``.
+        output: Key the decoded ``Label`` is written to; blank (default) replaces the source field in place.
     """
 
     handles = (Label,)
@@ -299,28 +292,27 @@ class DecodeTarget(Transform):
         self.field = str(field)
         self.output = str(output)
 
-    def _find_label(self, sample: Sample) -> str:
+    def _find_label(self, record: Record) -> str:
         """Resolve the KEY of the ``Label`` field to decode (``self.field`` or the first ``Label``)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(f"DecodeTarget: field {self.field!r} not in sample (fields: {list(sample.keys())})")
-            item = sample[self.field]
+            if self.field not in record:
+                raise ValueError(f"DecodeTarget: field {self.field!r} not in record (keys: {list(record)})")
+            item = record[self.field]
             if not isinstance(item, Label):
                 raise TypeError(f"DecodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label")
             return self.field
-        for key, _item in sample.items_of_type(Label):
+        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
             return key
-        raise ValueError(f"DecodeTarget: no Label field in sample (fields: {list(sample.keys())})")
+        raise ValueError(f"DecodeTarget: no Label field in record (keys: {list(record)})")
 
-    def __call__(self, sample: Sample) -> Sample:
+    def __call__(self, record: Record) -> Record:
         if not self.mapping:
             raise ValueError("DecodeTarget: mapping must contain at least one entry.")
-        key = self._find_label(sample)
-        label = sample[key]
+        key = self._find_label(record)
+        label = record[key]
         decoded = _lookup(label.value, self.mapping, self.ignore_unknown, self.default, "DecodeTarget")
         out_key = self.output or key
-        out = sample.replace_field(out_key, Label(decoded, classes=label.classes))
-        return out.set_role(out_key, "target")
+        return {**record, out_key: Label(decoded, classes=label.classes)}
 
 
 @configurable(category="op", group="structure")
@@ -331,7 +323,7 @@ class CocoToTorchVisionDetection(Transform):
     first field) carrying a HuggingFace / COCO ``objects`` mapping and rewrites it to the
     torchvision detection target, riding as a :class:`~sampleflux.Regions` item under
     ``output`` (``boxes`` = the ``[N, 4]`` float32 xyxy tensor, ``labels`` = the ``[N]`` int64
-    class-id tensor) tagged ``target``. An empty annotation yields empty ``[0,4]`` / ``[0]``
+    class-id tensor). An empty annotation yields empty ``[0,4]`` / ``[0]``
     tensors (the negative-example contract).
 
     Args:
@@ -340,7 +332,7 @@ class CocoToTorchVisionDetection(Transform):
         bbox_format: Box layout in pixels — ``xywh`` (COCO, default), ``xyxy``, or ``cxcywh``; output is xyxy.
         label_offset: Added to each class id (default ``0``). Set ``1`` to reserve class ``0`` for background.
         field: Source field with the objects mapping; blank (default) picks the first ``Label``, else the first field.
-        output: Field the target ``Regions`` is written to (added if new); its role is set to ``target``.
+        output: Key the target ``Regions`` is written to (added if new).
     """
 
     handles = (Label,)
@@ -364,37 +356,36 @@ class CocoToTorchVisionDetection(Transform):
         self.field = str(field)
         self.output = str(output)
 
-    def _find_source(self, sample: Sample) -> str:
+    def _find_source(self, record: Record) -> str:
         """Resolve the KEY of the source field (``self.field``, else the first ``Label``, else the first field)."""
         if self.field:
-            if self.field not in sample.keys():
+            if self.field not in record:
                 raise ValueError(
-                    f"CocoToTorchVisionDetection: field {self.field!r} not in sample (fields: {list(sample.keys())})"
+                    f"CocoToTorchVisionDetection: field {self.field!r} not in record (keys: {list(record)})"
                 )
             return self.field
-        for key, _item in sample.items_of_type(Label):
+        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
             return key
-        for key in sample.keys():
+        for key in record:
             return key
-        raise ValueError("CocoToTorchVisionDetection: sample is empty — no source field to read")
+        raise ValueError("CocoToTorchVisionDetection: record is empty — no source field to read")
 
-    def __call__(self, sample: Sample) -> Sample:
-        key = self._find_source(sample)
-        item = sample[key]
+    def __call__(self, record: Record) -> Record:
+        key = self._find_source(record)
+        item = record[key]
         objects = item.value if isinstance(item, Label) else item_data(item)
         target = coco_to_detection(objects, self.bbox_key, self.category_key, self.bbox_format, self.label_offset)
-        out = sample.replace_field(self.output, Regions(boxes=target["boxes"], labels=target["labels"]))
-        return out.set_role(self.output, "target")
+        return {**record, self.output: Regions(boxes=target["boxes"], labels=target["labels"])}
 
 
 @configurable(category="op", group="structure")
 class MasksToDetectionBoxes(Transform):
     """A segmentation ``Mask`` → a target ``Regions``.
 
-    Reads the :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the bag,
+    Reads the :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the record,
     else the first array-bearing item) as a 2-D integer mask and derives one tight
     ``[x0,y0,x1,y1]`` box per object. The target rides as a :class:`~sampleflux.Regions` item
-    under ``output`` tagged ``target``. An empty mask yields empty ``[0,4]`` / ``[0]`` tensors.
+    under ``output``. An empty mask yields empty ``[0,4]`` / ``[0]`` tensors.
 
     Args:
         label: Foreground class id assigned to every derived box (default ``1``; class 0 = background).
@@ -402,7 +393,7 @@ class MasksToDetectionBoxes(Transform):
         min_area: Drop objects whose mask area (in pixels) is below this (default ``1``).
         connectivity: Connected-components neighborhood when ``connected=True`` — ``4`` or ``8`` (default ``4``).
         field: Name of the ``Mask`` field to read; blank (default) picks the first ``Mask`` (else the first array).
-        output: Field the target ``Regions`` is written to (added if new); its role is set to ``target``.
+        output: Key the target ``Regions`` is written to (added if new).
     """
 
     handles = (Mask,)
@@ -426,38 +417,35 @@ class MasksToDetectionBoxes(Transform):
         self.field = str(field)
         self.output = str(output)
 
-    def _find_mask(self, sample: Sample) -> np.ndarray:
+    def _find_mask(self, record: Record) -> np.ndarray:
         """Resolve the mask array (``self.field``, else the first ``Mask``, else the first array-bearing item)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(
-                    f"MasksToDetectionBoxes: field {self.field!r} not in sample (fields: {list(sample.keys())})"
-                )
-            data = item_data(sample[self.field])
+            if self.field not in record:
+                raise ValueError(f"MasksToDetectionBoxes: field {self.field!r} not in record (keys: {list(record)})")
+            data = item_data(record[self.field])
         else:
             data = None
-            for _key, item in sample.items_of_type(Mask):
+            for _key, item in ((k, v) for k, v in record.items() if isinstance(v, Mask)):
                 data = item_data(item)
                 break
             if data is None:
-                for _key, item in sample.items():
+                for _key, item in record.items():
                     payload = item_data(item)
                     if isinstance(payload, np.ndarray):
                         data = payload
                         break
             if data is None:
                 raise ValueError(
-                    f"MasksToDetectionBoxes: no Mask or array-bearing field in sample (fields: {list(sample.keys())})"
+                    f"MasksToDetectionBoxes: no Mask or array-bearing field in record (keys: {list(record)})"
                 )
         if not isinstance(data, np.ndarray):
             raise TypeError(f"MasksToDetectionBoxes: expected an np.ndarray mask, got {type(data).__name__}")
         return data
 
-    def __call__(self, sample: Sample) -> Sample:
-        mask = self._find_mask(sample)
+    def __call__(self, record: Record) -> Record:
+        mask = self._find_mask(record)
         target = masks_to_detection(mask, self.label, self.connected, self.min_area, self.connectivity)
-        out = sample.replace_field(self.output, Regions(boxes=target["boxes"], labels=target["labels"]))
-        return out.set_role(self.output, "target")
+        return {**record, self.output: Regions(boxes=target["boxes"], labels=target["labels"])}
 
 
 __all__ = [

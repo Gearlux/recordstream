@@ -1,7 +1,7 @@
 """Generic, modality-agnostic image conversion for SampleFlux pipelines.
 
 This is the single home for "turn an arbitrary value into an image": the
-:class:`ConvertToImageOp` op plus the library functions
+:class:`ConvertToImage` op plus the library functions
 (:func:`value_to_image` / :func:`sample_to_image`) that back it and the GUI
 sample preview. It lives in sampleflux (not waivefront) because the conversion is
 fully generic — a 2-D map, a CHW tensor, a PIL image, a boolean mask all render
@@ -26,10 +26,9 @@ from confluid import configurable
 from loggair import get_logger
 from PIL import Image, ImageDraw
 
-from sampleflux.bag.items import Image as ImageItem
-from sampleflux.bag.items import NDArrayItem, item_data
-from sampleflux.bag.sample import Sample, primary
-from sampleflux.bag.transform import Transform
+from sampleflux.items import Image as ImageItem
+from sampleflux.items import NDArrayItem, Record, item_data
+from sampleflux.transform import Transform
 
 logger = get_logger("sampleflux.ops.image")
 
@@ -58,7 +57,7 @@ def normalize_to_uint8(
 
 
 # Closed set of supported matplotlib colormaps — the SINGLE source of truth for every colormap knob
-# across the workspace (``value_to_image`` / ``sample_to_image`` / ``ConvertToImageOp`` and, via
+# across the workspace (``value_to_image`` / ``sample_to_image`` / ``ConvertToImage`` and, via
 # re-export, waivefront's renderers) AND for GUI colormap dropdowns (which read ``COLORMAPS``).
 # A closed ``Literal`` (never a bare ``str``) makes the choice self-documenting and machine-
 # introspectable: visual-editor palettes, navigaitor's form-spec, and MCP tool schemas enumerate the
@@ -115,7 +114,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
     """Render an arbitrary value to an ``(H, W, 3)`` uint8 RGB image WITHOUT resizing.
 
     The core of :func:`value_to_image` factored out so callers that need their
-    own resize policy (e.g. :class:`ConvertToImageOp`'s exact ``width``/``height``)
+    own resize policy (e.g. :class:`ConvertToImage`'s exact ``width``/``height``)
     don't pay a double resize. Handles PIL images, torch tensors, numpy arrays
     (2-D maps → ``colormap``; 3-D → image with channel coercion; bool → 0/255);
     anything else falls back to a text rendering of its ``repr``.
@@ -169,7 +168,7 @@ def _bound_longest_side(rgb: np.ndarray, max_size: int) -> np.ndarray:
 
 
 def value_to_image(value: Any, colormap: Colormap = "viridis", max_size: int = 512) -> np.ndarray:
-    """Render an arbitrary value (a Sample's ``input`` OR ``target``) to an ``(H, W, 3)`` uint8 RGB image.
+    """Render an arbitrary value (any record entry) to an ``(H, W, 3)`` uint8 RGB image.
 
     A generic, modality-agnostic preview usable from any SampleFlux pipeline (and
     by a GUI sample extractor, which renders the selected field). Handles:
@@ -194,19 +193,23 @@ def value_to_image(value: Any, colormap: Colormap = "viridis", max_size: int = 5
     return _bound_longest_side(_render_rgb(value, colormap), max_size)
 
 
-def sample_to_image(sample: Sample, colormap: Colormap = "viridis", max_size: int = 512) -> np.ndarray:
-    """Render a sample's primary input to an ``(H, W, 3)`` uint8 RGB image for display.
+def sample_to_image(record: Record, colormap: Colormap = "viridis", max_size: int = 512) -> np.ndarray:
+    """Render a record's first array-bearing value to an ``(H, W, 3)`` uint8 RGB image for display.
 
     Thin wrapper over :func:`value_to_image` (which does the modality-agnostic rendering)
-    applied to the payload of the sample's primary ``input``-role field. Use
-    :func:`value_to_image` directly to render an arbitrary field payload.
+    applied to the payload of the record's first array-bearing (2-D / 3-D) value. Use
+    :func:`value_to_image` directly to render an arbitrary value.
 
     Args:
-        sample: The Sample to preview; its primary ``input`` field is rendered.
+        record: The record to preview; its first array-bearing (2-D / 3-D) value is rendered.
         colormap: Colormap applied to 2-D maps — one of the supported names (see ``Colormap``; ``"gray"`` = greyscale).
         max_size: Maximum length in pixels of the longest image side; larger renders are downscaled.
     """
-    return value_to_image(item_data(primary(sample, "input")[1]), colormap=colormap, max_size=max_size)
+    for value in record.values():
+        arr = _coerce_to_ndarray(item_data(value))
+        if arr is not None and arr.ndim in (2, 3):
+            return value_to_image(item_data(value), colormap=colormap, max_size=max_size)
+    raise ValueError(f"sample_to_image: no array-bearing value in record (keys: {list(record)})")
 
 
 # --------------------------------------------------------------------------- #
@@ -216,7 +219,7 @@ def sample_to_image(sample: Sample, colormap: Colormap = "viridis", max_size: in
 # from any pipeline / notebook): a generic, modality-agnostic way to look at the
 # RAW numeric values of an array/tensor — pick a channel, render it, and bin its
 # values. Pure functions (NOT @configurable ops): they measure/derive, they don't
-# transform a Sample, so they're library helpers like value_to_image — not canvas
+# transform a record, so they're library helpers like value_to_image — not canvas
 # nodes. They live here (not in the GUI node) so the computation is reusable
 # and unit-tested, per the workspace "rendering/analysis lives in sampleflux" mandate.
 # --------------------------------------------------------------------------- #
@@ -596,12 +599,10 @@ def draw_text(
 
 @configurable(category="op", group="image")
 class ConvertToImage(Transform):
-    """Typed twin of :class:`ConvertToImageOp` — an array-bearing field → an ``Image`` item.
+    """An array-bearing field → an ``Image`` item.
 
-    The typed-bag counterpart of :class:`ConvertToImageOp`: instead of rendering
-    the primary input item into a PIL image in place, it reads an array-bearing field from a
-    :class:`~sampleflux.Sample` and writes a fresh :class:`~sampleflux.Image` item
-    (HWC ``uint8`` RGB) under ``output``, tagged with the ``input`` role (it is the
+    Reads an array-bearing field from the record and writes a fresh
+    :class:`~sampleflux.Image` item (HWC ``uint8`` RGB) under ``output`` (it is the
     pipeline's working image). Any other field passes through untouched.
 
     Rendering is byte-identical to the legacy op — it reuses the SAME
@@ -615,7 +616,7 @@ class ConvertToImage(Transform):
     Unlike the legacy op it does NOT publish ``image_width_px`` / ``image_height_px`` — the
     ``Image`` item's array SHAPE carries the pixel dimensions, so a downstream consumer
     (e.g. a back-projection) reads them straight off the payload; there is no shared
-    metadata dict to publish into in the typed model.
+    metadata dict to publish into in the record model.
 
     Args:
         colormap: Colormap applied to 2-D maps — a supported ``Colormap`` name (``"gray"`` = greyscale).
@@ -623,8 +624,8 @@ class ConvertToImage(Transform):
         height: Exact output height in pixels; resize to ``(width, height)`` when both width and height are > 0.
         max_size: When ``width``/``height`` aren't both set, bound the longest side to this many pixels (aspect kept).
         flip_vertical: Mirror the image top-to-bottom (e.g. spectrogram row 0 = f_min → display f_max at the top).
-        field: Name of the source field to render; blank (default) picks the first array-bearing item in the bag.
-        output: Name of the field the ``Image`` item is written to (added if new); its role is set to ``input``.
+        field: Name of the source field to render; blank (default) picks the first array-bearing item in the record.
+        output: Name of the key the ``Image`` item is written to (added if new).
     """
 
     handles = (NDArrayItem,)
@@ -650,20 +651,20 @@ class ConvertToImage(Transform):
         self.field = field
         self.output = output
 
-    def _find_source(self, sample: Sample) -> Any:
+    def _find_source(self, record: Record) -> Any:
         """Resolve the payload to render (``self.field`` or the first array-bearing item)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(f"ConvertToImage: field {self.field!r} not in sample (fields: {list(sample.keys())})")
-            return item_data(sample[self.field])
-        for _key, item in sample.items():
+            if self.field not in record:
+                raise ValueError(f"ConvertToImage: field {self.field!r} not in record (keys: {list(record)})")
+            return item_data(record[self.field])
+        for _key, item in record.items():
             arr = _coerce_to_ndarray(item_data(item))
             if arr is not None and arr.ndim in (2, 3):
                 return item_data(item)
-        raise ValueError(f"ConvertToImage: no array-bearing field in sample (fields: {list(sample.keys())})")
+        raise ValueError(f"ConvertToImage: no array-bearing field in record (keys: {list(record)})")
 
-    def __call__(self, sample: Sample) -> Sample:
-        rgb = _render_rgb(self._find_source(sample), self.colormap)
+    def __call__(self, record: Record) -> Record:
+        rgb = _render_rgb(self._find_source(record), self.colormap)
         if self.flip_vertical:
             rgb = rgb[::-1, :, :]
         if self.width > 0 and self.height > 0:
@@ -672,8 +673,7 @@ class ConvertToImage(Transform):
             )
         else:
             out_arr = _bound_longest_side(rgb, self.max_size)
-        out = sample.replace_field(self.output, ImageItem(out_arr, layout="HWC"))
-        return out.set_role(self.output, "input")
+        return {**record, self.output: ImageItem(out_arr, layout="HWC")}
 
 
 __all__ = [

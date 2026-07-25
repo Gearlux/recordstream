@@ -1,16 +1,20 @@
-"""The item codec registry — how a typed item serializes, for EVERY storage backend.
+"""The item codec registry — how a typed value serializes, for EVERY storage backend.
 
 Storage backends never inspect item internals: they call :func:`encode_item` to get a flat
 :class:`EncodedItem` (registered type name + array payload + scalar attrs) and
 :func:`decode_item` to rebuild the item. The DEFAULT structural codec covers both item
-shapes (an :class:`~sampleflux.bag.items.NDArrayItem` subclass → the array + its declared
+shapes (an :class:`~sampleflux.items.NDArrayItem` subclass → the array + its declared
 attrs; a dataclass wrapper with a ``data`` field → the payload + the remaining fields), so
 an externally-registered item type — a domain package's signal item, a user type — serializes
 with ZERO storage-code changes. :func:`register_io` overrides the codec for types whose
 structure the default cannot capture (e.g. a payload-less wrapper with non-scalar fields).
 
-The registered TYPE NAME (via :func:`~sampleflux.bag.items.register_item` /
-:func:`~sampleflux.bag.items.get_item_type`) is the on-disk type tag — decoding requires the
+A PLAIN (non-item) record value — a float, a string, a bare array — encodes under the
+pseudo type tag ``"plain"`` and decodes back verbatim, so scalar metadata keys ride the
+same layout as typed values.
+
+The registered TYPE NAME (via :func:`~sampleflux.items.register_item` /
+:func:`~sampleflux.items.get_item_type`) is the on-disk type tag — decoding requires the
 item type to be registered (imported) in the reading process, exactly like the confluid
 ``!class:`` contract.
 """
@@ -20,8 +24,7 @@ from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from typing import Any, Callable, Dict, Tuple, cast
 
-from sampleflux.bag.items import NDArrayItem, get_item_type, item_data
-from sampleflux.bag.sample import Role, Sample
+from sampleflux.items import NDArrayItem, Record, get_item_type, is_item, item_data
 
 __all__ = [
     "EncodedItem",
@@ -29,14 +32,17 @@ __all__ = [
     "register_io",
     "encode_item",
     "decode_item",
-    "encode_sample",
-    "decode_sample",
+    "encode_record",
+    "decode_record",
 ]
+
+#: The on-disk type tag for a plain (non-item) record value — stored and restored verbatim.
+PLAIN_TYPE = "plain"
 
 
 @dataclass(frozen=True)
 class EncodedItem:
-    """One item, flattened for storage: registered type name + payload + scalar attrs."""
+    """One value, flattened for storage: registered type name (or ``"plain"``) + payload + scalar attrs."""
 
     type_name: str
     payload: Any  # ndarray / tensor / scalar / None
@@ -45,10 +51,9 @@ class EncodedItem:
 
 @dataclass(frozen=True)
 class EncodedField:
-    """One named field of a sample: the encoded item plus its key and role."""
+    """One named entry of a record: the encoded value plus its key."""
 
     key: str
-    role: Role
     item: EncodedItem
 
 
@@ -69,16 +74,23 @@ def register_io(item_cls: type, *, encode: Encoder, decode: Decoder) -> None:
 
 
 def encode_item(item: Any) -> EncodedItem:
-    """Flatten one item for storage (registered codec first, else the default structural codec)."""
+    """Flatten one value for storage (registered codec first, else the default structural codec).
+
+    A value that is not a registered item type encodes as ``"plain"`` — payload verbatim.
+    """
     codec = _CODECS.get(type(item))
     if codec is not None:
         payload, attrs = codec[0](item)
         return EncodedItem(type_name=type(item).__name__, payload=payload, attrs=attrs)
+    if not is_item(item):
+        return EncodedItem(type_name=PLAIN_TYPE, payload=item, attrs={})
     return EncodedItem(type_name=type(item).__name__, payload=_payload(item), attrs=_attrs(item))
 
 
 def decode_item(encoded: EncodedItem) -> Any:
-    """Rebuild an item from its encoded form (the type must be registered in this process)."""
+    """Rebuild a value from its encoded form (an item type must be registered in this process)."""
+    if encoded.type_name == PLAIN_TYPE:
+        return encoded.payload
     cls = cast(Any, get_item_type(encoded.type_name))
     codec = _CODECS.get(cls)
     if codec is not None:
@@ -90,21 +102,14 @@ def decode_item(encoded: EncodedItem) -> Any:
     return cls(**encoded.attrs)
 
 
-def encode_sample(sample: Sample) -> Tuple[EncodedField, ...]:
-    """Encode every field of a sample, in insertion order."""
-    return tuple(
-        EncodedField(key=key, role=sample.role_of(key), item=encode_item(item)) for key, item in sample.items()
-    )
+def encode_record(record: Record) -> Tuple[EncodedField, ...]:
+    """Encode every entry of a record, in insertion order."""
+    return tuple(EncodedField(key=key, item=encode_item(value)) for key, value in record.items())
 
 
-def decode_sample(fields: Tuple[EncodedField, ...]) -> Sample:
-    """Rebuild a :class:`Sample` from encoded fields (order preserved)."""
-    items: Dict[str, Any] = {}
-    roles: Dict[str, Role] = {}
-    for field in fields:
-        items[field.key] = decode_item(field.item)
-        roles[field.key] = field.role
-    return Sample(items, roles)
+def decode_record(fields: Tuple[EncodedField, ...]) -> Record:
+    """Rebuild a record dict from encoded fields (order preserved)."""
+    return {field.key: decode_item(field.item) for field in fields}
 
 
 # --- the default structural codec -------------------------------------------

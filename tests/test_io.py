@@ -1,4 +1,5 @@
-"""The item codec registry (``sampleflux.bag.io``) — default structural codec, overrides, samples."""
+"""The item codec registry (``sampleflux.io``) — default structural codec, overrides, records,
+the ``"plain"`` codec path."""
 
 from dataclasses import dataclass
 
@@ -10,14 +11,14 @@ from sampleflux import (
     Image,
     Label,
     Regions,
-    Sample,
     decode_item,
-    decode_sample,
+    decode_record,
     encode_item,
-    encode_sample,
+    encode_record,
     register_io,
     register_item,
 )
+from sampleflux.io import PLAIN_TYPE
 
 
 @register_item
@@ -58,6 +59,25 @@ class TestDefaultCodec:
             decode_item(EncodedItem(type_name="Nope", payload=None, attrs={}))
 
 
+class TestPlainCodec:
+    def test_scalar_round_trips_verbatim(self) -> None:
+        for value in (-3.0, 7, "text", True):
+            enc = encode_item(value)
+            assert enc.type_name == PLAIN_TYPE and enc.payload == value and enc.attrs == {}
+            assert decode_item(enc) == value
+
+    def test_bare_array_round_trips_verbatim(self) -> None:
+        arr = np.arange(6).reshape(2, 3)  # a bare ndarray is NOT a registered item -> "plain"
+        enc = encode_item(arr)
+        assert enc.type_name == PLAIN_TYPE
+        back = decode_item(enc)
+        assert type(back) is np.ndarray and np.array_equal(back, arr)
+
+    def test_none_is_plain(self) -> None:
+        enc = encode_item(None)
+        assert enc.type_name == PLAIN_TYPE and decode_item(enc) is None
+
+
 class TestRegisteredCodec:
     def test_override_wins_and_round_trips(self) -> None:
         @register_item
@@ -76,18 +96,20 @@ class TestRegisteredCodec:
         assert isinstance(back, Compact) and back.values == [1, 2, 3]
 
 
-class TestSampleCodec:
-    def test_sample_round_trip_fields_roles_order(self) -> None:
-        s = Sample(
-            {
-                "image": Image(np.zeros((2, 2, 3), dtype=np.float32)),
-                "regions": Regions(boxes=[[0, 0, 1, 1]], labels=["a"], canvas=(2, 2)),
-                "class": Label("x"),
-            },
-            roles={"regions": "target", "class": "target"},
-        )
-        fields = encode_sample(s)
-        assert [f.key for f in fields] == ["image", "regions", "class"]
-        assert [f.role for f in fields] == ["input", "target", "target"]
-        back = decode_sample(fields)
-        assert back == s
+class TestRecordCodec:
+    def test_record_round_trip_keys_order_and_plain_entries(self) -> None:
+        record = {
+            "image": Image(np.zeros((2, 2, 3), dtype=np.float32)),
+            "regions": Regions(boxes=[[0, 0, 1, 1]], labels=["a"], canvas=(2, 2)),
+            "class": Label("x"),
+            "gain_db": -3.0,  # a plain scalar rides the same layout under the "plain" tag
+        }
+        fields = encode_record(record)
+        assert [f.key for f in fields] == ["image", "regions", "class", "gain_db"]
+        assert fields[3].item.type_name == PLAIN_TYPE
+        back = decode_record(fields)
+        assert list(back.keys()) == list(record.keys())
+        assert np.array_equal(np.asarray(back["image"]), np.asarray(record["image"]))
+        assert back["regions"] == record["regions"]
+        assert back["class"] == record["class"]
+        assert back["gain_db"] == -3.0

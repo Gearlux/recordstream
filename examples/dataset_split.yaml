@@ -29,12 +29,11 @@ val_set: !class:sampleflux.core.Flux()
 test_set: !class:sampleflux.core.Flux()
   source: !ref:my_split.test
 
-# === RangeSource: a contiguous [start:end) slice over any indexable source ===
+# === RangeSource: a contiguous [start:stop) slice over any indexable source ===
 first_1000: !class:sampleflux.core.Flux()
   source: !class:sampleflux.sources.RangeSource()
     source: !ref:hf_train
-    start: 0
-    end: 1000
+    stop: 1000
 
 # === ConcatSource: join several indexable sources into one (then optionally split) ===
 hf_test: !class:sampleflux.sources.HuggingFaceSource()

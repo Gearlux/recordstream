@@ -1,5 +1,5 @@
 """
-SampleFlux operations (typed-bag :class:`~sampleflux.Sample` transforms).
+SampleFlux operations (record-dict ops).
 
 Submodules:
     - sampleflux.ops.numpy: Threshold, ConnectedComponents (+ threshold_array /
@@ -8,17 +8,19 @@ Submodules:
     - sampleflux.ops.image: ConvertToImage (+ value_to_image / normalize_to_uint8 …)
     - sampleflux.ops.target: MetadataToTarget, EncodeTarget, DecodeTarget,
       CocoToTorchVisionDetection, MasksToDetectionBoxes
-    - sampleflux.ops.structure: SetRole, RenameField, DropField, CopyField, SelectFields
+    - sampleflux.ops.structure: RenameField, DropField, CopyField, SelectFields
     - sampleflux.ops.parallel: Parallel (worker-pool sub-pipeline)
     - sampleflux.ops.enable: Enable (toggle an op-list via one named CLI flag)
     - sampleflux.ops.random_apply: RandomApply (gate any op behind a Bernoulli flip)
-    - sampleflux.ops.configure: ConfigureOp (per-sample parameter injection)
-    - sampleflux.ops.formula: FormulaOp (math formula over the primary input)
+    - sampleflux.ops.configure: ConfigureOp (per-record parameter injection)
+    - sampleflux.ops.formula: FormulaOp (math formula over one record entry)
     - sampleflux.ops.sink: SampleSinkOp (adapt a DataSink as a pass-through op)
-    - sampleflux.ops.transform_chain: TransformChain (sequential op-chain grouping)
-    - sampleflux.ops.context: Save, Use, Drop, Apply, Capture, MergeFields (the per-sample
+    - sampleflux.ops.context: Save, Use, Drop, Apply, Capture, MergeFields (the per-record
       Context graph plane — the flat-list building blocks a branchy flow: document lowers to)
-    - sampleflux.ops.debug: PrintSampleOp (per-sample summary probe)
+    - sampleflux.ops.debug: PrintSampleOp (per-record summary probe)
+
+The sequential composer ``Pipeline`` lives in :mod:`sampleflux.transform` (package-root
+export) — one list mixing native ops with bare albumentations / torchvision-v2 transforms.
 """
 
 from sampleflux.ops.configure import ConfigureOp
@@ -31,7 +33,7 @@ from sampleflux.ops.numpy import ConnectedComponents, Threshold
 from sampleflux.ops.parallel import Parallel
 from sampleflux.ops.random_apply import RandomApply
 from sampleflux.ops.sink import SampleSinkOp
-from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields, SetRole
+from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
 from sampleflux.ops.target import (
     CocoToTorchVisionDetection,
     DecodeTarget,
@@ -40,7 +42,6 @@ from sampleflux.ops.target import (
     MetadataToTarget,
 )
 from sampleflux.ops.torch import ToTensor
-from sampleflux.ops.transform_chain import TransformChain
 
 __all__ = [
     "Apply",
@@ -66,9 +67,7 @@ __all__ = [
     "Save",
     "SampleSinkOp",
     "SelectFields",
-    "SetRole",
     "Threshold",
     "ToTensor",
-    "TransformChain",
     "Use",
 ]

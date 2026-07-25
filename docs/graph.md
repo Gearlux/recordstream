@@ -6,24 +6,23 @@ The **readable authoring form** of a graph pipeline is a `flow:` document — na
 
 ```yaml
 flow:
-  scaled:  !class:sampleflux.ops.numpy.RescaleOp()          # input: the source sample
-  norm:    !class:sampleflux.ops.numpy.StandardizeOp()      # input: previous step
-  mask:    !class:sampleflux.ops.numpy.ThresholdOp(low_level=0.5) {from: scaled}   # 2nd reader of `scaled` = fan-out
-  thresh:  !class:sampleflux.ops.formula.FormulaOp(formula="a*0.5") {from: norm}
-  gated:   !class:sampleflux.ops.numpy.ThresholdOp()
-    from: scaled
-    bind: {low_level: thresh}          # per-sample param := thresh's result
-  out: {from: gated, target_from: mask}                     # pure fan-in (no op)
+  spec:    !class:mypkg.MakeSpectrogram()                   # input: the source record
+  masked:  !class:sampleflux.ops.numpy.Threshold(low_level=0.5) {from: spec}   # 2nd reader of `spec` = fan-out
+  thresh:  !class:sampleflux.ops.formula.FormulaOp(formula="a*0.5", field=spec) {from: spec}
+  gated:   !class:sampleflux.ops.numpy.Threshold()
+    from: spec
+    bind: {low_level: thresh[spec]}    # per-record param := the `spec` entry of thresh's result
+  out: {from: gated, merge_from: [masked]}                  # fan-in (no op)
 outputs: out
 ```
 
-Step grammar (four reserved keys, stripped before the op is built):
+Step grammar (three reserved keys, stripped before the op is built):
 
 - **`from:`** — the input step (omitted = previous step; must name an *earlier* step, so document order is the schedule and cycles are inexpressible).
-- **`target_from:` / `metadata_from:`** — fan-in slots (a step result contributes its corresponding field; metadata merges last-write-wins).
-- **`bind:`** — `{param: step}` per-sample parameters (a step name = its result's `input`; `step.attr` = the step op's live `@output`, stochastic-correct).
+- **`merge_from:`** — fan-in: UNION the named steps' record ENTRIES into this step's incoming record, in listed order, last-write-wins on a key collision (the `MergeFields` slot semantics).
+- **`bind:`** — `{param: ref}` per-record parameters: a bare `step` binds the step's WHOLE result record, `step[key]` the named ENTRY of its record, and `step.attr` the step op's live `@output` (lowered through `Capture` — stochastic-correct).
 
-A plain-mapping step with no op (`out: {from: a, target_from: b}`) is a pure fan-in; `{}` is the identity (names the source). Cell lifetimes are **automatic** in both forms.
+A plain-mapping step with no op (`out: {from: a, merge_from: [b]}`) is a pure fan-in; `{}` is the identity (names the source). Cell lifetimes are **automatic** in both forms. Steps apply their ops through the engine's op-family dispatch, so bare library transforms sit in flow steps too.
 
 Two engines, one contract — **bidirectional conversion with execution parity**:
 
@@ -37,30 +36,32 @@ ops    = to_ops(graph.steps, graph.output_step)          # flow -> flat ops
 flow2  = from_ops(ops)                                   # flat ops -> flow (lifting)
 ```
 
-`FlowGraph` is a `torch.utils.data.Dataset` like `Flux` (`__len__`/`__getitem__`/`.batch`/`.parallel` — parallel runs the lowered form on Flux's spawn pool, one worker implementation). A purely linear flow lowers to the bare op list — zero context ops. See `examples/flow_graph.py` for the full round-trip.
+`FlowGraph` is a `torch.utils.data.Dataset` like `Flux` (`__len__`/`__getitem__`/`.batch`/`.parallel` — parallel runs the lowered form on Flux's spawn pool, one worker implementation). A purely linear flow lowers to the bare op list — zero context ops.
 
 ## Graph pipelines on a flat op list (Context ops)
 
-A branchy pipeline — fan-out, fan-in, a value computed on one branch feeding a parameter on another — runs on the **plain sequential `Flux` engine** via six *context ops* (`sampleflux.ops.context`). The engine creates one per-sample **`Context`** (a named-cell store, `sampleflux.context`) around each sample's trip through the op list; the context ops move data between the linear stream and those cells. Graph wiring never mutates the sample's fields — a linear run's fields stay byte-identical whether or not context threading exists.
+A branchy pipeline — fan-out, fan-in, a value computed on one branch feeding a parameter on another — runs on the **plain sequential `Flux` engine** via six *context ops* (`sampleflux.ops.context`). The engine creates one per-record **`Context`** (a named-cell store, `sampleflux.context`) around each record's trip through the op list; the context ops move data between the linear stream and those cells. Graph wiring never mutates the record's entries — a linear run's record stays byte-identical whether or not context threading exists.
 
 | Op | Semantics |
 |---|---|
-| `Save(name)` | snapshot the stream sample into a cell (pass-through) — the fork point |
+| `Save(name)` | snapshot the stream record into a cell (pass-through) — the fork point |
 | `Use(name, drop=False)` | stream := the cell's value; deep-copies unless `drop` frees the cell (move) |
 | `Drop(names)` | free cells explicitly |
-| `Apply(op, param, source, drop=False)` | set `op.<param>` from a cell's value, then apply `op` |
+| `Apply(op, param, source, key="", drop=False)` | set `op.<param>` from a cell (a record cell contributes its `key`-named entry, or the whole record when `key` is blank; a raw cell value verbatim), then apply `op` |
 | `Capture(op, output, name)` | apply `op`, record its live `@output` into a cell (stochastic-correct) |
-| `Mix(input_from, target_from, metadata_from, drop)` | fan-in: compose a sample from cells + the incoming sample |
+| `MergeFields(sources, keys, drop)` | fan-in: UNION the named cells' entries into the incoming record (listed order, last-write-wins; `keys` restricts the union) |
 
 ```yaml
 ops:
   - !class:sampleflux.ops.context.Save(name=fork)              # fork the stream
-  - !class:sampleflux.ops.numpy.StandardizeOp()                # branch A rides the stream
+  - !class:albumentations.GaussNoise {p: 1.0}                  # branch A rides the stream
   - !class:sampleflux.ops.context.Save(name=branch_a)
   - !class:sampleflux.ops.context.Use(name=fork,drop=true)     # branch B restarts from the fork
-  - !class:sampleflux.ops.numpy.ThresholdOp
+  - !class:sampleflux.ops.numpy.Threshold
     low_level: 0.5
-  - !class:sampleflux.ops.context.Mix(target_from=branch_a)    # fan-in
+  - !class:sampleflux.ops.context.MergeFields                  # fan-in
+    sources: [branch_a]
+    keys: [image]
     drop: [branch_a]
 ```
 
@@ -71,12 +72,12 @@ from sampleflux.context import Context, activate
 
 with activate(Context()):
     for op in ops:
-        sample = op(sample)
+        record = op(record)
 ```
 
-Cells hold whole `Sample`s (from `Save`) or raw values (from `Capture`); `Apply` reads a Sample cell's primary input item, `Mix` reads each cell's corresponding field. Copy discipline: cells are stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-sample store instead of extra fields on the sample (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#the-per-sample-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17).
+Cells hold whole records (from `Save`) or raw values (from `Capture`); `Apply` reads a record cell's `key`-named entry (whole record when `key` is blank), `MergeFields` unions each cell's entries. Copy discipline: cells are stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). On a deliberate key collision at the fan-in, rename on the producing branch first (`RenameField`, `sampleflux.ops.structure`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-record store instead of extra record keys (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#the-per-record-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17).
 
-> **Carrying a snapshot the context ops cannot?** Context cells are the wiring plane, but they deliberately raise across a `Parallel` boundary and never persist into a sink. For the two jobs cells cannot do — carrying a snapshot **across a `Parallel` boundary** and deliberately **persisting a snapshot into a sink** — copy the field into its own `aux`-role field with the structure ops (`CopyField` + `SetRole`, `sampleflux.ops.structure`); the snapshot then rides the sample as a real field. Everything else — fan-out, fan-in, cross-branch values — uses the context ops above.
+> **Carrying a snapshot the context ops cannot?** Context cells are the wiring plane, but they deliberately raise across a `Parallel` boundary and never persist into a sink. For the two jobs cells cannot do — carrying a snapshot **across a `Parallel` boundary** and deliberately **persisting a snapshot into a sink** — copy the value under its own key with `CopyField` (`sampleflux.ops.structure`); the snapshot then rides the record as a real entry. Everything else — fan-out, fan-in, cross-branch values — uses the context ops above.
 
 ## Reattach an ops-only YAML (`Flux.from_ops_yaml`)
 

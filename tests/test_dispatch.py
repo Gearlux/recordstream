@@ -3,8 +3,8 @@
 from typing import Any, Dict
 
 from sampleflux import Image, Label, Mask, Regions, Transform
-from sampleflux.bag.dispatch import dispatch, get_kernel, register_kernel, registered_kernels
-from tests._bag_fixtures import FixtureFlip
+from sampleflux.dispatch import dispatch, get_kernel, register_kernel, registered_kernels
+from tests._fixtures import FixtureFlip
 
 
 class TestDispatch:
@@ -13,7 +13,7 @@ class TestDispatch:
         assert dispatch(FixtureFlip, Image) is get_kernel(FixtureFlip, Image)
 
     def test_miss_returns_none(self) -> None:
-        # FixtureFlip has no Label kernel — a Label field passes through.
+        # FixtureFlip has no Label kernel — a Label value passes through.
         assert dispatch(FixtureFlip, Label) is None
         assert get_kernel(FixtureFlip, Label) is None
 
@@ -43,6 +43,10 @@ class TestDispatch:
             return item
 
         assert dispatch(T, Image) is _kernel  # cache was cleared on registration
+
+    def test_plain_value_type_misses(self) -> None:
+        # A plain (non-item) value type — e.g. float — has no kernel: the op passes it through.
+        assert dispatch(FixtureFlip, float) is None
 
     def test_registered_kernels_lists_pairs(self) -> None:
         pairs = registered_kernels()

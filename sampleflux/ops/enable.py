@@ -1,8 +1,8 @@
 """``Enable`` — toggle one or more ops on/off via a single named CLI flag.
 
-A compose-group op (alongside ``TransformChain`` / ``Parallel``): wrap an inner op-list
+A compose-group op (alongside ``Pipeline`` / ``Parallel``): wrap an inner op-list
 so the whole chain can be switched on or off from one boolean attribute whose
-name becomes the CLI flag. Modality-neutral — it threads any ``Sample``
+name becomes the CLI flag. Modality-neutral — it threads any record
 through any ops — so it lives in core sampleflux, not a domain package.
 """
 
@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.bag.sample import Sample
+from sampleflux.items import Record
 
 logger = get_logger(__name__)
 
@@ -21,10 +21,9 @@ class Enable:
     """Wrap one or more ops so they can be toggled on/off via a single named CLI flag.
 
     ``ops`` is a list; even a single-op guard uses ``ops: [op]``. The wrapper
-    threads each sample through every op in sequence — same semantics as
-    listing them inline in ``Flux.ops`` — so visualization chains like
-    ``ConvertToImageOp`` → ``SaveImageOp`` share one toggle instead
-    of needing a wrapper per op.
+    threads each record through every op in sequence — same semantics as
+    listing them inline in ``Flux.ops`` — so a whole visualization chain
+    shares one toggle instead of needing a wrapper per op.
 
     The toggle flag is supplied in YAML as an *extra* kwarg whose name becomes
     the CLI hook — Confluid's post-construction setattr promotes it to an
@@ -39,8 +38,8 @@ class Enable:
         - !class:sampleflux.ops.enable.Enable
           visualize: false        # ← any boolean attribute name works; this name IS the CLI flag
           ops:
-            - !class:sampleflux.ops.image.ConvertToImageOp {}
-            - !class:waivefront.visualizers.SaveImageOp
+            - !class:sampleflux.ops.image.ConvertToImage {}
+            - !class:waivefront.visualizers.SaveImage
               output_dir: ./segments_png
 
     CLI:
@@ -96,7 +95,7 @@ class Enable:
         present.
 
     Args:
-        ops: Non-empty list of callables ``Sample -> Sample`` gated by the toggle.
+        ops: Non-empty list of ops (native or bare library transforms) gated by the toggle.
     """
 
     def __init__(self, ops: Optional[List] = None) -> None:
@@ -126,19 +125,19 @@ class Enable:
         name, _ = self._toggle()
         return name
 
-    def __call__(self, sample: Sample) -> Optional[Sample]:
+    def __call__(self, record: Record) -> Optional[Record]:
         if not self.ops:
             raise ValueError("Enable requires a non-empty 'ops' list.")
         if not self.enabled:
-            return sample
+            return record
         from confluid import flow
         from confluid.fluid import Fluid
 
-        # _apply_op = the engine's contract-aware chokepoint, so field-scoped ops
-        # (e.g. a pair-scoped op from the kinds grid) run under the toggle unchanged.
+        # _apply_op = the engine's op-family dispatch, so bare library transforms
+        # run under the toggle exactly as in a bare ops list.
         from sampleflux.core import _apply_op
 
-        current: Optional[Sample] = sample
+        current: Optional[Record] = record
         for i, op in enumerate(self.ops):
             if current is None:
                 return None

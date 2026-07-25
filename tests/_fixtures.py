@@ -1,19 +1,17 @@
-"""Test-local typed-bag fixtures.
+"""Test-local record-model fixtures.
 
 ``FixtureFlip`` is the former native ``HorizontalFlip`` kept ONLY as a test fixture: sampleflux
 ships no native augmentation transforms (geometric/photometric augmentation comes from
-torchvision v2 / albumentations through adapter coercion), but the kernel-dispatch machinery
-(once-per-sample params, per-type kernels, MRO resolution, ``only=`` filter) still needs a
-fully native transform to pin — and the fixture doubles as the ADAPTER-PARITY reference (a
-`v2.RandomHorizontalFlip(p=1.0)` through the adapter must move image/mask/boxes exactly like
-this native implementation does).
+torchvision v2 / albumentations invoked natively by the engine's op-family dispatch), but the
+kernel-dispatch machinery (once-per-record params, per-type kernels, MRO resolution, the
+``field=`` pin) still needs a fully native transform to pin.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 
-from sampleflux import Image, Mask, Regions, Sample, Transform, item_data, with_data
+from sampleflux import Image, Mask, Record, Regions, Transform, item_data, with_data
 
 
 class FixtureFlip(Transform):
@@ -24,13 +22,13 @@ class FixtureFlip(Transform):
     optional = (Mask, Regions)
     produces = (Image, Mask, Regions)
 
-    def __init__(self, p: float = 0.5, only: Optional[List[str]] = None) -> None:
-        super().__init__(only=only)
+    def __init__(self, p: float = 0.5, field: Optional[str] = None) -> None:
+        super().__init__(field=field)
         self.p = p
 
-    def get_params(self, sample: Sample) -> Dict[str, Any]:
+    def get_params(self, record: Record) -> Dict[str, Any]:
         do = float(np.random.random()) < self.p
-        return {"do": do, "width": _reference_width(sample)}
+        return {"do": do, "width": _reference_width(record)}
 
 
 @FixtureFlip.kernel(Image)
@@ -59,9 +57,9 @@ def _flip_regions(item: Regions, params: Dict[str, Any]) -> Regions:
     return Regions(boxes=boxes, labels=item.labels, scores=item.scores, canvas=item.canvas)
 
 
-def _reference_width(sample: Sample) -> Optional[int]:
+def _reference_width(record: Record) -> Optional[int]:
     """The horizontal extent to flip boxes against — from the first Image/Mask, or a Regions canvas."""
-    for _, item in sample.items():
+    for _, item in record.items():
         if isinstance(item, Image):
             arr = item_data(item)
             axis = 2 if getattr(item, "layout", "HWC") == "CHW" else 1
@@ -71,7 +69,7 @@ def _reference_width(sample: Sample) -> Optional[int]:
             arr = item_data(item)
             if arr.ndim >= 2:
                 return int(arr.shape[1])
-    for _, item in sample.items():
+    for _, item in record.items():
         if isinstance(item, Regions) and item.canvas:
             return int(item.canvas[1])
     return None

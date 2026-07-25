@@ -11,8 +11,8 @@ correct.
 
 Note:
     Do not nest a ``Parallel`` op inside another ``Parallel.ops`` — workers
-    must not themselves spawn workers. ``TransformChain``, ``Enable``, and any
-    pickle-safe per-sample op are fine inside.
+    must not themselves spawn workers. ``Pipeline``, ``Enable``, and any
+    pickle-safe per-record op are fine inside.
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from typing import Any, Iterable, Iterator, List, Optional
 from confluid import configurable, flow
 from confluid.fluid import Fluid
 
-from sampleflux.bag.sample import Sample
 from sampleflux.core import _worker_task
+from sampleflux.items import Record
 
 
 @configurable(category="op", group="compose")
@@ -34,7 +34,7 @@ class Parallel:
     """Run an inner op sub-pipeline in a worker pool with bounded prefetch.
 
     Args:
-        ops: Sequential sub-pipeline applied to each sample inside a worker.
+        ops: Sequential sub-pipeline applied to each record inside a worker.
         workers: Number of worker processes (spawn context). Must be >= 1.
     """
 
@@ -45,26 +45,26 @@ class Parallel:
 
     def _materialize_ops(self) -> None:
         # Confluid post-construction paradigm leaves nested ops as Fluid
-        # markers; resolve them in-place on first use, mirroring TransformChain.
+        # markers; resolve them in-place on first use, mirroring Pipeline.
         for i, op in enumerate(self.ops):
             if isinstance(op, Fluid):
                 self.ops[i] = flow(op)
 
-    def __call__(self, sample: Sample) -> Optional[Sample]:
+    def __call__(self, record: Record) -> Optional[Record]:
         # Inline fallback for non-streaming callers (e.g. Flux.__getitem__). Routed through
-        # _apply_op — the same contract-aware chokepoint the streamed route's _worker_task
-        # uses — so field-scoped ops (e.g. a pair-scoped op from the kinds grid) behave identically.
+        # _apply_op — the same op-family dispatch the streamed route's _worker_task uses —
+        # so bare library transforms behave identically.
         from sampleflux.core import _apply_op
 
         self._materialize_ops()
-        current: Optional[Sample] = sample
+        current: Optional[Record] = record
         for op in self.ops:
             if current is None:
                 return None
             current = _apply_op(current, op)
         return current
 
-    def stream(self, samples: Iterable[Optional[Sample]]) -> Iterator[Optional[Sample]]:
+    def stream(self, samples: Iterable[Optional[Record]]) -> Iterator[Optional[Record]]:
         """Stream-level dispatch with bounded prefetch (in-order yield)."""
         if self.workers < 1:
             raise ValueError(f"Parallel(workers={self.workers!r}): must be >= 1")
@@ -73,7 +73,7 @@ class Parallel:
         limit = max(2 * self.workers, self.workers + 1)
 
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers, mp_context=ctx) as executor:
-            pending: "deque[concurrent.futures.Future[Optional[Sample]]]" = deque()
+            pending: "deque[concurrent.futures.Future[Optional[Record]]]" = deque()
             for s in samples:
                 if s is None:
                     continue

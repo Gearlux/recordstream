@@ -1,7 +1,7 @@
 """``LabelMap`` — a bidirectional class-name ↔ integer-id map.
 
-The *fittable* companion to the config-pinned :class:`~sampleflux.ops.target.EncodeTargetOp` /
-:class:`~sampleflux.ops.target.DecodeTargetOp`. Those ops carry an explicit ``mapping`` that is
+The *fittable* companion to the config-pinned :class:`~sampleflux.ops.target.EncodeTarget` /
+:class:`~sampleflux.ops.target.DecodeTarget`. Those ops carry an explicit ``mapping`` that is
 **pinned in config, NOT fitted** at run time, so train / eval / predict share one identical
 label→id ordering. :class:`LabelMap` is the piece that *produces* such a pinned mapping:
 
@@ -31,11 +31,11 @@ from sampleflux.ops.target import DecodeTarget, EncodeTarget
 
 @configurable
 class LabelMap:
-    """Bidirectional class-name ↔ integer-id map (the fittable companion to ``EncodeTargetOp``).
+    """Bidirectional class-name ↔ integer-id map (the fittable companion to ``EncodeTarget``).
 
     Holds an explicit name→id ``mapping`` (pinned in config), or one fitted from a target stream
     via :meth:`fit`. Exposes :attr:`num_classes` / :attr:`label_names`, builds the
-    :class:`~sampleflux.ops.target.EncodeTargetOp` / :class:`~sampleflux.ops.target.DecodeTargetOp`
+    :class:`~sampleflux.ops.target.EncodeTarget` / :class:`~sampleflux.ops.target.DecodeTarget`
     that apply it, and round-trips to disk in marainer's ``class_names.json`` format.
 
     Args:

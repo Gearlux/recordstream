@@ -1,9 +1,10 @@
-"""Typed items — the leaves of the typed-bag model, each a value that OWNS its metadata.
+"""Typed values — the vocabulary a record is made of, each value OWNING its metadata.
 
-This is the answer to *"metadata belongs to input or target"*: instead of a shared flat
-``Sample.metadata`` dict keyed by string, a sample is a bag of typed items and every piece
-of metadata lives ON the item it describes — an :class:`Image` carries its ``layout``, a
-:class:`Label` its ``classes``, a :class:`Regions` its ``canvas`` reference frame.
+A sample is a plain ``dict`` (the :data:`Record` alias) whose values are TYPED: an
+:class:`Image` carries its ``layout``, a :class:`Label` its ``classes``, a
+:class:`Regions` its ``canvas`` reference frame. Ops dispatch on these types (the
+torchvision-v2 ``tv_tensors`` idea) — there is no wrapper container and no role tags;
+key names ("image", "mask", "label") carry meaning, exactly like every torch batch dict.
 
 The item model is HYBRID (the workspace decision):
 
@@ -18,24 +19,23 @@ The item model is HYBRID (the workspace decision):
   fragile).
 
 This module is MODALITY-NEUTRAL — only generic items live here (images, masks, boxes,
-labels). Signal-domain items (a signal, a spectrogram) live in the domain package
-(``waivefront.bag``) and register into the SAME registry, per the workspace modality-neutral
-mandate. That IS the extensibility story below.
+labels). Domain items (a signal, a spectrogram) live in the domain package and register
+into the SAME registry, per the workspace modality-neutral mandate. That IS the
+extensibility story below.
 
 Both shapes present a uniform payload accessor via :func:`item_data` / :func:`with_data`, so
 a transform kernel never has to special-case "is this a subclass or a wrapper".
 
 Extensibility: any type decorated with :func:`register_item` becomes a first-class item —
-the dispatch registry (:mod:`sampleflux.bag.dispatch`) and the graph socket-type map can
-see it. A downstream package (a signal item, a torchsig-shaped item, a SigMF recording, a
-user type) adds one class + one decorator, no core edit.
+the dispatch registry (:mod:`sampleflux.dispatch`) and a visual editor's socket-type map can
+see it. A downstream package (a signal item, a user type) adds one class + one decorator,
+no core edit.
 
-NOTE (PoC scope): array items are ``np.ndarray`` subclasses only; a torch-``Tensor``-subclass
+NOTE (scope): array items are ``np.ndarray`` subclasses only; a torch-``Tensor``-subclass
 item base (via ``__torch_function__``) is a documented follow-up — torch payloads ride in
-wrapper items in the proof-of-concept. Items are registered in the local
-:func:`register_item` registry rather than carried on the confluid ``@configurable``
-registry (an ``np.ndarray`` subclass builds through ``__new__``, which fights confluid's
-``__init__`` validation wrap); confluid-native item discovery is a follow-up.
+wrapper items. Items are registered in the local :func:`register_item` registry rather than
+carried on the confluid ``@configurable`` registry (an ``np.ndarray`` subclass builds
+through ``__new__``, which fights confluid's ``__init__`` validation wrap).
 """
 
 from dataclasses import dataclass, field, fields, is_dataclass, replace
@@ -45,7 +45,13 @@ import numpy as np
 
 _ItemT = TypeVar("_ItemT")
 
+#: A sample record — a PLAIN dict of typed values. There is deliberately no container
+#: class: ops receive and return ordinary dicts, so library transforms that already
+#: understand dicts (torchvision v2) or named kwargs (albumentations) run as-is.
+Record = Dict[str, Any]
+
 __all__ = [
+    "Record",
     "NDArrayItem",
     "Image",
     "Mask",
@@ -62,7 +68,7 @@ __all__ = [
 
 # ---------------------------------------------------------------------------
 # Item registry — the extensibility surface. A registered type is a first-class
-# item the dispatch registry and the (design-only) FluxStudio socket-type map see.
+# item the dispatch registry and a visual editor's socket-type map see.
 # ---------------------------------------------------------------------------
 _ITEM_TYPES: Dict[str, type] = {}
 

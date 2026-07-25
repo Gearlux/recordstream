@@ -1,9 +1,9 @@
 """Typed items — array-subclass attribute preservation, wrappers, payload accessors, registry.
 
 Only the MODALITY-NEUTRAL core items live in sampleflux (Image / Mask / Regions / Label). The
-data-bearing-wrapper and multi-attribute-array paths (which the signal-domain items in
-``waivefront.bag`` exercise for real) are covered here with small test-local item types, so the
-core stays tested without importing a domain package.
+data-bearing-wrapper and multi-attribute-array paths (which the signal-domain items in a domain
+package exercise for real) are covered here with small test-local item types, so the core stays
+tested without importing a domain package.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from sampleflux.bag.items import (
+from sampleflux.items import (
     Image,
     Label,
     Mask,
@@ -93,6 +93,9 @@ class TestPayloadAccessors:
     def test_item_data_no_payload_returns_self(self) -> None:
         reg = Regions(boxes=[[0, 0, 1, 1]])
         assert item_data(reg) is reg  # no `.data` slot — returns the item
+
+    def test_item_data_plain_value_passes_through(self) -> None:
+        assert item_data(3.5) == 3.5 and item_data("s") == "s"  # non-items pass through verbatim
 
     def test_with_data_array_preserves_attrs(self) -> None:
         img = Image(np.zeros((2, 2, 3)), layout="CHW")

@@ -35,7 +35,7 @@ dev = [
     "pytest>=7.0.0,<9.0.0",
     "pytest-cov>=4.0.0,<7.0.0",
     # CI installs `.[dev]` (unit-tests AND verify-examples), so torchvision here keeps the
-    # torchvision augmentation adapter + examples exercised in CI without a workflow edit.
+    # bare torchvision-v2 op family + examples exercised in CI without a workflow edit.
     "torchvision",
 ]
 notebook = [
@@ -45,8 +45,9 @@ notebook = [
 ]
 vision = [
     "scipy",
-    # TorchvisionTransformOp (sampleflux.ops.torchvision) lazy-imports torchvision; the
-    # extra makes `pip install sampleflux[vision]` the documented way to enable it.
+    # Bare torchvision transforms.v2 ops run as-is through the engine's op-family dispatch
+    # (sampleflux.core._apply_op); the extra makes `pip install sampleflux[vision]` the
+    # documented way to enable them.
     "torchvision",
 ]
 
@@ -69,7 +70,6 @@ sampleflux-ops-random-apply = "sampleflux.ops.random_apply"
 # changes need an editable reinstall before FluxStudio/navigaitor discovery sees the module.
 sampleflux-ops-configure = "sampleflux.ops.configure"
 sampleflux-ops-formula = "sampleflux.ops.formula"
-sampleflux-ops-transform-chain = "sampleflux.ops.transform_chain"
 # Context ops (Save/Use/Drop/Apply/Capture/MergeFields) — the graph-plane building blocks lowered from flow: docs
 sampleflux-ops-context = "sampleflux.ops.context"
 # The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
@@ -81,16 +81,6 @@ sampleflux-ops-numpy = "sampleflux.ops.numpy"
 sampleflux-ops-torch = "sampleflux.ops.torch"
 sampleflux-ops-target = "sampleflux.ops.target"
 sampleflux-ops-image = "sampleflux.ops.image"
-# Augmentation adapters over well-known libraries (pair-scoped input+target ops).
-# Both modules import WITHOUT their library (lazy imports) so discovery stays safe on
-# hosts missing torchvision. Entry-point changes need an editable reinstall
-# (`aisland setup`, never --reinstall) before FluxStudio/navigaitor discovery sees them.
-sampleflux-ops-albumentations = "sampleflux.ops.albumentations"
-sampleflux-ops-torchvision = "sampleflux.ops.torchvision"
-# The auto-generated per-transform op families (Alb<Name> / Tv<Name>) — one node per
-# library transform, generated at import time by sampleflux.ops._augment_bridge.
-sampleflux-ops-albumentations-transforms = "sampleflux.ops.albumentations_transforms"
-sampleflux-ops-torchvision-transforms = "sampleflux.ops.torchvision_transforms"
 # PrintSampleOp (log/print a per-sample summary). Entry-point changes need an editable reinstall
 # before FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
 sampleflux-ops-debug = "sampleflux.ops.debug"
@@ -103,13 +93,11 @@ sampleflux-ops-debug = "sampleflux.ops.debug"
 sampleflux-storage-hdf5 = "sampleflux.storage.hdf5"
 sampleflux-storage-zarr = "sampleflux.storage.zarr"
 sampleflux-storage-directory = "sampleflux.storage.directory"
-# The typed-bag model (sampleflux.bag): the Transform/Pipeline/coercion machinery lives in
-# sampleflux.bag.transform, which imports without torchvision (adapters lazy-import their
-# library). Entry-point changes need an editable reinstall before FluxStudio/navigaitor
-# discovery sees the module (`aisland setup`, never --reinstall).
-sampleflux-bag-transform = "sampleflux.bag.transform"
-# Typed-bag structure ops (SetRole/RenameField/DropField/CopyField/SelectFields) — reshape a
-# Sample's named fields; the typed replacement for the classic triple-slot plumbing.
+# The record model's op surface: Transform (type-dispatched record ops) + Pipeline (THE
+# compose op) live in sampleflux.transform. Entry-point changes need an editable reinstall
+# before FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
+sampleflux-transform = "sampleflux.transform"
+# Structure ops (RenameField/DropField/CopyField/SelectFields) — reshape a record's entries.
 sampleflux-ops-structure = "sampleflux.ops.structure"
 # The runnable orchestration layer: DatasetProcessor (generic source→sink runner) and the
 # workflow combinators (Sequence/Conditional/Switch + PathExists/Not/AllOf/AnyOf predicates).

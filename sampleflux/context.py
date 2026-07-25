@@ -1,7 +1,7 @@
 """Per-sample named-cell store — the graph data plane for graph-shaped pipelines.
 
 A :class:`Context` holds named **cells** for exactly one sample's trip through the op
-list: branch snapshots (a cell holding a :class:`~sampleflux.sample.Sample`), captured
+list: branch snapshots (a cell holding a record dict), captured
 ``@output`` values, and per-sample parameters. The context ops in
 :mod:`sampleflux.ops.context` (``Save`` / ``Use`` / ``Drop`` / ``Apply`` / ``Capture`` /
 ``Mix``) move data between the linear sample stream and these cells, which is what lets

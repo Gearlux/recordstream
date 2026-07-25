@@ -1,55 +1,54 @@
-# Transforms, batching & expanding ops (`sampleflux.bag` / `sampleflux.collate`)
+# Ops, batching & expanding ops (`sampleflux.transform` / `sampleflux.collate`)
 
-## What a transform processes — dispatch on item type
+## What an op processes — dispatch on value type
 
-A **sample** is a named bag of typed items (`Image`, `Mask`, `Regions`, `Label`, … — see [typed-model.md](typed-model.md)). A transform declares which item TYPES it handles and registers a per-type **kernel**; it samples its parameters ONCE per sample, then applies the matching kernel to every field whose item type it handles, passing untouched fields through:
+A **sample** is a plain record dict of typed values (`Image`, `Mask`, `Regions`, `Label`, … — see [record-model.md](record-model.md)). A native op is a `Transform`: it declares which value TYPES it handles and registers a per-type **kernel**; it samples its parameters ONCE per record (`get_params`), then applies the matching kernel to every value whose type it handles, passing untouched values through:
 
 ```python
-from sampleflux import Transform, Image
+from sampleflux import Record, Transform, Image
 
 class Recenter(Transform):
-    handles = (Image,)                       # which item types this transform touches
+    handles = (Image,)                       # which value types this op touches
 
-    def params(self):                        # sampled ONCE per sample, shared across fields
-        return {"mean": 0.5}
+    def get_params(self, record: Record) -> dict:
+        return {"mean": 0.5}                 # sampled ONCE per record, shared across values
 
 @Recenter.kernel(Image)                       # per-type behaviour
-def _(item, params):
-    return item - params["mean"]
+def _(value, params):
+    return value - params["mean"]
 ```
 
-Because the parameters are sampled once and shared, a transform that handles several types moves those fields **consistently** — one flip decision applies to `Image`, `Mask` and `Regions` together, the thing a flat `(input, target, metadata)` triple could not express. Dispatch is MRO-aware: a kernel registered for a base item type also serves its subclasses, and a subclass transform inherits its base's kernels until it overrides them.
+Because the parameters are sampled once and shared, an op that handles several types moves those values **consistently** — one drawn decision applies to every handled value in the record. Dispatch is MRO-aware: a kernel registered for a base item type also serves its subclasses, and a subclass transform inherits its base's kernels until it overrides them.
 
 Two smaller shapes round it out:
 
-- **A plain function** becomes a transform via `as_transform(fn, handles=(Image,), only=["image"])` — `only=` narrows a transform to specific field keys.
-- **A type-changing transform** — read one field, write a differently-typed item (`array → Image`, `Signal → Spectrogram`, `Mask → Regions`) — subclasses `Transform` and overrides `__call__` instead of registering a same-type kernel.
+- **A plain function** becomes an op via `as_transform(fn, handles=(Image,), field="image")` — `field=` pins the op to one named key (still type-gated).
+- **A type-changing op** — read one key, write a differently-typed item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `ConnectedComponents`: `Mask` → `Regions`) — subclasses `Transform` and overrides `__call__` instead of registering a same-type kernel.
 
-Bare library transforms (torchvision `transforms.v2` dispatching by type, albumentations by keyword name) drop straight into a `Pipeline` through registered adapters — each one hits only the field(s) it handles. See [typed-model.md](typed-model.md#mixing-libraries--one-pipeline-many-worlds).
+Bare library transforms (torchvision `transforms.v2` walking the dict natively, albumentations dispatching by keyword name) drop straight into any ops list **as-is** — the engine's op-family dispatch invokes each one the way its own library expects. See [record-model.md](record-model.md#mixing-libraries--as-is-no-adapters) and [augmentation.md](augmentation.md).
 
 ```python
-from sampleflux import Sample, Image, Mask, Regions, Label, Pipeline
-from torchvision.transforms import v2
 import albumentations as A
+from sampleflux import Pipeline
 
 out = Pipeline([
-    v2.RandomHorizontalFlip(p=1.0),          # Image + Mask + Regions together (one library draw)
-    v2.Normalize(mean, std),                 # Image only — wrapped by a registered adapter
-    A.GaussNoise(p=1.0),                     # Image only — wrapped by a registered adapter
-])(sample)
-# a Label field is untouched (no kernel handles it); roles are preserved.
+    A.HorizontalFlip(p=1.0),                 # image + mask + bboxes together (one library draw)
+    A.GaussNoise(p=1.0),                     # image only — its own kwarg vocabulary
+    Recenter(),                              # native op — same list
+])(record)
+# record["class"] (a Label) is untouched: no kernel handles it, no library key names it.
 ```
 
-## Batching — `typed_collate` & the collate registry (`sampleflux.collate`)
+## Batching — `collate_records` & the collate registry (`sampleflux.collate`)
 
-Transforms are per-sample; batching is a separate stage. **`typed_collate`** (auto-dispatched for `Sample` batches) stacks each field's payload and collects each item's per-sample attributes into a list, preserving roles — the ONE batch convention:
+Ops are per-record; batching is a separate stage. **`collate_records`** (the registry's `"record"` default) stacks N record dicts into ONE batched record: per key, typed payloads stack (torch → stacked tensor, numpy → stacked array, else a list) and each item's declared attrs become per-record lists, decoded back into one batched item of the same type; plain values batch as plain lists. Batches must carry the same keys — a mismatch raises.
 
 ```python
-from sampleflux import typed_collate
+from sampleflux import collate_records
 from torch.utils.data import DataLoader
 
-batch = typed_collate(list(flux))            # a batched Sample: payloads stacked per field
-loader = DataLoader(flux, collate_fn=typed_collate)
+batch = collate_records(list(flux))          # ONE batched record: payloads stacked per key
+loader = DataLoader(flux, collate_fn=collate_records)
 ```
 
 Collation is a pluggable registry keyed by name, so a task can register its own convention additively:
@@ -62,24 +61,28 @@ def yolo_collate(items): ...
 loader = DataLoader(flux, collate_fn=get_collate("yolo"))
 ```
 
-The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17).
+The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17-updated-2026-07-25).
 
 ## 1→N expanding ops (iterable-only pipelines)
 
-An op may return **several** carriers — a windowing op splitting one capture into N windows is just a generator-returning op:
+An op may return **several** carriers — a windowing op splitting one capture into N windows marks itself with `EXPANDS = True` and returns an iterable of records:
 
 ```python
 from typing import Iterator
-from sampleflux import Sample, Transform, primary, with_data
+from confluid import configurable
+from sampleflux import Record
+from sampleflux.items import item_data, with_data
 
-@configurable
-class SlidingWindowOp(Transform):
-    def __call__(self, sample: Sample) -> Iterator[Sample]:
-        key, item = primary(sample, "input")
-        for w in sliding_windows(item, self.size, self.stride):
-            yield sample.replace_field(key, with_data(item, w))
+@configurable(category="op")
+class SlidingWindow:
+    EXPANDS = True                                     # the explicit 1→N marker
+
+    def __call__(self, record: Record) -> Iterator[Record]:
+        item = record["signal"]
+        for w in sliding_windows(item_data(item), self.size, self.stride):
+            yield {**record, "signal": with_data(item, w)}
 ```
 
-Expansion is detected from the return annotation (`Iterator[...]` / `Iterable[...]` / `List[...]`; or the explicit `EXPANDS = True` marker) and flattened in every iteration route — sequential, spawn-parallel, and streamed — depth-first, so sibling order matches the nested-loop intuition. Each child continues through the remaining ops with its own (shallow-copied) Context; a child filtered to `None` just drops.
+Expansion is flattened in every iteration route — sequential, spawn-parallel, and streamed — depth-first, so sibling order matches the nested-loop intuition. Each child continues through the remaining ops with its own (shallow-copied) Context; a child filtered to `None` just drops.
 
 A pipeline containing an expanding op is **ITERABLE-ONLY**: `len(flux)` / `flux[i]` raise a clear `TypeError` (the expanded length is unknowable up front). Iterate it, wrap it in a torch `IterableDataset`, window at the source for random access, or materialize with `list(flux)`. `FlowGraph` steps are strictly 1→1 (a named step has one result) — expanding pipelines belong to the `Flux` engine.

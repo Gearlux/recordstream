@@ -23,11 +23,11 @@ Step grammar (the three RESERVED step keys, stripped before the op is built):
 - ``from:`` — the step supplying this step's input sample. Omitted = the previous step
   (the first step reads the source sample). Must name an EARLIER step: document order is
   the schedule, so forward references are errors and cycles are inexpressible.
-- ``merge_from:`` — typed fan-in: UNION another step's fields into this step's incoming
-  sample before the op runs (the ``MergeFields`` slot semantics — last-write-wins on a
+- ``merge_from:`` — fan-in: UNION another step's record entries into this step's incoming
+  record before the op runs (the ``MergeFields`` slot semantics — last-write-wins on a
   key collision, in listed order).
-- ``bind:`` — ``{param: ref}`` per-sample parameters: ``ref`` is a step name (its result
-  sample's primary input, ``step[key]`` for a named field, or the raw value) or
+- ``bind:`` — ``{param: ref}`` per-record parameters: ``ref`` is a step name (the step's
+  whole result record, ``step[key]`` for a named entry, or the raw value) or
   ``step.attr`` (the step op's live ``@output`` after it ran — lowered through ``Capture``).
 
 A step may be a plain mapping with no op (``out: {from: a, merge_from: [b]}``) — a pure
@@ -48,7 +48,8 @@ from confluid import resolve as _confluid_resolve
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
-from sampleflux.bag.sample import Sample, primary
+from sampleflux.core import _apply_op
+from sampleflux.items import Record
 from sampleflux.ops.context import _MISSING, Apply, Capture, Drop, MergeFields, Save, Use, _read_output
 
 logger = get_logger(__name__)
@@ -74,7 +75,7 @@ class _BindRef(NamedTuple):
 
     step: str
     attr: Optional[str]  # "step.attr" = the step op's @output attribute
-    key: Optional[str]  # "step[key]" = the named FIELD of the step's Sample result
+    key: Optional[str]  # "step[key]" = the named ENTRY of the step's record result
 
 
 def _split_bind_ref(ref: str) -> _BindRef:
@@ -245,7 +246,7 @@ def _result_readers(steps: Sequence[FlowStep], outputs: str) -> Dict[str, List[T
 
 
 @configurable(category="engine")
-class FlowGraph(torch.utils.data.Dataset[Sample]):
+class FlowGraph(torch.utils.data.Dataset[Record]):
     """Named-step graph engine — executes a ``flow:`` document natively.
 
     The readable twin of :class:`~sampleflux.core.Flux`: steps run in document order over
@@ -255,7 +256,7 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
     between the two is a pinned contract.
 
     Args:
-        source: Any iterable or indexable dataset (duck-typed) yielding ``Sample`` bags; ``None`` = empty stream.
+        source: Any iterable or indexable dataset (duck-typed) yielding record dicts; ``None`` = empty stream.
         flow: The flow mapping (step-name -> op / marker / step mapping) or a parsed list of FlowStep.
         outputs: Name of the step whose result is yielded. Blank (default) = the last step.
         chunk_size: Batch size for chunked iteration; ``0`` (the default) yields single samples.
@@ -353,23 +354,23 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
             else:
                 sample = seed
 
-            # 2. typed fan-in: UNION the merge_from steps' fields (slot order, last wins)
+            # 2. fan-in: UNION the merge_from steps' entries (slot order, last wins)
             if step.merge_from:
-                if not isinstance(sample, Sample):
+                if not isinstance(sample, dict):
                     raise TypeError(
-                        f"flow step {step.name!r}: merge_from is the typed fan-in but the carrier is "
-                        f"{type(sample).__name__} — expected a Sample."
+                        f"flow step {step.name!r}: merge_from is the record fan-in but the carrier is "
+                        f"{type(sample).__name__} — expected a record dict."
                     )
-                merged = [sample]
+                merged = dict(sample)
                 for ref in step.merge_from:
                     value = read_result(ref, copy=True)
-                    if not isinstance(value, Sample):
+                    if not isinstance(value, dict):
                         raise TypeError(
                             f"flow step {step.name!r}: merge_from step {ref!r} holds "
-                            f"{type(value).__name__}, expected a Sample"
+                            f"{type(value).__name__}, expected a record"
                         )
-                    merged.append(value)
-                sample = Sample.merge(*merged)
+                    merged.update(value)
+                sample = merged
 
             # 3. per-sample parameter binds
             if step.op is not None:
@@ -392,11 +393,11 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
                             )
                     else:
                         value = read_result(parsed.step, copy=False)
-                        if isinstance(value, Sample):
-                            # "step[key]" = the named field; bare "step" = the primary input.
-                            value = value[parsed.key] if parsed.key else primary(value)[1]
+                        if isinstance(value, dict) and parsed.key:
+                            # "step[key]" = the named entry; bare "step" = the whole record.
+                            value = value[parsed.key]
                     setattr(op, param, value)
-                result = op(sample)
+                result = _apply_op(sample, op)
                 if result is None:
                     return None
                 sample = result
@@ -404,14 +405,14 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
             env[step.name] = sample
             prev = step.name
 
-        return cast(Optional[Sample], env.get(outputs)) if outputs in env else None
+        return cast(Optional[Record], env.get(outputs)) if outputs in env else None
 
     def __iter__(self) -> Iterator[Any]:
         if self.source is None:
             return
         it = self._iter_samples()
         if self._chunk_size > 0:
-            batch: List[Sample] = []
+            batch: List[Record] = []
             for sample in it:
                 batch.append(sample)
                 if len(batch) == self._chunk_size:
@@ -422,7 +423,7 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
         else:
             yield from it
 
-    def _iter_samples(self) -> Iterator[Sample]:
+    def _iter_samples(self) -> Iterator[Record]:
         if self._workers > 1:
             yield from self._iter_parallel()
             return
@@ -432,7 +433,7 @@ class FlowGraph(torch.utils.data.Dataset[Sample]):
             if result is not None:
                 yield result
 
-    def _iter_parallel(self) -> Iterator[Sample]:
+    def _iter_parallel(self) -> Iterator[Record]:
         """Multiprocess execution — delegates to the serial engine over the LOWERED op list."""
         from sampleflux.core import Flux
 

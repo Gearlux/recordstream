@@ -5,8 +5,7 @@ from typing import Any, Collection, Dict, Iterator, List, Literal, Optional, get
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.bag import Image, Label, Sample
-from sampleflux.projection import ProjectionField
+from sampleflux.items import Image, Label, Record
 
 logger = get_logger(__name__)
 
@@ -14,9 +13,9 @@ logger = get_logger(__name__)
 def _pass_through(item: Any) -> Any:
     """Pass a wrapped source's item through verbatim.
 
-    Every carrier is a typed-bag :class:`~sampleflux.Sample`; the view sources
+    Every carrier is a plain record dict; the view sources
     (:class:`DatasetSplit` / :class:`RangeSource` / :class:`ConcatSource`) only slice/index,
-    they never inspect payloads, so a source's samples flow through them unchanged.
+    they never inspect payloads, so a source's records flow through them unchanged.
     """
     return item
 
@@ -64,16 +63,16 @@ def _resolve_metadata_features(
 @configurable(category="source")
 class HuggingFaceSource:
     """
-    SampleFlux Source for Hugging Face Datasets, yielding typed-bag :class:`~sampleflux.Sample`\\ s.
+    SampleFlux Source for Hugging Face Datasets, yielding plain record dicts.
 
-    Field mapping (the typed-bag layout that replaces the ``Sample(input, target, metadata)`` triple):
+    Key mapping (the record layout):
 
-    * the ``input_feature`` value (image / array) -> an :class:`~sampleflux.Image` field named
-      ``"image"`` (role ``input``);
-    * the ``target_feature`` value (label) -> a :class:`~sampleflux.Label` field named ``"class"``
-      (role ``target``);
-    * each ``metadata_features`` column -> its own :class:`~sampleflux.Label` field keyed by the column
-      name (role ``aux``), plus the source-provenance ``hf_path`` / ``hf_split`` aux Labels.
+    * the ``input_feature`` value (image / array) -> an :class:`~sampleflux.Image` under the
+      record key ``"image"``;
+    * the ``target_feature`` value (label) -> a :class:`~sampleflux.Label` under the record key
+      ``"class"``;
+    * each ``metadata_features`` column -> its own :class:`~sampleflux.Label` keyed by the column
+      name, plus the source-provenance ``hf_path`` / ``hf_split`` Labels.
 
     Lazy & zero-arg per the workspace class-design convention (see confluid AGENTS.md
     "Lazy Initialization & Zero-Arg Construction"): the constructor only stores values and
@@ -84,9 +83,9 @@ class HuggingFaceSource:
     Args:
         path: HF dataset identifier — a Hub repo id (e.g. ``kitofrank/RFUAV``) or a local imagefolder path.
         split: HF split name (``train`` / ``validation`` / ``test`` / etc.).
-        input_feature: Dataset feature column mapped onto the ``"image"`` input field (an ``Image`` item).
-        target_feature: Dataset feature column mapped onto the ``"class"`` target field (a ``Label`` item).
-        metadata_features: Columns -> per-column aux ``Label`` fields; ``None``=none, ``"*"``=all-but-i/o, else a list.
+        input_feature: Dataset feature column mapped onto the ``"image"`` record key (an ``Image`` item).
+        target_feature: Dataset feature column mapped onto the ``"class"`` record key (a ``Label`` item).
+        metadata_features: Columns -> per-column ``Label`` entries; ``None``=none, ``"*"``=all-but-i/o, else a list.
         count: Optional cap on the number of samples yielded (useful for fast smoke runs).
         name: Optional HF subset/config name (e.g. for multi-config datasets).
     """
@@ -150,44 +149,36 @@ class HuggingFaceSource:
             self.metadata_features, getattr(self.dataset, "column_names", None), self.input_feature, self.target_feature
         )
 
-    def _to_typed_sample(
+    def _to_record(
         self,
         item: Any,
         metadata_features: List[str],
-        *,
-        want_input: bool = True,
-        want_target: bool = True,
-        want_meta: bool = True,
-    ) -> Sample:
-        """Assemble one :class:`~sampleflux.Sample` from a raw HF row dict (see the class docstring
-        for the field mapping).
+        keys: Optional[Collection[str]] = None,
+    ) -> Record:
+        """Assemble one record dict from a raw HF row dict (see the class docstring for the key mapping).
 
-        ``want_input`` / ``want_target`` / ``want_meta`` gate which roles are built — the projection
-        path (:meth:`project`) passes only the requested ones, so an unwanted image is never decoded.
+        ``keys`` gates which record entries are built (``None`` = all) — the projection path
+        (:meth:`project`) passes only the requested ones, so an unwanted image is never decoded.
+        ``metadata_features`` arrives pre-filtered on the projection path.
         """
-        fields: Dict[str, Any] = {}
-        roles: Dict[str, Any] = {}
-        if want_input:
+        record: Record = {}
+        if keys is None or "image" in keys:
             # The input value (image/array) becomes an ``Image`` item; a PIL image / list is coerced
             # to an ndarray by ``Image.__new__`` (np.asarray), preserving the default HWC layout.
-            fields["image"] = Image(item.get(self.input_feature))
-            roles["image"] = "input"
-        if want_target:
-            fields["class"] = Label(item.get(self.target_feature))
-            roles["class"] = "target"
-        if want_meta:
-            # Each requested metadata column rides its OWN aux Label field (typed-bag: metadata belongs
-            # to the item it describes), keyed by the column name. Source provenance follows the same shape.
-            for feature in metadata_features:
-                fields[feature] = Label(item.get(feature))
-                roles[feature] = "aux"
-            fields["hf_path"] = Label(self.path)
-            fields["hf_split"] = Label(self.split)
-            roles["hf_path"] = "aux"
-            roles["hf_split"] = "aux"
-        return Sample(fields, roles)
+            record["image"] = Image(item.get(self.input_feature))
+        if keys is None or "class" in keys:
+            record["class"] = Label(item.get(self.target_feature))
+        # Each requested metadata column rides its OWN Label entry keyed by the column name (the
+        # metadata a value needs travels WITH it). Source provenance follows the same shape.
+        for feature in metadata_features:
+            record[feature] = Label(item.get(feature))
+        if keys is None or "hf_path" in keys:
+            record["hf_path"] = Label(self.path)
+        if keys is None or "hf_split" in keys:
+            record["hf_split"] = Label(self.split)
+        return record
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Record]:
         dataset = self.dataset
         metadata_features = self.resolved_metadata_features
         limit = self.count or len(dataset)
@@ -195,33 +186,29 @@ class HuggingFaceSource:
         for counter, item in enumerate(dataset):
             if counter >= limit:
                 break
-            yield self._to_typed_sample(item, metadata_features)
+            yield self._to_record(item, metadata_features)
 
-    def __getitem__(self, index: int) -> Sample:
-        return self._to_typed_sample(self.dataset[index], self.resolved_metadata_features)
+    def __getitem__(self, index: int) -> Record:
+        return self._to_record(self.dataset[index], self.resolved_metadata_features)
 
-    def project(self, fields: Collection[ProjectionField]) -> Iterator[Sample]:
-        """Yield role-restricted ``Sample``\\ s — the ``SupportsProjection`` efficient path.
+    def project(self, keys: Collection[str]) -> Iterator[Record]:
+        """Yield key-restricted records — the ``SupportsProjection`` efficient path.
 
-        Only the requested roles are built, so a target-only walk (e.g. :func:`~sampleflux.num_classes`)
-        skips decoding the image entirely: ``"input"`` -> the ``"image"`` field, ``"target"`` -> the
-        ``"class"`` Label, ``"metadata"`` -> the aux metadata-feature / provenance Labels.
+        Only the requested keys are built, so a label-only walk (e.g. :func:`~sampleflux.num_classes`)
+        skips decoding the image entirely: ``"image"`` -> the input feature, ``"class"`` -> the target
+        Label, plus any requested metadata-column / provenance keys.
         """
-        want = frozenset(fields)
+        want = frozenset(keys)
         dataset = self.dataset
-        want_meta = "metadata" in want
-        metadata_features = self.resolved_metadata_features if want_meta else []
+        # Resolve (and pre-filter) the metadata columns only when a key beyond the fixed image/class
+        # pair is requested — the "*" expansion needs the loaded dataset's columns.
+        meta_requested = bool(want - {"image", "class"})
+        metadata_features = [f for f in self.resolved_metadata_features if f in want] if meta_requested else []
         limit = self.count or len(dataset)
         for counter, item in enumerate(dataset):
             if counter >= limit:
                 break
-            yield self._to_typed_sample(
-                item,
-                metadata_features,
-                want_input="input" in want,
-                want_target="target" in want,
-                want_meta=want_meta,
-            )
+            yield self._to_record(item, metadata_features, keys=want)
 
     def __len__(self) -> int:
         # A ``count`` of 0 (or None) means "all samples", matching __iter__'s
@@ -237,7 +224,7 @@ class DatasetSplit:
     """
     Splits an indexable source into reproducible ``train`` / ``val`` / ``test`` views.
 
-    A ``source`` (it yields ``Sample``s and is wired into a trainer's ``source:`` slot),
+    A ``source`` (it yields records and is wired into a trainer's ``source:`` slot),
     not an engine — it applies no ops, it just exposes a reproducible partition of another
     source. (For a contiguous index slice use :class:`RangeSource`; to concatenate several
     sources use :class:`ConcatSource`.)
@@ -370,7 +357,7 @@ class DatasetSplit:
         """Cached test-split view (≈ ``test_fraction`` of the source)."""
         return self._view("test")
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Record]:
         return iter(self._view(self.split or "train"))
 
     def __getitem__(self, index: int) -> Any:
@@ -393,7 +380,7 @@ class _SplitView:
         self.source = source
         self.indices = indices
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Record]:
         for idx in self.indices:
             yield _pass_through(self.source[idx])
 
@@ -406,10 +393,10 @@ class _SplitView:
 
 @configurable(category="source")
 class RangeSource:
-    """A contiguous index slice ``[start:end)`` over an indexable source.
+    """A contiguous index slice ``[start:stop)`` over an indexable source.
 
     The plain-slice counterpart to :class:`DatasetSplit` (which shuffles + partitions) —
-    extracted from DatasetSplit's old "range mode". Negative ``start`` / ``end`` count from
+    extracted from DatasetSplit's old "range mode". Negative ``start`` / ``stop`` count from
     the end; both are clamped to ``[0, len(source)]``. Lazy: only index arithmetic happens
     up front; samples are produced on demand.
 
@@ -418,20 +405,20 @@ class RangeSource:
     Args:
         source: The underlying indexable source (defaults to ``None``; validated lazily on first use).
         start: Inclusive start index (``None`` ⇒ 0; a negative value counts from the end).
-        end: Exclusive end index (``None`` ⇒ len(source); a negative value counts from the end).
+        stop: Exclusive stop index (``None`` ⇒ len(source); a negative value counts from the end).
     """
 
-    def __init__(self, source: Any = None, start: Optional[int] = None, end: Optional[int] = None) -> None:
+    def __init__(self, source: Any = None, start: Optional[int] = None, stop: Optional[int] = None) -> None:
         # Lazy / zero-arg: store config only; the index arithmetic (and source validation) is deferred
         # to the ``indices`` property so the source can be configured post-construction.
         self.source = source
         self.start = start
-        self.end = end
+        self.stop = stop
         self._indices: Optional[List[int]] = None
 
     @property
     def indices(self) -> List[int]:
-        """The contiguous ``[start:end)`` source indices, computed lazily on first access and cached."""
+        """The contiguous ``[start:stop)`` source indices, computed lazily on first access and cached."""
         if self._indices is None:
             source = self.source
             if source is None or not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
@@ -440,7 +427,7 @@ class RangeSource:
                 )
             n = len(source)
             s = 0 if self.start is None else self.start
-            e = n if self.end is None else self.end
+            e = n if self.stop is None else self.stop
             if s < 0:
                 s = max(0, n + s)
             if e < 0:
@@ -451,7 +438,7 @@ class RangeSource:
             logger.debug("RangeSource: size=%d source_size=%d", len(self._indices), n)
         return self._indices
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Record]:
         for idx in self.indices:
             yield _pass_through(self.source[idx])
 
@@ -518,7 +505,7 @@ class ConcatSource:
         start = self.offsets[j - 1] if j > 0 else 0
         return _pass_through(self.sources[j][index - start])
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Record]:
         for src in self.sources:
             for item in src:
                 yield _pass_through(item)

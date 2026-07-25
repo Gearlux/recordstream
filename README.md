@@ -6,68 +6,94 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `SampleF
 
 ## 🚀 Key Features
 
--   **Functional Purity:** Transforms are simple Python callables. No complex base classes required.
--   **Typed Bag of Items:** A `Sample` is a named bag of typed items (`Image`, `Mask`, `Regions`, `Label`, …), each owning its own metadata — and [transforms dispatch on item type](docs/typed-model.md), so one sampled decision moves image + mask + boxes together.
--   **Graph pipelines, serial engine:** readable [`flow:` documents](docs/graph.md) with named steps, fan-out/fan-in and per-sample `bind:` parameters — executed natively by `FlowGraph` or lowered (bidirectionally, with pinned execution parity) to a flat context-ops list on the plain sequential `Flux` engine.
+-   **A sample is a plain dict:** the [record model](docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Regions`, `Label`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
+-   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
+-   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
+-   **Graph pipelines, serial engine:** readable [`flow:` documents](docs/graph.md) with named steps, fan-out/fan-in and per-record `bind:` parameters — executed natively by `FlowGraph` or lowered (bidirectionally, with pinned execution parity) to a flat context-ops list on the plain sequential `Flux` engine.
 -   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
 -   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](docs/storage.md#queryable-metadata-samplefluxstoragequery) — filter stored datasets without loading a single array.
--   **Passive Introspection:** transforms declare their [item-type contracts](docs/typed-model.md) (the item types they handle / consume / produce) and are discoverable by category for visual editors and schema generators.
+-   **Passive Introspection:** ops declare the value types they [handle / consume / produce](docs/record-model.md) and are discoverable by category for visual editors and schema generators.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
 
 ## 🛠 Quick Start
 
+One pipeline mixing a **bare albumentations Compose** (image + mask + boxes move together in one draw), a **bare torchvision v2 transform**, and a **native op** — no wrappers (mirrors [`examples/record_pipeline.py`](examples/record_pipeline.py)):
+
 ```python
+import albumentations as A
 import numpy as np
-from sampleflux import Sample, Image, Flux, as_transform, primary
+from sampleflux import Flux, Image, Label, Mask, as_transform
 
-# 1. A plain function becomes a transform, dispatched on item type
-recenter = as_transform(lambda d: d - 0.5, handles=(Image,))
+records = [
+    {
+        "image": Image(rng.random((16, 20, 3)).astype(np.float32)),   # typed: knows its layout
+        "mask": Mask((rng.random((16, 20)) > 0.5).astype(np.uint8)),
+        "bboxes": [[2, 3, 6, 7]],                                     # albumentations vocabulary
+        "labels": ["drone"],
+        "class": Label("drone_x", classes=["noise", "drone_x"]),      # typed: knows its vocab
+        "gain_db": -3.0,                                              # a scalar is just another key
+    }
+    for rng in (np.random.default_rng(i) for i in range(100))
+]
 
-# 2. Build a pipeline over a source of typed samples
-raw_data = [Sample({"input": Image(np.random.randn(10))}) for _ in range(100)]
+flux = Flux(
+    source=records,
+    ops=[
+        A.Compose(                                    # bare albumentations — as-is
+            [A.HorizontalFlip(p=0.5)],
+            bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+        ),
+        A.GaussNoise(p=1.0),                          # image only (its own kwarg vocabulary)
+        as_transform(lambda d: d - 0.5, handles=(Image,)),   # native: a plain function op
+    ],
+).parallel(workers=4)
 
-flux = (
-    Flux(source=raw_data, ops=[recenter])
-    .filter(lambda s: primary(s, "input")[1].mean() > 0)
-    .parallel(workers=4)
-)
+for record in flux:
+    print(record["image"].shape, record["class"].value)   # image+mask+boxes flipped together
+```
 
-# 3. Collect or stream
-for sample in flux:
-    _, item = primary(sample, "input")   # (key, item)
-    print(item.shape)
+The same ops list in Confluid YAML — bare library transforms are ordinary `!class:` nodes:
+
+```yaml
+ops:
+  - !class:albumentations.HorizontalFlip
+    p: 0.5
+  - !class:albumentations.GaussNoise
+    p: 1.0
+  - !class:sampleflux.ops.numpy.Threshold
+    low_level: 0.5
 ```
 
 ## 📚 Documentation
 
 | Page | Covers |
 |---|---|
-| [docs/kinds.md](docs/kinds.md) | The transform taxonomy (field scope × call style), multi-type carriers (`Flux(native=True)`), the collate registry, 1→N expanding ops |
+| [docs/record-model.md](docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
+| [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`), 1→N expanding ops |
 | [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, the six Context ops on the serial engine, bidirectional flow⇄ops conversion, `Flux.from_ops_yaml` |
 | [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing |
-| [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources, array-valued metadata, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
-| [docs/projection.md](docs/projection.md) | Field projection (`SupportsProjection`), lazy target walks, `num_classes`, the fittable `LabelMap` |
+| [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
+| [docs/projection.md](docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), `num_classes`, the fittable `LabelMap` |
 | [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), array introspection helpers |
-| [docs/configure.md](docs/configure.md) | Per-sample op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
-| [docs/augmentation.md](docs/augmentation.md) | Augmentation via albumentations / torchvision `transforms.v2` — joint input+target (mask/boxes) adapters, the generated `Alb*`/`Tv*` per-transform ops, seeding, Confluid-native YAML |
-| [docs/typed-model.md](docs/typed-model.md) | The typed-bag data model: a `Sample` is a named bag of typed items (each owning its metadata), type-dispatched transforms, torchvision/albumentations adapters, custom item types |
+| [docs/configure.md](docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
+| [docs/augmentation.md](docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
 | [docs/architecture.md](docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
 
 ## 🧭 Scope: a modality-neutral engine
 
 SampleFlux deliberately contains **no domain-specific code** — every op, source and sink in this package is meaningful for any modality (arrays, tensors, images, generic metadata). Domain packages build on it and keep their own vocabulary:
 
-- Signal/waveform work (1-D FFT + windowing ops, SigMF recording storage, spectrograms, the annotation-join source) lives in the **waivefront** package.
+- Signal/waveform items and ops (spectrograms, FFT windows, recording formats) live in the domain package, which registers its item types into the same registries.
 - Task-specific trainers, collates and models live in their consuming projects.
 
 ## 🌐 Ecosystem Integration
 
 SampleFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines:
 
-- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into typed `Sample` bags with full metadata traceability (see [docs/sources.md](docs/sources.md)).
-- **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node, every run reproducible.
-- **PyTorch**: `Flux` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#multi-type-carriers--the-collate-registry-samplefluxcollate).
-- **Augmentation libraries**: `AlbumentationsOp` / `TorchvisionTransformOp` wrap [albumentations](https://albumentations.ai) and torchvision `transforms.v2` as ops that augment input AND target (mask / detection boxes) jointly — plus an auto-generated op per individual library transform (`AlbHorizontalFlip`, `TvColorJitter`, …), each a graph node and a Confluid `!class:` one-liner (see [docs/augmentation.md](docs/augmentation.md); torchvision via `pip install "sampleflux[vision]"`).
+- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability (see [docs/sources.md](docs/sources.md)).
+- **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node — including bare library transforms — every run reproducible.
+- **PyTorch**: `Flux` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#batching--collate_records--the-collate-registry-samplefluxcollate) (`collate_records` is the default).
+- **Augmentation libraries**: [albumentations](https://albumentations.ai) and torchvision `transforms.v2` transforms run **as-is** in any ops list — the engine speaks each library's native convention (kwarg vocabulary vs dict walk), so there is nothing to wrap (see [docs/augmentation.md](docs/augmentation.md)).
 
 ## 🔧 Installation
 

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from sampleflux import Label, Sample
+from sampleflux import Label
 from sampleflux.labels import LabelMap
 from sampleflux.ops.target import DecodeTarget, EncodeTarget
 
@@ -86,7 +86,7 @@ def test_encode_op_encodes_target() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     op = lm.encode_op()
     assert isinstance(op, EncodeTarget)
-    out = op(Sample({"y": Label("dog")}, roles={"y": "target"}))
+    out = op({"y": Label("dog")})
     assert out["y"].value == 1
 
 
@@ -94,14 +94,14 @@ def test_decode_op_inverts_encoding() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     op = lm.decode_op()
     assert isinstance(op, DecodeTarget)
-    out = op(Sample({"y": Label(0)}, roles={"y": "target"}))
+    out = op({"y": Label(0)})
     assert out["y"].value == "cat"
 
 
 def test_encode_op_ignore_unknown() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     op = lm.encode_op(ignore_unknown=True, default=-1)
-    out = op(Sample({"y": Label("fish")}, roles={"y": "target"}))
+    out = op({"y": Label("fish")})
     assert out["y"].value == -1
 
 

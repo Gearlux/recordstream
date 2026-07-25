@@ -1,14 +1,14 @@
-"""Typed FlowGraph — merge_from fan-in, step[key] bind, typed carriers through Flux, parity."""
+"""FlowGraph over dict records — merge_from fan-in, step[key]/bare-step bind, lowering parity."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import pytest
 
-from sampleflux import FlowGraph, Flux, Image, Label, Mask, Sample, Transform, to_ops
+from sampleflux import FlowGraph, Flux, Image, Label, Mask, Pipeline, Record, Transform, to_ops
 from sampleflux.flow import from_ops, parse_flow
 from sampleflux.ops.context import MergeFields
-from sampleflux.ops.structure import RenameField, SetRole
+from sampleflux.ops.structure import RenameField, SelectFields
 
 
 class _AddOffset(Transform):
@@ -16,46 +16,40 @@ class _AddOffset(Transform):
 
     handles = (Image,)
 
-    def __init__(self, offset: float = 0.0, only: Optional[List[str]] = None) -> None:
-        super().__init__(only=only)
+    def __init__(self, offset: float = 0.0, field: Optional[str] = None) -> None:
+        super().__init__(field=field)
         self.offset = offset
 
-    def __call__(self, sample: Sample) -> Sample:
-        out = sample
-        for key, item in sample.items():
-            if isinstance(item, Image) and (self.only is None or key in self.only):
-                out = out.replace_field(key, Image(np.asarray(item) + self.offset, layout=item.layout))
+    def __call__(self, record: Record) -> Record:
+        out = dict(record)
+        for key, item in record.items():
+            if isinstance(item, Image) and (self.field is None or key == self.field):
+                out[key] = Image(np.asarray(item) + self.offset, layout=item.layout)
         return out
 
 
 class _MakeMask(Transform):
-    """Derives a Mask field from the first Image (a branch producer)."""
+    """Derives a Mask entry from the first Image (a branch producer)."""
 
-    def __call__(self, sample: Sample) -> Sample:
-        image = next(item for item in sample.fields.values() if isinstance(item, Image))
-        out = sample.replace_field("mask", Mask(np.asarray(image)[..., 0] > 0.5))
-        return out.set_role("mask", "target")
-
-
-def _seed(value: float = 0.0) -> Sample:
-    return Sample(
-        {"image": Image(np.full((2, 3, 3), value, dtype=np.float32)), "label": Label("x")},
-        roles={"label": "target"},
-    )
+    def __call__(self, record: Record) -> Record:
+        image = next(item for item in record.values() if isinstance(item, Image))
+        return {**record, "mask": Mask(np.asarray(image)[..., 0] > 0.5)}
 
 
-class TestTypedFlowGraph:
-    def test_linear_typed_flow(self) -> None:
+def _seed(value: float = 0.0) -> Record:
+    return {"image": Image(np.full((2, 3, 3), value, dtype=np.float32)), "label": Label("x")}
+
+
+class TestFlowGraph:
+    def test_linear_flow(self) -> None:
         graph = FlowGraph(source=[_seed(1.0)], flow={"plus": _AddOffset(offset=2.0)})
         (out,) = list(graph)
-        assert isinstance(out, Sample) and np.allclose(np.asarray(out["image"]), 3.0)
+        assert isinstance(out, dict) and np.allclose(np.asarray(out["image"]), 3.0)
 
     def test_merge_from_union(self) -> None:
-        # Fork: derive a mask on a branch, SELECT the new field, union it back into the main
-        # stream. (Selecting is the idiom — a full branch bag would also carry its own
+        # Fork: derive a mask on a branch, SELECT the new entry, union it back into the main
+        # stream. (Selecting is the idiom — a full branch record would also carry its own
         # 'image', and last-wins would overwrite the boosted one.)
-        from sampleflux.ops.structure import SelectFields
-
         flow = {
             "start": {},
             "masked": {"op": _MakeMask(), "from": "start"},
@@ -66,11 +60,12 @@ class TestTypedFlowGraph:
         graph = FlowGraph(source=[_seed(0.75)], flow=flow, outputs="out")
         (out,) = list(graph)
         assert np.allclose(np.asarray(out["image"]), 1.75)  # the boosted branch's image survives
-        assert "mask" in out and out.role_of("mask") == "target"  # the selected branch field
+        assert "mask" in out and isinstance(out["mask"], Mask)  # the selected branch entry
         assert out["label"].value == "x"
 
     def test_merge_collision_last_wins(self) -> None:
-        # Both branches carry 'image'; the merge source is listed LAST -> its image wins.
+        # Both branches carry 'image'; the merge source is listed LAST -> its image wins
+        # (dict-union semantics, listed order).
         flow = {
             "start": {},
             "a": {"op": _AddOffset(offset=1.0), "from": "start"},
@@ -92,20 +87,18 @@ class TestTypedFlowGraph:
         assert "image_b" in out  # branch b united under its renamed key
 
     def test_step_key_bind(self) -> None:
-        # bind offset := the 'probe' step's image payload mean is NOT expressible without a
-        # value op — bind the FIELD instead and let the op read it: offset receives the
-        # Image item from probe via step[image].
+        # step[key] binds the NAMED ENTRY of the bound step's record result.
         class _OffsetFromItem(Transform):
             def __init__(self, item: Any = None) -> None:
                 super().__init__()
                 self.item = item
 
-            def __call__(self, sample: Sample) -> Sample:
+            def __call__(self, record: Record) -> Record:
                 offset = float(np.asarray(self.item).mean())
-                out = sample
-                for key, value in sample.items():
+                out = dict(record)
+                for key, value in record.items():
                     if isinstance(value, Image):
-                        out = out.replace_field(key, Image(np.asarray(value) + offset, layout=value.layout))
+                        out[key] = Image(np.asarray(value) + offset, layout=value.layout)
                 return out
 
         flow = {
@@ -116,26 +109,27 @@ class TestTypedFlowGraph:
         (out,) = list(FlowGraph(source=[_seed(0.0)], flow=flow, outputs="final"))
         assert np.allclose(np.asarray(out["image"]), 2.0)  # 0.0 + mean(2.0)
 
-    def test_bare_step_bind_is_primary(self) -> None:
-        class _CapturePrimary(Transform):
+    def test_bare_step_bind_is_whole_record(self) -> None:
+        class _CaptureWhole(Transform):
             def __init__(self, item: Any = None) -> None:
                 super().__init__()
                 self.item = item
 
-            def __call__(self, sample: Sample) -> Sample:
-                assert isinstance(self.item, Image)  # primary input-role field of the bound step
-                return sample
+            def __call__(self, record: Record) -> Record:
+                # bare "probe" bind = the step's WHOLE result record dict.
+                assert isinstance(self.item, dict) and isinstance(self.item["image"], Image)
+                return record
 
         flow = {
             "start": {},
             "probe": {"op": _AddOffset(offset=1.0), "from": "start"},
-            "final": {"op": _CapturePrimary(), "from": "start", "bind": {"item": "probe"}},
+            "final": {"op": _CaptureWhole(), "from": "start", "bind": {"item": "probe"}},
         }
         (out,) = list(FlowGraph(source=[_seed(0.0)], flow=flow, outputs="final"))
-        assert isinstance(out, Sample)
+        assert isinstance(out, dict)
 
     def test_legacy_fanin_key_removed(self) -> None:
-        # target_from / metadata_from (the legacy Sample fan-in) were purged; they are now
+        # target_from / metadata_from (the legacy role fan-in) were purged; they are now
         # unknown step keys — a flow document using one fails loudly at parse.
         flow = {
             "start": {},
@@ -155,10 +149,8 @@ class TestTypedFlowGraph:
             parse_flow({"a": {"merge_from": ["b"]}, "b": {}})
 
 
-class TestTypedLoweringParity:
+class TestLoweringParity:
     def _flow(self) -> Dict[str, Any]:
-        from sampleflux.ops.structure import SelectFields
-
         return {
             "start": {},
             "masked": {"op": _MakeMask(), "from": "start"},
@@ -173,7 +165,9 @@ class TestTypedLoweringParity:
         native = list(FlowGraph(source=[_seed(0.25)], flow=self._flow(), outputs="out"))
         lowered = list(Flux(source=[_seed(0.25)], ops=to_ops(steps, outputs)))
         assert len(native) == len(lowered) == 1
-        assert native[0] == lowered[0]
+        assert list(native[0].keys()) == list(lowered[0].keys())
+        assert np.array_equal(np.asarray(native[0]["image"]), np.asarray(lowered[0]["image"]))
+        assert np.array_equal(np.asarray(native[0]["mask"]), np.asarray(lowered[0]["mask"]))
 
     def test_round_trip_from_ops(self) -> None:
         steps, outputs = parse_flow(self._flow())
@@ -190,8 +184,8 @@ class TestTypedLoweringParity:
                 super().__init__()
                 self.item = item
 
-            def __call__(self, sample: Sample) -> Sample:
-                return sample.replace_field("echo", self.item)
+            def __call__(self, record: Record) -> Record:
+                return {**record, "echo": self.item}
 
         flow = {
             "start": {},
@@ -208,20 +202,19 @@ class TestTypedLoweringParity:
         assert np.allclose(np.asarray(out["echo"]), 3.0)
 
 
-class TestTypedThroughFlux:
-    def test_default_flux_carries_typed_verbatim(self) -> None:
-        # No native=True needed: a Sample source item is NEVER coerced to legacy Sample.
+class TestRecordsThroughFlux:
+    def test_flux_carries_record_dicts_verbatim(self) -> None:
         flux = Flux(source=[_seed(1.0)], ops=[_AddOffset(offset=1.0)])
         (out,) = list(flux)
-        assert isinstance(out, Sample) and np.allclose(np.asarray(out["image"]), 2.0)
+        assert isinstance(out, dict) and np.allclose(np.asarray(out["image"]), 2.0)
 
-    def test_getitem_typed(self) -> None:
-        flux = Flux(source=[_seed(1.0), _seed(2.0)], ops=[SetRole(key="image", role="aux")])
-        assert flux[1].role_of("image") == "aux"
+    def test_getitem(self) -> None:
+        flux = Flux(source=[_seed(1.0), _seed(2.0)], ops=[RenameField(src="label", dst="klass")])
+        out = flux[1]
+        assert "klass" in out and np.allclose(np.asarray(out["image"]), 2.0)
 
-    def test_compose_ops_route_typed(self) -> None:
-        from sampleflux.ops.transform_chain import TransformChain
-
-        flux = Flux(source=[_seed(1.0)], ops=[TransformChain(ops=[_AddOffset(offset=1.0), _AddOffset(offset=2.0)])])
+    def test_compose_ops_route_records(self) -> None:
+        # Pipeline (the compose-group grouping op — TransformChain's replacement).
+        flux = Flux(source=[_seed(1.0)], ops=[Pipeline(transforms=[_AddOffset(offset=1.0), _AddOffset(offset=2.0)])])
         (out,) = list(flux)
         assert np.allclose(np.asarray(out["image"]), 4.0)

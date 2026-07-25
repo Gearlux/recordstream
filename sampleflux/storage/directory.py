@@ -5,11 +5,20 @@ from typing import Any, Dict, Iterator, Union
 import confluid
 import numpy as np
 
-from sampleflux.bag.io import EncodedItem, decode_item, encode_item
-from sampleflux.bag.sample import Sample
-from sampleflux.storage.base import DataSink, Storage, restore_attrs, split_attrs, to_numpy
+from sampleflux.io import PLAIN_TYPE, EncodedItem, decode_item, encode_item
+from sampleflux.items import Record
+from sampleflux.storage.base import (
+    PLAIN_VALUE,
+    TYPED_FORMAT,
+    DataSink,
+    Storage,
+    require_record_format,
+    restore_attrs,
+    split_attrs,
+    to_numpy,
+)
 
-#: Typed-layout filenames inside each per-sample directory.
+#: Record-layout filenames inside each per-sample directory.
 _FIELDS_JSON = "fields.json"
 _FIELDS_NPZ = "fields.npz"
 
@@ -18,7 +27,7 @@ _FIELDS_NPZ = "fields.npz"
 @confluid.configurable(category="sink")
 class DirectorySink(Storage, DataSink):
     """
-    High-concurrency sink that stores each Sample in its own directory.
+    High-concurrency sink that stores each record in its own directory.
     Perfect for irregular data lengths and massive parallel writing.
     """
 
@@ -36,35 +45,50 @@ class DirectorySink(Storage, DataSink):
         self.path.mkdir(parents=True, exist_ok=True)
         return self
 
-    def write(self, sample: Any) -> None:
-        """Write a sample to its own subdirectory."""
-        if not isinstance(sample, Sample):
-            raise TypeError(f"DirectorySink: expected a Sample bag, got {type(sample).__name__}")
+    def write(self, record: Any) -> None:
+        """Write a record to its own subdirectory."""
+        if not isinstance(record, dict):
+            raise TypeError(f"DirectorySink: expected a record dict, got {type(record).__name__}")
         self.open()
-        self._write_typed(sample)
+        self._write_record(record)
 
-    def _write_typed(self, sample: Sample) -> None:
-        """One sample in the typed field-group layout: ``fields.json`` + ``fields.npz``.
+    def _write_record(self, record: Record) -> None:
+        """One record in the key-group layout: ``fields.json`` + ``fields.npz``.
 
-        ``fields.json`` describes every field (order, item type, role, plain attrs);
-        ``fields.npz`` carries the array halves — payloads keyed by field name, array-valued
-        attrs keyed ``<field>.<attr>``. Every item serializes through the
-        :mod:`sampleflux.bag.io` codec, so externally-registered item types round-trip with
-        no storage edits.
+        ``fields.json`` describes every entry (order, item type, plain attrs — a ``"plain"``
+        value's non-array payload rides its ``attrs`` under ``"value"``, JSON-marked when
+        structured); ``fields.npz`` carries the array halves — payloads keyed by record key,
+        array-valued attrs keyed ``<key>.<attr>``. Every value serializes through the
+        :mod:`sampleflux.io` codec, so externally-registered item types round-trip with no
+        storage edits.
         """
         sample_dir = self.path / f"{self._counter:06d}"
         sample_dir.mkdir(parents=True, exist_ok=True)
 
-        spec: Dict[str, Any] = {"sampleflux_format": "typedsample-v1", "fields": []}
+        spec: Dict[str, Any] = {"sampleflux_format": TYPED_FORMAT, "fields": []}
         payloads: Dict[str, Any] = {}
-        for key, item in sample.items():
-            encoded = encode_item(item)
+        for key, value in record.items():
+            encoded = encode_item(value)
+            if encoded.type_name == PLAIN_TYPE:
+                plain, arrays = split_attrs({PLAIN_VALUE: encoded.payload})
+                has_payload = bool(arrays)
+                spec["fields"].append(
+                    {
+                        "key": key,
+                        "type": encoded.type_name,
+                        "attrs": plain,
+                        "array_attrs": [],
+                        "has_payload": has_payload,
+                    }
+                )
+                if has_payload:
+                    payloads[key] = np.asarray(arrays[PLAIN_VALUE])
+                continue
             plain, arrays = split_attrs(encoded.attrs)
             spec["fields"].append(
                 {
                     "key": key,
                     "type": encoded.type_name,
-                    "role": sample.role_of(key),
                     "attrs": plain,
                     "array_attrs": sorted(arrays),
                     "has_payload": encoded.payload is not None,
@@ -72,8 +96,8 @@ class DirectorySink(Storage, DataSink):
             )
             if encoded.payload is not None:
                 payloads[key] = np.asarray(to_numpy(encoded.payload))
-            for name, value in arrays.items():
-                payloads[f"{key}.{name}"] = np.asarray(value)
+            for name, attr_value in arrays.items():
+                payloads[f"{key}.{name}"] = np.asarray(attr_value)
 
         (sample_dir / _FIELDS_JSON).write_text(json.dumps(spec, indent=2))
         if payloads:
@@ -86,9 +110,9 @@ class DirectorySink(Storage, DataSink):
 
 @confluid.configurable
 class DirectorySource(Storage):
-    """Read typed samples written by :class:`DirectorySink` (one ``fields.json`` + ``fields.npz`` per sample).
+    """Read records written by :class:`DirectorySink` (one ``fields.json`` + ``fields.npz`` per record).
 
-    The matching source of the sink's TYPED layout (one directory per sample, sorted by the
+    The matching source of the sink's record layout (one directory per record, sorted by the
     zero-padded name, so read order matches write order).
 
     Args:
@@ -104,7 +128,7 @@ class DirectorySource(Storage):
             raise FileNotFoundError(f"DirectorySource: {self.path} does not exist")
         return sorted(p for p in self.path.iterdir() if p.is_dir() and (p / _FIELDS_JSON).exists())
 
-    def __iter__(self) -> Iterator[Sample]:
+    def __iter__(self) -> Iterator[Record]:
         for sample_dir in self._sample_dirs():
             yield self._read(sample_dir)
 
@@ -112,17 +136,26 @@ class DirectorySource(Storage):
         return len(self._sample_dirs())
 
     @staticmethod
-    def _read(sample_dir: Path) -> Sample:
+    def _read(sample_dir: Path) -> Record:
         spec = json.loads((sample_dir / _FIELDS_JSON).read_text())
+        require_record_format(spec.get("sampleflux_format"), "DirectorySource")
         npz_path = sample_dir / _FIELDS_NPZ
         payloads = dict(np.load(npz_path, allow_pickle=False)) if npz_path.exists() else {}
-        fields: Dict[str, Any] = {}
-        roles: Dict[str, Any] = {}
+        record: Record = {}
+        payload: Any
         for entry in spec["fields"]:
             key = entry["key"]
+            if entry["type"] == PLAIN_TYPE:
+                # A plain value: array payload in the npz, non-array payload restored from the
+                # ``value`` attr (see DirectorySink._write_record).
+                if entry["has_payload"]:
+                    payload = payloads[key]
+                else:
+                    payload = restore_attrs(dict(entry["attrs"]), {}).get(PLAIN_VALUE)
+                record[key] = decode_item(EncodedItem(type_name=PLAIN_TYPE, payload=payload, attrs={}))
+                continue
             arrays = {name: payloads[f"{key}.{name}"] for name in entry["array_attrs"]}
             attrs = restore_attrs(dict(entry["attrs"]), arrays)
             payload = payloads[key] if entry["has_payload"] else None
-            fields[key] = decode_item(EncodedItem(type_name=entry["type"], payload=payload, attrs=attrs))
-            roles[key] = entry["role"]
-        return Sample(fields, roles)
+            record[key] = decode_item(EncodedItem(type_name=entry["type"], payload=payload, attrs=attrs))
+        return record

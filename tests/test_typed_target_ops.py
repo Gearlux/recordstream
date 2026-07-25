@@ -1,22 +1,22 @@
-"""Typed-bag TWINS of the tensorization + target-shaping ops.
+"""The tensorization + target-shaping ops over dict records.
 
-Pins the native typed transforms that let a ``Sample`` classification pipeline build its
-model INPUT tensor and its encoded TARGET ``Label`` without the legacy ``Sample`` path:
+Pins the native transforms that build a classification pipeline's model INPUT array and its
+encoded TARGET ``Label`` on plain record dicts:
 
-* :class:`sampleflux.ops.torch.ToTensor` — array-bearing field → CHW-float ``Image`` item;
-* :class:`sampleflux.ops.target.MetadataToTarget` — a field / attr value → a target ``Label``;
+* :class:`sampleflux.ops.torch.ToTensor` — array-bearing key → a LIVE CHW-float ``torch.Tensor`` (a plain record value);
+* :class:`sampleflux.ops.target.MetadataToTarget` — a key / attr value → a target ``Label``;
 * :class:`sampleflux.ops.target.EncodeTarget` / ``DecodeTarget`` — class-name ↔ class-id ``Label``.
 
-Each twin REUSES its legacy op's math, so the twin's output is pinned byte-identical to a legacy
-run on the equivalent ``Sample`` (parity). sampleflux-only — no waivefront import.
+Each op REUSES its shared conversion helper, so the op output is pinned identical to the
+helper (parity). sampleflux-only — no domain-package import.
 """
 
 import numpy as np
 import pytest
+import torch
 from confluid.registry import get_registry, resolve_class
 
-from sampleflux import Image, Label, Mask, Sample
-from sampleflux.collate import typed_collate
+from sampleflux import Image, Label, Mask, collate_records, item_data
 from sampleflux.ops.image import ConvertToImage
 from sampleflux.ops.target import DecodeTarget, EncodeTarget, MetadataToTarget
 from sampleflux.ops.torch import ToTensor, to_tensor
@@ -33,69 +33,66 @@ def _hwc_uint8() -> np.ndarray:
 # ToTensor
 # --------------------------------------------------------------------------- #
 class TestToTensor:
-    def test_produces_chw_float_image_role_preserved(self) -> None:
+    def test_produces_chw_float_tensor(self) -> None:
         arr = _hwc_uint8()
-        out = ToTensor()(Sample({"image": Image(arr)}, roles={"image": "input"}))
-        img = out["image"]
-        assert isinstance(img, Image)
-        assert img.layout == "CHW"
-        payload = np.asarray(img)
-        assert payload.shape == (3, 4, 5)  # HWC -> CHW
-        assert payload.dtype == np.float32
-        assert payload.max() <= 1.0  # normalized
-        assert out.role_of("image") == "input"  # replaced in place -> role preserved
+        out = ToTensor()({"image": Image(arr)})
+        tensor = out["image"]
+        assert isinstance(tensor, torch.Tensor)
+        assert tuple(tensor.shape) == (3, 4, 5)  # HWC -> CHW
+        assert tensor.dtype == torch.float32
+        assert float(tensor.max()) <= 1.0  # normalized
 
     def test_parity_with_to_tensor_helper(self) -> None:
         arr = _hwc_uint8()
-        typed = ToTensor()(Sample({"image": Image(arr)}))
+        out = ToTensor()({"image": Image(arr)})
         expected = to_tensor(arr).numpy()
-        assert np.array_equal(np.asarray(typed["image"]), expected)
+        assert np.array_equal(np.asarray(out["image"]), expected)
 
     def test_parity_no_normalize(self) -> None:
         arr = _hwc_uint8()
-        typed = ToTensor(normalize=False)(Sample({"image": Image(arr)}))
+        out = ToTensor(normalize=False)({"image": Image(arr)})
         expected = to_tensor(arr, normalize=False).numpy()
-        assert np.array_equal(np.asarray(typed["image"]), expected)
+        assert np.array_equal(np.asarray(out["image"]), expected)
 
-    def test_payload_is_numpy_not_live_tensor(self) -> None:
-        # NDArrayItem coerces its payload via np.asarray, so an Image CANNOT hold a live tensor;
-        # the stored CHW-float payload is a numpy array (values identical to the legacy tensor).
-        from sampleflux.bag.items import item_data
+    def test_output_is_a_plain_live_tensor(self) -> None:
+        # The record model holds arbitrary values: the tensor rides AS-IS (no Image wrap — an
+        # NDArrayItem coerces via np.asarray and cannot hold a live tensor). item_data passes
+        # a plain value through unchanged.
+        out = ToTensor()({"image": Image(_hwc_uint8())})
+        assert isinstance(out["image"], torch.Tensor)
+        assert not isinstance(out["image"], Image)
+        assert item_data(out["image"]) is out["image"]
 
-        out = ToTensor()(Sample({"image": Image(_hwc_uint8())}))
-        assert isinstance(item_data(out["image"]), np.ndarray)
-
-    def test_new_output_field_tagged_input(self) -> None:
+    def test_new_output_key_keeps_source(self) -> None:
         arr = _hwc_uint8()
-        out = ToTensor(output="tensor")(Sample({"image": Image(arr)}, roles={"image": "input"}))
+        out = ToTensor(output="tensor")({"image": Image(arr)})
         assert np.asarray(out["tensor"]).shape == (3, 4, 5)
-        assert out.role_of("tensor") == "input"
-        # original field left as-is (HWC uint8)
+        # original entry left as-is (HWC uint8)
         assert np.asarray(out["image"]).shape == (4, 5, 3)
 
     def test_explicit_field(self) -> None:
-        s = Sample({"a": Mask(np.zeros((2, 2), dtype=np.uint8)), "b": Image(_hwc_uint8())})
-        out = ToTensor(field="b")(s)
+        rec = {"a": Mask(np.zeros((2, 2), dtype=np.uint8)), "b": Image(_hwc_uint8())}
+        out = ToTensor(field="b")(rec)
         assert np.asarray(out["b"]).shape == (3, 4, 5)
 
-    def test_default_picks_first_array_field(self) -> None:
-        s = Sample({"lbl": Label("cat"), "image": Image(_hwc_uint8())})
-        out = ToTensor()(s)
+    def test_default_picks_first_array_key(self) -> None:
+        rec = {"lbl": Label("cat"), "image": Image(_hwc_uint8())}
+        out = ToTensor()(rec)
         assert np.asarray(out["image"]).shape == (3, 4, 5)
 
     def test_missing_explicit_field_raises(self) -> None:
-        with pytest.raises(ValueError, match="field 'nope' not in sample"):
-            ToTensor(field="nope")(Sample({"image": Image(_hwc_uint8())}))
+        with pytest.raises(ValueError, match="field 'nope' not in record"):
+            ToTensor(field="nope")({"image": Image(_hwc_uint8())})
 
     def test_no_array_field_raises(self) -> None:
         with pytest.raises(ValueError, match="no array-bearing field"):
-            ToTensor()(Sample({"lbl": Label("cat")}))
+            ToTensor()({"lbl": Label("cat")})
 
-    def test_typed_collate_stacks_payloads(self) -> None:
-        # The typed collate stacks the CHW-float Image payloads into a batched array.
-        a = ToTensor()(Sample({"image": Image(_hwc_uint8())}))
-        b = ToTensor()(Sample({"image": Image(_hwc_uint8())}))
-        batch = typed_collate([a, b])
+    def test_record_collate_stacks_payloads(self) -> None:
+        # The record collate stacks the CHW-float Image payloads into a batched array.
+        a = ToTensor()({"image": Image(_hwc_uint8())})
+        b = ToTensor()({"image": Image(_hwc_uint8())})
+        batch = collate_records([a, b])
         assert np.asarray(batch["image"]).shape == (2, 3, 4, 5)
 
 
@@ -104,134 +101,120 @@ class TestToTensor:
 # --------------------------------------------------------------------------- #
 class TestMetadataToTarget:
     def test_promotes_label_value_to_target(self) -> None:
-        s = Sample({"class": Label("cat")}, roles={"class": "aux"})
-        out = MetadataToTarget(field="class", output="target")(s)
+        out = MetadataToTarget(field="class", output="target")({"class": Label("cat")})
         assert isinstance(out["target"], Label)
         assert out["target"].value == "cat"
-        assert out.role_of("target") == "target"
 
     def test_default_picks_first_label(self) -> None:
-        s = Sample({"image": Image(_hwc_uint8()), "y": Label("dog")})
-        out = MetadataToTarget()(s)
+        rec = {"image": Image(_hwc_uint8()), "y": Label("dog")}
+        out = MetadataToTarget()(rec)
         assert out["target"].value == "dog"
-        assert out.role_of("target") == "target"
 
     def test_read_named_attribute(self) -> None:
-        # Read a carried attribute off a field (a value that rode as item-scoped metadata).
-        s = Sample({"y": Label("cat", classes=["cat", "dog"])})
-        out = MetadataToTarget(field="y", key="classes", output="vocab")(s)
+        # Read a carried attribute off an item (metadata lives ON the value that owns it).
+        out = MetadataToTarget(field="y", key="classes", output="vocab")({"y": Label("cat", classes=["cat", "dog"])})
         assert out["vocab"].value == ["cat", "dog"]
 
     def test_missing_attribute_raises(self) -> None:
         with pytest.raises(AttributeError, match="no attribute 'nope'"):
-            MetadataToTarget(field="y", key="nope")(Sample({"y": Label("cat")}))
+            MetadataToTarget(field="y", key="nope")({"y": Label("cat")})
 
     def test_missing_field_raises(self) -> None:
-        with pytest.raises(ValueError, match="field 'nope' not in sample"):
-            MetadataToTarget(field="nope")(Sample({"y": Label("cat")}))
+        with pytest.raises(ValueError, match="field 'nope' not in record"):
+            MetadataToTarget(field="nope")({"y": Label("cat")})
 
-    def test_empty_sample_raises(self) -> None:
-        with pytest.raises(ValueError, match="sample is empty"):
-            MetadataToTarget()(Sample({}))
+    def test_empty_record_raises(self) -> None:
+        with pytest.raises(ValueError, match="record is empty"):
+            MetadataToTarget()({})
 
 
 # --------------------------------------------------------------------------- #
 # EncodeTarget / DecodeTarget
 # --------------------------------------------------------------------------- #
 class TestEncodeDecodeTarget:
-    def test_encode_name_to_id_role_target(self) -> None:
-        out = EncodeTarget(mapping=_MAP)(Sample({"y": Label("cat")}, roles={"y": "target"}))
+    def test_encode_name_to_id(self) -> None:
+        out = EncodeTarget(mapping=_MAP)({"y": Label("cat")})
         assert isinstance(out["y"], Label)
         assert out["y"].value == 0
-        assert out.role_of("y") == "target"
 
     def test_encode_maps_every_name(self) -> None:
         for name in _MAP:
-            typed = EncodeTarget(mapping=_MAP)(Sample({"y": Label(name)}))
-            assert typed["y"].value == _MAP[name]
+            out = EncodeTarget(mapping=_MAP)({"y": Label(name)})
+            assert out["y"].value == _MAP[name]
 
     def test_encode_preserves_classes_vocab(self) -> None:
-        out = EncodeTarget(mapping=_MAP)(Sample({"y": Label("dog", classes=list(_MAP))}))
+        out = EncodeTarget(mapping=_MAP)({"y": Label("dog", classes=list(_MAP))})
         assert out["y"].value == 1
         assert out["y"].classes == list(_MAP)
 
-    def test_encode_new_output_field(self) -> None:
-        out = EncodeTarget(mapping=_MAP, output="target_id")(Sample({"y": Label("fox")}))
+    def test_encode_new_output_key(self) -> None:
+        out = EncodeTarget(mapping=_MAP, output="target_id")({"y": Label("fox")})
         assert out["target_id"].value == 2
-        assert out.role_of("target_id") == "target"
         assert out["y"].value == "fox"  # source left intact
 
     def test_encode_ignore_unknown(self) -> None:
-        out = EncodeTarget(mapping=_MAP, ignore_unknown=True, default=-1)(Sample({"y": Label("bird")}))
+        out = EncodeTarget(mapping=_MAP, ignore_unknown=True, default=-1)({"y": Label("bird")})
         assert out["y"].value == -1
 
     def test_encode_unknown_raises(self) -> None:
         with pytest.raises(KeyError):
-            EncodeTarget(mapping=_MAP)(Sample({"y": Label("bird")}))
+            EncodeTarget(mapping=_MAP)({"y": Label("bird")})
 
     def test_encode_empty_mapping_raises_lazily(self) -> None:
         op = EncodeTarget()  # constructible with no mapping (lazy)
         with pytest.raises(ValueError, match="at least one entry"):
-            op(Sample({"y": Label("cat")}))
+            op({"y": Label("cat")})
 
     def test_decode_id_to_name(self) -> None:
         for cid in _INV:
-            typed = DecodeTarget(mapping=_INV)(Sample({"y": Label(cid)}))
-            assert typed["y"].value == _INV[cid]
+            out = DecodeTarget(mapping=_INV)({"y": Label(cid)})
+            assert out["y"].value == _INV[cid]
 
     def test_encode_then_decode_round_trip(self) -> None:
-        s = Sample({"y": Label("dog")})
-        encoded = EncodeTarget(mapping=_MAP)(s)
+        encoded = EncodeTarget(mapping=_MAP)({"y": Label("dog")})
         assert encoded["y"].value == 1
         decoded = DecodeTarget(mapping=_INV)(encoded)
         assert decoded["y"].value == "dog"
 
     def test_decode_empty_mapping_raises_lazily(self) -> None:
         with pytest.raises(ValueError, match="at least one entry"):
-            DecodeTarget()(Sample({"y": Label(0)}))
+            DecodeTarget()({"y": Label(0)})
 
     def test_encode_non_label_field_raises(self) -> None:
         with pytest.raises(TypeError, match="expected a Label"):
-            EncodeTarget(mapping=_MAP, field="image")(Sample({"image": Image(_hwc_uint8())}))
+            EncodeTarget(mapping=_MAP, field="image")({"image": Image(_hwc_uint8())})
 
     def test_encode_no_label_field_raises(self) -> None:
         with pytest.raises(ValueError, match="no Label field"):
-            EncodeTarget(mapping=_MAP)(Sample({"image": Image(_hwc_uint8())}))
+            EncodeTarget(mapping=_MAP)({"image": Image(_hwc_uint8())})
 
 
 # --------------------------------------------------------------------------- #
-# End-to-end typed classification input/target path (sampleflux-only).
+# End-to-end classification input/target path (sampleflux-only).
 # --------------------------------------------------------------------------- #
-def test_typed_classification_input_and_target_chain() -> None:
-    # Source-shaped bag: an HWC image (role input) + a class-NAME label (role target).
-    sample = Sample(
-        {"image": Image(_hwc_uint8()), "class": Label("cat", classes=list(_MAP))},
-        roles={"image": "input", "class": "target"},
-    )
-    # Build the model INPUT tensor (CHW float) and the encoded TARGET id — no legacy Sample.
-    out = EncodeTarget(mapping=_MAP, field="class")(ToTensor(field="image")(sample))
+def test_classification_input_and_target_chain() -> None:
+    # Source-shaped record: an HWC image + a class-NAME label — key names carry meaning.
+    record = {"image": Image(_hwc_uint8()), "class": Label("cat", classes=list(_MAP))}
+    # Build the model INPUT (CHW float) and the encoded TARGET id.
+    out = EncodeTarget(mapping=_MAP, field="class")(ToTensor(field="image")(record))
 
-    # Input field: a CHW-float Image tagged input.
-    assert isinstance(out["image"], Image)
-    assert out["image"].layout == "CHW"
-    assert np.asarray(out["image"]).shape == (3, 4, 5)
-    assert np.asarray(out["image"]).dtype == np.float32
-    assert out.role_of("image") == "input"
-    assert out.inputs().keys() == {"image"}
+    # Input entry: a LIVE CHW-float tensor (a plain record value).
+    assert isinstance(out["image"], torch.Tensor)
+    assert tuple(out["image"].shape) == (3, 4, 5)
+    assert out["image"].dtype == torch.float32
 
-    # Target field: an int-id Label tagged target.
+    # Target entry: an int-id Label carrying the vocabulary.
     assert isinstance(out["class"], Label)
     assert out["class"].value == 0
-    assert out.role_of("class") == "target"
-    assert out.targets().keys() == {"class"}
+    assert out["class"].classes == list(_MAP)
 
 
 def test_convert_then_tensor_chain() -> None:
-    # A raw 2-D array field runs ConvertToImage -> ToTensor into a CHW-float input.
+    # A raw 2-D array entry runs ConvertToImage -> ToTensor into a CHW-float input.
     arr = np.arange(6 * 4).reshape(6, 4).astype(np.float32)
-    out = ToTensor(field="image")(ConvertToImage(colormap="gray")(Sample({"spec": Mask(arr)})))
-    assert out["image"].layout == "CHW"
-    assert np.asarray(out["image"]).shape == (3, 6, 4)
+    out = ToTensor(field="image")(ConvertToImage(colormap="gray")({"spec": Mask(arr)}))
+    assert isinstance(out["image"], torch.Tensor)
+    assert tuple(out["image"].shape) == (3, 6, 4)
 
 
 # --------------------------------------------------------------------------- #

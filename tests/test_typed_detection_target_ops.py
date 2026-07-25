@@ -1,16 +1,14 @@
-"""Typed-bag TWINS of the two detection target-shaping ops.
+"""The two detection target-shaping ops over dict records.
 
-Pins the native typed transforms that let a ``Sample`` detection pipeline build its
-torchvision-style ``{boxes, labels}`` target as a :class:`~sampleflux.Regions` item without the
-legacy ``Sample`` path:
+Pins the native transforms that build a detection pipeline's torchvision-style
+``{boxes, labels}`` target as a :class:`~sampleflux.Regions` item:
 
 * :class:`sampleflux.ops.target.CocoToTorchVisionDetection` — a HuggingFace / COCO ``objects``
   annotation → a target ``Regions``;
 * :class:`sampleflux.ops.target.MasksToDetectionBoxes` — a segmentation ``Mask`` → a target ``Regions``.
 
-Each twin REUSES its legacy op's conversion math, so the twin's ``boxes`` / ``labels`` tensors are
-pinned byte-identical to a legacy run on the equivalent ``Sample`` (parity). sampleflux-only — no
-waivefront import.
+Each op REUSES its conversion helper, so the op's ``boxes`` / ``labels`` tensors are pinned
+byte-identical to the helper (parity). sampleflux-only — no domain-package import.
 """
 
 import numpy as np
@@ -18,8 +16,7 @@ import pytest
 import torch
 from confluid.registry import get_registry, resolve_class
 
-from sampleflux import Image, Label, Mask, Regions, Sample
-from sampleflux.collate import typed_collate
+from sampleflux import Image, Label, Mask, Regions, collate_records
 from sampleflux.ops.target import (
     CocoToTorchVisionDetection,
     MasksToDetectionBoxes,
@@ -45,60 +42,56 @@ def _instance_mask() -> np.ndarray:
 # --------------------------------------------------------------------------- #
 class TestCocoToTorchVisionDetection:
     def test_produces_target_regions(self) -> None:
-        s = Sample({"objects": Label(_OBJECTS)}, roles={"objects": "aux"})
-        out = CocoToTorchVisionDetection(field="objects")(s)
+        out = CocoToTorchVisionDetection(field="objects")({"objects": Label(_OBJECTS)})
         regions = out["target"]
         assert isinstance(regions, Regions)
-        assert out.role_of("target") == "target"
         assert isinstance(regions.boxes, torch.Tensor)
         assert isinstance(regions.labels, torch.Tensor)
         assert regions.boxes.shape == (2, 4)
         assert regions.labels.shape == (2,)
 
     def test_parity_with_helper(self) -> None:
-        typed = CocoToTorchVisionDetection(field="objects")(Sample({"objects": Label(_OBJECTS)}))
+        out = CocoToTorchVisionDetection(field="objects")({"objects": Label(_OBJECTS)})
         expected = coco_to_detection(_OBJECTS)
-        assert torch.equal(typed["target"].boxes, expected["boxes"])
-        assert torch.equal(typed["target"].labels, expected["labels"])
+        assert torch.equal(out["target"].boxes, expected["boxes"])
+        assert torch.equal(out["target"].labels, expected["labels"])
 
     def test_parity_xyxy_and_label_offset(self) -> None:
         objects = {"bbox": [[10.0, 20.0, 40.0, 60.0]], "category": [2]}
-        typed = CocoToTorchVisionDetection(field="objects", bbox_format="xyxy", label_offset=1)(
-            Sample({"objects": Label(objects)})
+        out = CocoToTorchVisionDetection(field="objects", bbox_format="xyxy", label_offset=1)(
+            {"objects": Label(objects)}
         )
         expected = coco_to_detection(objects, bbox_format="xyxy", label_offset=1)
-        assert torch.equal(typed["target"].boxes, expected["boxes"])
-        assert torch.equal(typed["target"].labels, expected["labels"])
+        assert torch.equal(out["target"].boxes, expected["boxes"])
+        assert torch.equal(out["target"].labels, expected["labels"])
 
     def test_empty_annotation_yields_empty_tensors(self) -> None:
-        out = CocoToTorchVisionDetection(field="objects")(Sample({"objects": Label({"bbox": [], "category": []})}))
+        out = CocoToTorchVisionDetection(field="objects")({"objects": Label({"bbox": [], "category": []})})
         assert out["target"].boxes.shape == (0, 4)
         assert out["target"].labels.shape == (0,)
 
     def test_default_picks_first_label(self) -> None:
-        s = Sample({"image": Image(np.zeros((2, 2, 3), dtype=np.uint8)), "objects": Label(_OBJECTS)})
-        out = CocoToTorchVisionDetection()(s)
+        rec = {"image": Image(np.zeros((2, 2, 3), dtype=np.uint8)), "objects": Label(_OBJECTS)}
+        out = CocoToTorchVisionDetection()(rec)
         assert out["target"].boxes.shape == (2, 4)
 
-    def test_new_output_field_keeps_source(self) -> None:
-        s = Sample({"objects": Label(_OBJECTS)})
-        out = CocoToTorchVisionDetection(field="objects", output="det")(s)
+    def test_new_output_key_keeps_source(self) -> None:
+        out = CocoToTorchVisionDetection(field="objects", output="det")({"objects": Label(_OBJECTS)})
         assert isinstance(out["det"], Regions)
-        assert out.role_of("det") == "target"
         assert out["objects"].value == _OBJECTS  # source left intact
 
     def test_missing_field_raises(self) -> None:
-        with pytest.raises(ValueError, match="field 'nope' not in sample"):
-            CocoToTorchVisionDetection(field="nope")(Sample({"objects": Label(_OBJECTS)}))
+        with pytest.raises(ValueError, match="field 'nope' not in record"):
+            CocoToTorchVisionDetection(field="nope")({"objects": Label(_OBJECTS)})
 
-    def test_empty_sample_raises(self) -> None:
-        with pytest.raises(ValueError, match="sample is empty"):
-            CocoToTorchVisionDetection()(Sample({}))
+    def test_empty_record_raises(self) -> None:
+        with pytest.raises(ValueError, match="record is empty"):
+            CocoToTorchVisionDetection()({})
 
     def test_non_dict_source_raises(self) -> None:
-        # The reused legacy op rejects a non-objects-shaped value loudly.
+        # The shared helper rejects a non-objects-shaped value loudly.
         with pytest.raises(TypeError, match="objects mapping"):
-            CocoToTorchVisionDetection(field="objects")(Sample({"objects": Label("not a dict")}))
+            CocoToTorchVisionDetection(field="objects")({"objects": Label("not a dict")})
 
 
 # --------------------------------------------------------------------------- #
@@ -106,74 +99,70 @@ class TestCocoToTorchVisionDetection:
 # --------------------------------------------------------------------------- #
 class TestMasksToDetectionBoxes:
     def test_instance_mask_produces_target_regions(self) -> None:
-        s = Sample({"mask": Mask(_instance_mask())}, roles={"mask": "aux"})
-        out = MasksToDetectionBoxes(field="mask")(s)
+        out = MasksToDetectionBoxes(field="mask")({"mask": Mask(_instance_mask())})
         regions = out["target"]
         assert isinstance(regions, Regions)
         assert isinstance(regions.boxes, torch.Tensor)
         assert isinstance(regions.labels, torch.Tensor)
-        assert out.role_of("target") == "target"
         assert regions.boxes.shape == (3, 4)  # three instances
         assert regions.labels.tolist() == [1, 1, 1]  # every box → foreground class 1
 
     def test_instance_parity_with_helper(self) -> None:
         mask = _instance_mask()
-        typed = MasksToDetectionBoxes(field="mask")(Sample({"mask": Mask(mask)}))
+        out = MasksToDetectionBoxes(field="mask")({"mask": Mask(mask)})
         expected = masks_to_detection(mask)
-        assert torch.equal(typed["target"].boxes, expected["boxes"])
-        assert torch.equal(typed["target"].labels, expected["labels"])
+        assert torch.equal(out["target"].boxes, expected["boxes"])
+        assert torch.equal(out["target"].labels, expected["labels"])
 
     def test_connected_components_parity(self) -> None:
         # A binary/semantic mask (all objects share value 1): connected=True splits into blobs.
         binary = (_instance_mask() != 0).astype(np.uint8)
-        typed = MasksToDetectionBoxes(field="mask", connected=True, label=2)(Sample({"mask": Mask(binary)}))
+        out = MasksToDetectionBoxes(field="mask", connected=True, label=2)({"mask": Mask(binary)})
         expected = masks_to_detection(binary, connected=True, label=2)
-        assert typed["target"].boxes.shape[0] == 3  # three connected blobs
-        assert torch.equal(typed["target"].boxes, expected["boxes"])
-        assert torch.equal(typed["target"].labels, expected["labels"])
+        assert out["target"].boxes.shape[0] == 3  # three connected blobs
+        assert torch.equal(out["target"].boxes, expected["boxes"])
+        assert torch.equal(out["target"].labels, expected["labels"])
 
     def test_min_area_drops_small_instances(self) -> None:
         mask = _instance_mask()
-        typed = MasksToDetectionBoxes(field="mask", min_area=10)(Sample({"mask": Mask(mask)}))
+        out = MasksToDetectionBoxes(field="mask", min_area=10)({"mask": Mask(mask)})
         expected = masks_to_detection(mask, min_area=10)
-        assert torch.equal(typed["target"].boxes, expected["boxes"])
+        assert torch.equal(out["target"].boxes, expected["boxes"])
 
     def test_empty_mask_yields_empty_tensors(self) -> None:
-        out = MasksToDetectionBoxes(field="mask")(Sample({"mask": Mask(np.zeros((4, 4), dtype=np.uint8))}))
+        out = MasksToDetectionBoxes(field="mask")({"mask": Mask(np.zeros((4, 4), dtype=np.uint8))})
         assert out["target"].boxes.shape == (0, 4)
         assert out["target"].labels.shape == (0,)
 
     def test_default_picks_first_mask(self) -> None:
-        s = Sample({"image": Image(np.zeros((2, 2, 3), dtype=np.uint8)), "seg": Mask(_instance_mask())})
-        out = MasksToDetectionBoxes()(s)
+        rec = {"image": Image(np.zeros((2, 2, 3), dtype=np.uint8)), "seg": Mask(_instance_mask())}
+        out = MasksToDetectionBoxes()(rec)
         assert out["target"].boxes.shape == (3, 4)
 
-    def test_new_output_field_keeps_source(self) -> None:
-        s = Sample({"mask": Mask(_instance_mask())})
-        out = MasksToDetectionBoxes(field="mask", output="det")(s)
+    def test_new_output_key_keeps_source(self) -> None:
+        out = MasksToDetectionBoxes(field="mask", output="det")({"mask": Mask(_instance_mask())})
         assert isinstance(out["det"], Regions)
-        assert out.role_of("det") == "target"
         assert isinstance(out["mask"], Mask)  # source left intact
 
     def test_missing_field_raises(self) -> None:
-        with pytest.raises(ValueError, match="field 'nope' not in sample"):
-            MasksToDetectionBoxes(field="nope")(Sample({"mask": Mask(_instance_mask())}))
+        with pytest.raises(ValueError, match="field 'nope' not in record"):
+            MasksToDetectionBoxes(field="nope")({"mask": Mask(_instance_mask())})
 
     def test_no_mask_or_array_field_raises(self) -> None:
         with pytest.raises(ValueError, match="no Mask or array-bearing field"):
-            MasksToDetectionBoxes()(Sample({"lbl": Label("x")}))
+            MasksToDetectionBoxes()({"lbl": Label("x")})
 
 
 # --------------------------------------------------------------------------- #
-# Collate — per-sample Regions gather into a list of detection targets.
+# Collate — per-record Regions gather into a list of detection targets.
 # --------------------------------------------------------------------------- #
-def test_typed_collate_gathers_regions_as_list() -> None:
-    a = CocoToTorchVisionDetection(field="objects")(Sample({"objects": Label(_OBJECTS)}))
+def test_record_collate_gathers_regions_as_list() -> None:
+    a = CocoToTorchVisionDetection(field="objects")({"objects": Label(_OBJECTS)})
     c = CocoToTorchVisionDetection(field="objects")(
-        Sample({"objects": Label({"bbox": [[1.0, 2.0, 3.0, 4.0]], "category": [5]})})
+        {"objects": Label({"bbox": [[1.0, 2.0, 3.0, 4.0]], "category": [5]})}
     )
-    batch = typed_collate([a, c])
-    # Variable-N boxes can't be stacked → the collate gathers them as a per-sample list of tensors.
+    batch = collate_records([a, c])
+    # Variable-N boxes can't be stacked → the collate gathers them as a per-record list of tensors.
     assert isinstance(batch["target"], Regions)
     assert isinstance(batch["target"].boxes, list) and len(batch["target"].boxes) == 2
     assert batch["target"].boxes[0].shape == (2, 4)

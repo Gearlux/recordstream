@@ -1,8 +1,8 @@
 """``SampleSinkOp`` — adapt a :class:`~sampleflux.storage.base.DataSink` as a pass-through op.
 
-Lets any storage sink (``HDF5Sink``, ``ZarrGroupSink``, the waivefront JSON
-sinks …) slot into a ``Sample``-based op chain: on first call it opens the
-sink, every call writes the sample and returns it unchanged, and ``close()``
+Lets any storage sink (``HDF5Sink``, ``ZarrGroupSink``, a domain package's JSON
+sinks …) slot into a record-based op chain: on first call it opens the
+sink, every call writes the record and returns it unchanged, and ``close()``
 flushes + closes. Modality-neutral (duck-typed ``open``/``write``/``close``),
 so it lives in core sampleflux.
 """
@@ -12,7 +12,7 @@ from typing import Any
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.bag.sample import Sample
+from sampleflux.items import Record
 
 logger = get_logger(__name__)
 
@@ -21,30 +21,25 @@ logger = get_logger(__name__)
 class SampleSinkOp:
     """Adapter: wrap a :class:`sampleflux.storage.base.DataSink` as a pass-through op.
 
-    Sinks (``JsonPerWindowSink``, ``JsonSink``, ``HDF5Sink`` …) implement the
-    ``open()`` / ``write(sample)`` / ``close()`` protocol and are normally
-    attached to a :class:`sampleflux.processing.DatasetProcessor` as the
-    flux's terminal sink. This adapter lets the same sinks slot into any
-    Sample-based op chain — notably the ``ops`` list of
-    :class:`waivefront.sinks.SigMFPredictionsSink`, where the model's
-    predictions arrive as a Sample whose metadata carries the new
-    ``predicted_regions`` and need to be persisted to disk just like a
-    segment-pipeline output.
+    Sinks implement the ``open()`` / ``write(record)`` / ``close()`` protocol and
+    are normally attached to a :class:`sampleflux.processing.DatasetProcessor` as
+    the flux's terminal sink. This adapter lets the same sinks slot into any
+    record-based op chain (e.g. persisting a prediction pipeline's outputs
+    mid-chain).
 
     On the first call the adapter calls ``sink.open()`` (when present); each
-    subsequent call forwards the Sample to ``sink.write(sample)`` and returns
-    the Sample unchanged. ``close()`` flushes (when present) and closes the
-    underlying sink — propagated by :class:`sampleflux.ops.enable.Enable` and
-    :class:`waivefront.sinks.SigMFPredictionsSink` at end-of-run.
+    subsequent call forwards the record to ``sink.write(record)`` and returns
+    the record unchanged. ``close()`` flushes (when present) and closes the
+    underlying sink — propagated by the composing ops at end-of-run.
 
     YAML::
 
         - !class:sampleflux.ops.sink.SampleSinkOp
-          sink: !class:waivefront.sinks.JsonPerWindowSink
-            output_dir: ./predictions_per_window
+          sink: !class:sampleflux.storage.hdf5.HDF5Sink
+            path: ./records.h5
 
     Args:
-        sink: A DataSink-like object exposing ``write(sample)`` (and optionally ``open``/``flush``/``close``).
+        sink: A DataSink-like object exposing ``write(record)`` (and optionally ``open``/``flush``/``close``).
     """
 
     def __init__(self, sink: Any = None) -> None:
@@ -52,7 +47,7 @@ class SampleSinkOp:
         self.sink = sink
         self._opened = False
 
-    def __call__(self, sample: Sample) -> Sample:
+    def __call__(self, record: Record) -> Record:
         if self.sink is None:
             raise ValueError("SampleSinkOp requires a non-None 'sink'.")
         if not self._opened:
@@ -60,8 +55,8 @@ class SampleSinkOp:
             if callable(opener):
                 opener()
             self._opened = True
-        self.sink.write(sample)
-        return sample
+        self.sink.write(record)
+        return record
 
     def close(self) -> None:
         flush = getattr(self.sink, "flush", None)

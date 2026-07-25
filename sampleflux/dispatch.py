@@ -1,20 +1,20 @@
-"""The kernel registry — type dispatch for transforms (the torchvision-v2 ``_KERNEL_REGISTRY`` pattern).
+"""The kernel registry — type dispatch for ops (the torchvision-v2 ``_KERNEL_REGISTRY`` pattern).
 
-A transform does not hard-code how to handle each item type. Instead a kernel is registered
+An op does not hard-code how to handle each value type. Instead a kernel is registered
 per ``(transform class, item type)`` pair, and :func:`dispatch` looks one up — walking the
-item's MRO so a kernel registered for a base item type also serves its subclasses. This is
+value's MRO so a kernel registered for a base item type also serves its subclasses. This is
 the same registry idea as :mod:`sampleflux.collate` (batching keyed by representation),
-applied to per-type transform behaviour.
+applied to per-type op behaviour.
 
-Registration is open: a downstream package teaches an existing transform about a new item
+Registration is open: a downstream package teaches an existing op about a new value
 type with one decorator and NO core edit —
 
     from mypkg.transforms import Denoise      # any Transform subclass
     from mypkg.items import IQSignal          # any registered item type
 
     @Denoise.kernel(IQSignal)
-    def _(item, params):
-        return denoise_iq(item, strength=params["strength"])
+    def _(value, params):
+        return denoise_iq(value, strength=params["strength"])
 
 The transform base exposes ``.kernel(item_type)`` as a thin wrapper over
 :func:`register_kernel`; both are documented so either entry point works.
@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 __all__ = ["Kernel", "register_kernel", "get_kernel", "dispatch", "registered_kernels"]
 
-#: A kernel maps ``(item, params) -> item`` — the per-type behaviour of one transform.
+#: A kernel maps ``(value, params) -> value`` — the per-type behaviour of one op.
 Kernel = Callable[[Any, Dict[str, Any]], Any]
 
 _KERNEL_REGISTRY: Dict[Tuple[type, type], Kernel] = {}
@@ -57,8 +57,8 @@ def dispatch(transform_cls: type, item_cls: type) -> Optional[Kernel]:
     Resolution walks the transform's MRO (a subclass transform inherits its base's kernels
     unless it overrides them) and, for each, the item's MRO (a kernel on a base item type
     serves subclasses). The MOST specific transform wins; within a transform, the most
-    specific item type wins. ``None`` means "this transform does not handle this item" —
-    the caller passes the field through untouched. Results are memoized (see
+    specific item type wins. ``None`` means "this op does not handle this value" —
+    the caller passes the entry through untouched. Results are memoized (see
     :data:`_DISPATCH_CACHE`), invalidated on every :func:`register_kernel`.
     """
     key = (transform_cls, item_cls)

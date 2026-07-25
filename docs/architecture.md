@@ -8,11 +8,112 @@ of reverse-engineering it from git history.
 
 Each entry is a short decision record: **Context → Decision → Consequences → Example → What you may
 change**. When a change alters one of these mechanisms, update its record in the same change (see
-the workspace `AGENTS.md` → "Architecture Decisions Are Documented").
+the workspace `AGENTS.md` → "Architecture Decisions Are Documented"). Superseded records are kept
+as history, banner-marked with a pointer to their successor.
 
 ---
 
-## Batching is two-stage; collation is a pluggable registry (`sampleflux.collate`, 2026-07-17)
+## One type-dispatched op engine — plain-dict records, libraries as-is (2026-07-25)
+
+### Context
+
+The previous data model (the typed-bag `Sample`, recorded below and now superseded) got the item
+half right — typed values owning their metadata — but wrapped them in a bespoke container with
+per-key role tags. That container was the friction point: every external library needed an adapter
+before it could touch a sample (`coerce_transform` + a matcher/factory registry + two adapter
+classes + ~170 GENERATED per-transform op wrappers, all maintenance surface), the role tags
+duplicated what key names already say (`"mask"` *is* the mask), and dict-native libraries —
+torchvision `transforms.v2` walks dicts, albumentations takes named kwargs — were kept at arm's
+length from a carrier they could have consumed directly. Meanwhile a second op-authoring surface
+(the adapter/generated families) competed with the native type-dispatched `Transform`, so "where
+does augmentation come from?" had three answers.
+
+### Decision
+
+Collapse to ONE carrier and ONE op engine:
+
+- **A sample is a plain `dict`** — `sampleflux.items.Record = Dict[str, Any]` — of **typed values**
+  (`Image`/`Mask`/`Regions`/`Label`, base `NDArrayItem`; open registry `register_item`; uniform
+  payload accessors `item_data`/`with_data`). No container class, no roles, no `primary()`:
+  **key names carry meaning** (`"image"`, `"mask"`, `"bboxes"`, `"class"`), and a scalar side value
+  is just another key. Metadata is attrs on the typed value (`Image.layout`, `Label.classes`) or
+  more dict keys (`"samplerate": 30.72e6`).
+- **Native ops are type-dispatched `Transform`s** (`sampleflux/transform.py`): `get_params(record)`
+  draws shared parameters ONCE per record, per-type kernels (`@MyOp.kernel(ItemType)`, MRO-aware
+  registry in `sampleflux/dispatch.py`) apply to every handled value, `field=` pins one key. The
+  second sanctioned shape — type-CHANGING ops (`Threshold`, `ConvertToImage`, the target ops) —
+  overrides `__call__`.
+- **External libraries run AS-IS through the engine's op-family dispatch**
+  (`sampleflux.core._apply_op`, three branches): an albumentations op receives exactly its own kwarg
+  vocabulary (`image`/`mask`/`masks`/`bboxes`/`keypoints`/`labels` keys present in the record; one
+  call = one joint draw; array outputs re-wrapped in the incoming `NDArrayItem` type so
+  `Image`/`Mask` survive); a torchvision-v2 op is called on the dict as-is; everything else is
+  `op(record)` with `None` = drop. Family detection is by MRO module name — no eager imports, no
+  adapters, no generated wrappers. Box-carrying augmentation is the library's own
+  `A.Compose(..., bbox_params=...)`; seeding is the libraries' own mechanisms.
+- **`Pipeline(transforms=[...])`** (`sampleflux/transform.py`) is THE sequential composer —
+  `TransformChain` was deleted; every composing op routes inner ops through `_apply_op`.
+- **Storage is the record key-group layout** (`typedrecord-v1`): everything serializes through the
+  `sampleflux/io.py` codec; plain values ride the `"plain"` tag; NO backward compatibility with the
+  pre-record layout (an old/untagged store raises via `storage/base.py::require_record_format` —
+  an explicit decision: re-generate, don't accrete legacy readers).
+- **Projection and collation are key-addressed**: `project(source, keys)` / `iter_key` /
+  `num_classes(key="class")`; the collate registry's default is `"record"` = `collate_records`.
+
+### Consequences
+
+- Zero adapter surface: the two adapter classes, the coercion registry, and both generated op
+  families are gone; a new library version's transforms are available the moment the library is —
+  nothing to regenerate.
+- Cross-key consistency is the LIBRARY's own joint draw (albumentations Compose / tv2's dict walk)
+  for augmentation, and `get_params`-once for native ops — one mechanism per world, both automatic.
+- YAML needs no special forms: a bare `!class:albumentations.HorizontalFlip {p: 0.5}` sits in an
+  `ops:` list like any native op (deferred markers flow at route entry).
+- The albumentations vocabulary is load-bearing: a value augments only if it rides one of the
+  library's key names — routing is an explicit `RenameField`, never engine magic.
+- Anything that used `Sample`, roles, `primary()`, `typed_collate`, `ProjectionField`, or a
+  `typedsample-v1` store must migrate — there are deliberately no aliases and no legacy read path.
+
+### Example
+
+One `Flux` ops list mixing both worlds, no wrappers:
+
+```python
+import albumentations as A
+from sampleflux import Flux, Image, as_transform
+
+flux = Flux(source=records, ops=[
+    A.Compose([A.HorizontalFlip(p=0.5)],
+              bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"])),
+    A.GaussNoise(p=1.0),                                 # bare library op — as-is
+    as_transform(lambda d: d - 0.5, handles=(Image,)),   # native type-dispatched op
+])
+```
+
+The same shape in YAML:
+
+```yaml
+ops:
+  - !class:albumentations.HorizontalFlip
+    p: 0.5
+  - !class:sampleflux.ops.numpy.Threshold
+    low_level: 0.5
+```
+
+### What you may change (and where it's documented)
+
+- **A new item type** — one class + `@register_item` (array-backed: subclass `NDArrayItem`,
+  declare `_item_attrs`); usage in [record-model.md](record-model.md).
+- **A new per-type behaviour for an existing op** — `@Op.kernel(ItemType)`, no core edit.
+- **A new library family** — a new branch in `core._apply_op` (MRO module-name matcher + the
+  library's native calling convention). Never an adapter/wrapper class; update this record when a
+  branch is added.
+- **The `typedrecord-v1` tag and the no-back-compat rule are contracts** — changing the on-disk
+  layout means a NEW tag and a re-generation story, never a silent dual-read path.
+
+---
+
+## Batching is two-stage; collation is a pluggable registry (`sampleflux.collate`, 2026-07-17, updated 2026-07-25)
 
 ### Context
 
@@ -25,32 +126,21 @@ Turning N pipeline items into one batched carrier has two distinct halves:
 
 The engine owns grouping; it must NOT own stacking, because stacking is task-shaped: historically
 every consuming project shipped its own task collate (classification, segmentation, detection),
-and **two divergent batched-metadata conventions** emerged — the list-form
-`Sample(metadata=[...])` batch (`Sample.is_batched` True) versus a dict-nested
-`metadata={"per_sample": [...]}` form. In addition, the multi-type carrier engine
-(`Flux(native=True)`, see [kinds.md](kinds.md)) meant sampleflux itself needed stacking behavior
-*keyed by carrier kind* — a `Sample`, a metadata-free pair, a bare value, and the
-`InputMeta`/`TargetMeta` views each batch differently.
+and divergent batched-metadata conventions emerged between them.
 
 ### Decision
 
 `sampleflux/collate.py` is a **pluggable registry of collate functions keyed by representation**:
 `register_collate(key)` / `get_collate(key)` / `collate(items, key=None)`, where an omitted key
-uses the default `"typed"` collate (`typed_collate`) — batching a list of typed-bag `Sample`s into
-one batched `Sample` (per-item type dispatch itself is the sibling kernel registry
-`sampleflux.bag.dispatch`, which walks each item's MRO). sampleflux registers the `"typed"`
-default; consuming projects may register task aliases (`"yolo"`, `"segmentation"`, …)
-**additively**. Re-registering a key deliberately overwrites (logged at debug) so a consumer can
-replace a default.
-
-Two things were deliberately **not** done:
-
-- **Existing task collates were not moved here.** The registry is an addressable home consumers
-  can opt into, not a forced migration — consuming projects keep shipping and wiring their own
-  collate functions directly (e.g. via a Confluid `!ref:` to the function's dotted path).
-- **The divergent metadata conventions were not unified.** The dict-nested
-  `{"per_sample": [...]}` convention stays with the project that owns it; unification is a
-  tracked follow-up in the root `TASKS.md`, not a side effect of introducing the registry.
+uses the default **`"record"`** collate (`collate_records`) — N plain record dicts into ONE batched
+record: per key, typed values encode through the `sampleflux/io.py` codec, payloads stack
+(torch → stacked tensor, numpy → stacked array, else a list), each declared item attr becomes a
+LIST of per-record values (decoded back into one batched item of the same type), and a
+`"plain"`-tagged value batches as the plain list. Batches must be key-homogeneous — a mismatch
+raises. Consuming projects may register task aliases (`"yolo"`, `"segmentation"`, …)
+**additively**; re-registering a key deliberately overwrites (logged at debug) so a consumer can
+replace a default. The divergent consumer conventions were deliberately NOT unified here — the
+registry is an addressable home consumers opt into, not a forced migration.
 
 ### Primary intended consumer: the MCP tool surface
 
@@ -64,35 +154,31 @@ collate function directly remains the normal path; the registry never replaces i
 
 ### Consequences
 
-- The engine stays task-agnostic: sampleflux knows *kinds*, never classification/detection/…
-- `Flux(native=True)` pipelines and the examples get correct batching per carrier kind with zero
-  configuration (`DataLoader(flux, collate_fn=get_collate("sample"))`).
+- The engine stays task-agnostic: sampleflux stacks by key + item type, never
+  classification/detection/…
+- Item metadata batches deterministically: per-record attrs become lists on the ONE batched item
+  (`batch["image"].layout == ["HWC", "HWC", ...]`), plain values become plain lists — there is no
+  second batched-metadata convention in this package.
 - One addressable lookup (`get_collate("yolo")`) replaces scattered cross-package imports — once a
   consumer registers. Registration happens at module import, so a key exists only after its
   defining module has been imported.
-- Batched metadata's list form (`Sample.is_batched`) is produced here, which is why the
-  `Sample.metadata` `dict | list[dict]` duality exists (see the sampleflux `AGENTS.md` metadata
-  mandate).
-- **Current usage (as of 2026-07-20):** only the five kind defaults are registered; the live call
-  sites are one training example (`get_collate("sample")` as a `DataLoader` collate) and the test
-  pins. No consuming project registers or looks up yet — the open registration surface is capacity
-  held for the MCP tool surface above, and is provisional until that consumer lands.
+- **Current usage:** only the `"record"` default is registered here; the open registration surface
+  is capacity held for the MCP tool surface above.
 
 ### Example
 
 ```python
 from torch.utils.data import DataLoader
 
-from sampleflux import Flux, collate, get_collate, register_collate
+from sampleflux import Flux, collate, collate_records, get_collate, register_collate
 
 flux = Flux(source=my_source, ops=[...])
 
-# Kind-dispatched: Samples stack via the "sample" default (list-form batched metadata).
-batch = collate([flux[0], flux[1]])
-assert batch.is_batched
+batch = collate([flux[0], flux[1]])                  # the "record" default
+batch["image"].shape                                 # stacked payloads, one batched Image
+batch["image"].layout                                # per-record attrs -> a list
 
-# Explicit key — the DataLoader glue.
-loader = DataLoader(flux, batch_size=8, collate_fn=get_collate("sample"))
+loader = DataLoader(flux, batch_size=8, collate_fn=collate_records)
 
 
 # A task alias registers additively (runs when the defining module is imported).
@@ -108,33 +194,33 @@ loader = DataLoader(flux, batch_size=8, collate_fn=get_collate("yolo"))
 
 - **Plugging in your own batch layout** is the supported extension point — decorate a function with
   `@register_collate("your-key")` and select it via `get_collate`/`collate`. Usage lives in
-  [kinds.md → the collate registry](kinds.md#multi-type-carriers--the-collate-registry-samplefluxcollate).
-- **Changing a default collate's semantics** (e.g. how `"sample"` stacks, or the list-form metadata
-  convention) is an architectural change: every batch consumer (losses, predictions sinks,
-  `batch_meta` readers) depends on it. Update this record and the metadata mandate together.
+  [kinds.md](kinds.md).
+- **Changing the default collate's semantics** (how `"record"` stacks, the attrs-become-lists
+  convention) is an architectural change: every batch consumer depends on it. Update this record
+  and the sampleflux `AGENTS.md` metadata mandate together.
 
 ---
 
-## The per-sample Context is an ambient wiring plane (`sampleflux.context`, 2026-07-17)
+## The per-record Context is an ambient wiring plane (`sampleflux.context`, 2026-07-17)
 
 ### Context
 
 Graph-shaped pipelines — fan-out, fan-in, cross-branch values — need somewhere to hold a value
-between the op that produces it and the op that consumes it. The obvious candidate,
-`sample.metadata`, was rejected: metadata is the **accumulating bus that rides inside each
-sample** — it persists into sinks, crosses process boundaries, and is part of the sample's
-serialized identity, while wiring data is transient scaffolding that should be gone by the end of
-a well-formed graph. Three constraints shaped the mechanism: ops keep the plain
-`__call__(sample)` signature (no threading a context parameter through every op), the executor
-stays a bare `for op in ops` loop (graphs run on the *plain sequential engine*), and a linear
-pipeline's behavior — including its metadata, byte-for-byte — must be completely untouched.
+between the op that produces it and the op that consumes it. The obvious candidate, extra keys on
+the record itself, was rejected: the record is the carrier that **persists** — it flows into sinks,
+crosses process boundaries, and is the sample's serialized identity — while wiring data is
+transient scaffolding that should be gone by the end of a well-formed graph. Three constraints
+shaped the mechanism: ops keep the plain `__call__(record)` signature (no threading a context
+parameter through every op), the executor stays a bare `for op in ops` loop (graphs run on the
+*plain sequential engine*), and a linear pipeline's behavior — its records, byte-for-byte — must be
+completely untouched.
 
 ### Decision
 
-`sampleflux/context.py` is a **per-sample named-cell store activated ambiently**: the engine
+`sampleflux/context.py` is a **per-record named-cell store activated ambiently**: the engine
 creates one fresh `Context` per source item and activates it around the op loop via a
-`contextvars.ContextVar`; the six wiring ops (`Save`/`Use`/`Drop`/`Apply`/`Capture`/`Mix` in
-`sampleflux.ops.context`) reach it inside `__call__` through `require(op_name)` — no signature
+`contextvars.ContextVar`; the six wiring ops (`Save`/`Use`/`Drop`/`Apply`/`Capture`/`MergeFields`
+in `sampleflux.ops.context`) reach it inside `__call__` through `require(op_name)` — no signature
 change anywhere. Deliberate semantics: cells are stored **by reference** and copy-on-read is the
 *reading* op's decision (`Use` deep-copies unless `drop` frees the cell = move); a missing cell on
 read or delete **raises loudly** with the live-cell list (a liveness bug must never pass
@@ -145,7 +231,7 @@ YAML — it is pure runtime plumbing. The public surface is two-tier by design: 
 is a package-root export, while `activate`/`current`/`require` stay module-qualified
 (`sampleflux.context.…`) — reachable, but visibly plumbing. `FlowGraph` deliberately does NOT use
 this module: its named-step documents give the compiler full knowledge of cell lifetimes, so it
-manages its own per-sample env directly, held to the context-op semantics by the pinned
+manages its own per-record env directly, held to the context-op semantics by the pinned
 flow⇄ops execution-parity contract.
 
 ### Consequences
@@ -154,7 +240,7 @@ flow⇄ops execution-parity contract.
   graph exporters (a visual canvas, the `flow:` compiler) lower to, so ONE executor serves both
   linear and graph pipelines.
 - Linear pipelines are provably untouched: no context op ⇒ the Context is created and never used;
-  the metadata-byte-identical invariant is pinned in `tests/test_context.py`.
+  the record-byte-identical invariant is pinned in the record-model suite under `tests/`.
 - Spawn-parallelism is safe by construction: contexts are created *inside* the worker and never
   pickled or shared across processes.
 - Ambient state cuts both ways: running an op list containing context ops *outside* an engine
@@ -167,15 +253,15 @@ flow⇄ops execution-parity contract.
 
 ```python
 from sampleflux import Flux
-from sampleflux.ops.context import Mix, Save
+from sampleflux.ops.context import MergeFields, Save
 
 # Fan-out/fan-in on the PLAIN sequential engine: snapshot → mutate the stream → merge back.
 flux = Flux(
     source=my_source,
     ops=[
-        Save(name="clean"),                        # snapshot the pristine sample into a cell
-        my_augment_op,                             # the stream mutates freely
-        Mix(target_from="clean", drop=["clean"]),  # fan-in: target from the snapshot, cell freed
+        Save(name="clean"),                                             # snapshot into a cell
+        my_augment_op,                                                  # the stream mutates freely
+        MergeFields(sources=["clean"], keys=["mask"], drop=["clean"]),  # fan-in, cell freed
     ],
 )
 
@@ -184,7 +270,7 @@ from sampleflux.context import Context, activate, require
 
 with activate(Context()):
     for op in ops:
-        sample = op(sample)
+        record = op(record)
 
 # A custom op joins the wiring plane through the same seam the built-in six use:
 #     require("MyOp").get("clean")   /   require("MyOp").put("my_cell", value)
@@ -196,12 +282,12 @@ with activate(Context()):
   `require("YourOpName")` inside `__call__`, follow the by-reference/copy-on-read discipline, and
   free cells you consume. Usage of the six built-in ops lives in [graph.md](graph.md).
 - **Keep the surface narrow.** Don't root-export `activate`/`current`/`require`, and don't grow
-  `Context` into a general blackboard — anything that should *persist with the sample* belongs on
-  the metadata bus, not in a cell.
+  `Context` into a general blackboard — anything that should *persist with the record* belongs in
+  the record itself, not in a cell.
 - **Changing cell semantics** (by-reference storage, loud missing-cell errors, the `Parallel`
   boundary rule, `copy()` shallowness) is an architectural change: the flow⇄ops parity suite and
-  the pinned context invariants (`tests/test_context.py`, `tests/test_flow.py`) define the
-  contract. Update this record and the sampleflux `AGENTS.md` context mandate together.
+  the pinned context invariants define the contract. Update this record and the sampleflux
+  `AGENTS.md` context mandate together.
 
 ---
 
@@ -254,8 +340,8 @@ resolves *a curated name/category*.
   importable-function targets confluid's `resolve_class` module-path branch / `!ref:` grammar can
   — two spellings of one job (`"module:qualname"` here vs `"module.attr"` there). The
   non-overlapping remainder (path *production* via `get_callable_path`, `.py`-file and `__main__`
-  handling, module scans, `ACCEPTS`/`PRODUCES` schemas) is why the module exists; whether the
-  resolution half should delegate to confluid is a tracked follow-up in the root `TASKS.md`.
+  handling, module scans) is why the module exists; whether the resolution half should delegate
+  to confluid is a tracked follow-up in the root `TASKS.md`.
 
 ### Example
 
@@ -295,7 +381,7 @@ They stay in `core.py` because of **who constructs them and which way imports fl
 are the construction targets of `Flux`'s own fluent API — `.filter(pred)` appends a `FilterOp`,
 `.map(fn)` appends a `WrappedOp`, `Flux.joint([...])` wraps a `JointFlux` — so the engine itself
 instantiates them. And `core.py` is the *bottom* of the op-facing layer: every composing op in
-`ops/` imports `core._apply_op` (the contract-aware chokepoint); moving `FilterOp`/`WrappedOp`
+`ops/` imports `core._apply_op` (the op-family dispatch chokepoint); moving `FilterOp`/`WrappedOp`
 into `ops/` would make `core` import from `ops` and close an import cycle. `JointFlux` is
 `Flux`'s iteration-only fan-in sibling (`category="engine"`), 20 lines that exist to be
 `Flux.joint`'s return value — a module of its own would be structure for structure's sake
@@ -320,10 +406,10 @@ off visual canvases.
 ```python
 flux = (
     Flux(source=src)
-    .map(np.sqrt)                                # appends WrappedOp(f="numpy:sqrt")
-    .filter(lambda s: float(s.input.max()) > 0)  # appends FilterOp(p=...)
+    .map(np.sqrt, key="image")                      # appends WrappedOp(f="numpy:sqrt", key="image")
+    .filter(lambda r: float(r["image"].max()) > 0)  # appends FilterOp(p=...)
 )
-both = Flux.joint([flux_a, flux_b])              # Flux(source=JointFlux([flux_a, flux_b]))
+both = Flux.joint([flux_a, flux_b])                 # Flux(source=JointFlux([flux_a, flux_b]))
 ```
 
 ### What you may change (and where it's documented)
@@ -336,9 +422,15 @@ both = Flux.joint([flux_a, flux_b])              # Flux(source=JointFlux([flux_a
 
 ---
 
-## The typed-bag model: a named bag of typed items (`sampleflux.bag`, 2026-07-21)
+## ~~The typed-bag model: a named bag of typed items (`sampleflux.bag`, 2026-07-21)~~ — SUPERSEDED
 
-### Context
+> **Superseded (2026-07-25)** by
+> [One type-dispatched op engine — plain-dict records, libraries as-is](#one-type-dispatched-op-engine--plain-dict-records-libraries-as-is-2026-07-25).
+> The `Sample` container, role tags, `primary()`, the adapter coercion registry, and the
+> `sampleflux.bag` package were removed; the typed items, the kernel-dispatch idea, and the item
+> codec carried forward into the record model. Kept as history — do not follow.
+
+### Context (historical)
 
 Before the typed model, the carrier was a fixed `(input, target, metadata)` 3-tuple where `metadata`
 was one flat `dict` shared by the whole sample. Everything that is not literally the model input or
@@ -348,273 +440,144 @@ label's class names. Two structural costs follow. First, **metadata has no owner
 belongs to *the signal*, `canvas` to *the image*, but the flat dict severs that link. Second, **a
 transform cannot move several fields together** — flipping an image and its mask and its boxes with
 one shared decision is inexpressible when the fields are `input`, `target`, and `metadata["regions"]`
-respectively, so today's augmentation adapters hard-code a `TargetMode = Literal["none","mask","boxes"]`
-knob per op instead. `target` is also overloaded — sometimes a bare string (`"drone_x"`), sometimes a
+respectively, so the era's augmentation adapters hard-coded a `TargetMode = Literal["none","mask","boxes"]`
+knob per op instead. `target` was also overloaded — sometimes a bare string (`"drone_x"`), sometimes a
 `{boxes, labels}` dict.
 
-### Decision
+### Decision (historical)
 
-`sampleflux.bag` models a sample as a **named bag of typed items with per-field role tags**, and
-dispatches transforms on item TYPE via a kernel registry:
+`sampleflux.bag` modeled a sample as a **named bag of typed items with per-field role tags**
+(`Sample`, roles `input`/`target`/`aux`/`pred`, immutable copy-on-write mutators), dispatched
+transforms on item TYPE via a kernel registry, batched via `typed_collate` (a batched `Sample`),
+and plugged external libraries in through a **coercion registry of adapters**
+(`register_adapter`/`coerce_transform` — a `Pipeline` wrapped each bare torchvision-v2 /
+albumentations transform in an adapter object at composition time).
 
-- **Items own their metadata.** An item is a typed value plus the metadata that describes *it*
-  (`Image(arr, layout)`, `Regions(boxes, labels, canvas)`, `Label(value, classes)`). The
-  realization is HYBRID: array-backed items (`Image`/`Mask`) subclass `np.ndarray` with
-  attribute-preserving `__array_finalize__`, so a type-agnostic op touches them as an array;
-  structured items (`Regions`/`Label`) are dataclass wrappers. A uniform `item_data` / `with_data`
-  pair hides the difference from kernels. sampleflux ships only MODALITY-NEUTRAL items; signal-domain
-  items (`Signal`, `Spectrogram`) live in the domain package and register into the same registry (see
-  "Consequences").
-- **`Sample` is a named bag; `input`/`target` are role TAGS, not positions.** A field carries a
-  role (`input`/`target`/`aux`/`pred`); `inputs()`/`targets()`/`aux()` read them at the
-  train/collate/sink boundary. A field changes role without moving keys. The sample is immutable —
-  every mutator returns a new sample (copy-on-write).
-- **Transforms sample params ONCE, then dispatch a kernel per item type** (the torchvision-v2
-  `_KERNEL_REGISTRY` pattern, structurally the same registry idea as `sampleflux.collate`). Kernels
-  are registered per `(transform, item type)` and resolved by MRO. Targeting is by type, with an
-  optional `only=[keys]` filter.
-- **External libraries plug in through adapters, dropped in BARE.** A `Pipeline` COERCES each element
-  (`coerce_transform`): a `Transform` is used as-is; a foreign object is wrapped by whichever adapter
-  a matcher/factory pair claims it (`register_adapter`). The built-in torchvision-v2 and albumentations
-  adapters register a matcher (by MRO module name — no eager library import) at package load, so
-  `v2.Normalize(...)` / `A.GaussNoise(...)` go straight into a `Pipeline` with no explicit wrapper. A
-  plain function becomes a transform via `as_transform`; a new item type is taught to an existing
-  transform with one `@Transform.kernel(NewType)` registration. This keeps consumer-dialect knowledge
-  (how to recognise/adapt a library) OUT of the core and open for any user library.
+### What survived, and what was undone (2026-07-25)
 
-This is **THE sampleflux data model** — the one carrier every source, op, engine and sink handles.
-It deliberately introduces a `Transform` base and typed item classes; the "Functional Purity" mandate
-(see `AGENTS.md`) holds because that base is a thin type-dispatch shell and the per-type kernels stay
-plain callables.
+- **Survived into the record model:** typed items owning their metadata (the HYBRID
+  ndarray-subclass / dataclass-wrapper realization, `item_data`/`with_data`, `register_item`), the
+  once-per-record kernel dispatch (`sampleflux.dispatch`), and the item codec idea
+  (`sampleflux/io.py` — storage backends never inspect item internals).
+- **Undone:** the `Sample` container (a plain dict now), role tags (key names carry meaning),
+  `primary()` (key addressing), `typed_collate` (→ `collate_records`), and the ENTIRE adapter plane
+  — coercion registry, adapter classes, `only=` per-key filters (→ `field=`) — replaced by the
+  engine-level op-family dispatch (`core._apply_op`), which calls each library natively instead of
+  wrapping it.
 
-### Consequences
-
-- **Cross-field consistency is free** — one sampled decision flips image + mask + boxes together,
-  the thing a flat-metadata triple could not do.
-- **Names and types work together**, so the "torchvision uses types / albumentations uses names"
-  split is resolved by one container: the key is the name, the item is the type.
-- **The subpackage is `bag`, an internal module home** — the whole typed surface is imported from
-  the package top level (`from sampleflux import Sample, ...`), so the module layout is never in a
-  consumer's import path and can move without touching consumers.
-- **Batching is `typed_collate`** — it returns a batched `Sample` (payloads stacked per field,
-  per-item attrs collected as lists, roles preserved); there is no `list[dict]` batch-in-metadata
-  form.
-- **Deliberately deferred** (see root `TASKS.md`): a torch-`Tensor`-subclass item base (torch
-  payloads ride wrapper items for now), confluid-native item-type discovery, the generated
-  `Tv*`/`Alb*` families in this namespace, FluxStudio typed side sockets, and the `decode` path.
-
-### Example
+### Example (historical shape — no longer runs)
 
 ```python
-from sampleflux import Sample, Image, Mask, Regions, Label, Pipeline
-from torchvision.transforms import v2
-import albumentations as A
-
-sample = Sample(
-    {"image": Image(rgb), "mask": Mask(seg), "regions": Regions(boxes, canvas=(H, W)), "class": Label("drone_x")},
-    roles={"mask": "target", "regions": "target", "class": "target"},
-)
-out = Pipeline([
-    v2.RandomHorizontalFlip(p=1.0),  # Image + Mask + Regions together (one library draw)
-    v2.Normalize(m, s),              # Image (torchvision v2, by type) — wrapped by a registered adapter
-    A.GaussNoise(p=1.0),             # Image (albumentations, by name) — wrapped by a registered adapter
-])(sample)
-# image flipped+normalized+noised; mask+regions flipped consistently; out["class"] untouched.
-# sampleflux ships NO native augmentation transforms — the libraries cover that via coercion.
-# Signal-domain items + the Fourier transform live in the domain package and register into the
-# same registries — a bare Fourier() drops into this Pipeline with no core edit.
+sample = Sample({"image": Image(rgb), "regions": Regions(boxes)}, roles={"regions": "target"})
+out = Pipeline([v2.RandomHorizontalFlip(p=1.0), A.GaussNoise(p=1.0)])(sample)   # adapter-coerced
 ```
 
-### What you may change (and where it's documented)
+### What you may change
 
-- **A new item type** — add a class + `@register_item` (usage: [typed-model.md](typed-model.md)); if
-  it is array-backed, subclass `NDArrayItem` and declare `_item_attrs`.
-- **A new per-type behaviour for an existing transform** — register a kernel
-  (`@Transform.kernel(ItemType)`), no core edit.
-- **The typed surface is imported from the package top level** — `bag/*` is the internal module
-  home; never teach a `sampleflux.bag.*` import path, so the module layout can change without
-  touching consumers.
+Nothing — superseded. Extension points live in the successor record above.
 
 ---
 
-## Native typed transforms that change a field's TYPE (`ConvertToImage`/`Threshold`/`ConnectedComponents`, 2026-07-22)
+## ~~Native typed transforms that change a field's TYPE (`ConvertToImage`/`Threshold`/`ConnectedComponents`, 2026-07-22)~~ — SUPERSEDED
 
-### Context
+> **Superseded (2026-07-25)** by
+> [One type-dispatched op engine — plain-dict records, libraries as-is](#one-type-dispatched-op-engine--plain-dict-records-libraries-as-is-2026-07-25),
+> which promotes this record's core insight — the type-changing `__call__`-override op as the
+> second sanctioned shape — to a rule of the data model itself. The ops survive (`ConvertToImage`:
+> array → `Image`, `Threshold`: array → `Mask`, `ConnectedComponents`: `Mask` → `Regions`,
+> plus the target ops) but now read/write plain record KEYS (`field=` in, `output=` out) — the
+> role tags, the `Sample` shims, and the legacy-op delegation described below are gone.
+> Kept as history — do not follow the role/shim details.
+
+### Context (historical)
 
 Two shapes of typed transform exist. The first is the augmentation shape the base `Transform`
 was built for: it `handles` an item type and, per handled field, applies a registered kernel that
 returns *the same type* (a flip returns a flipped `Image`), so `image`, `mask`, and `boxes` move
-together and library transforms (torchvision v2 / albumentations) drop in through the adapter
-coercion registry. The workspace deliberately ships **no** native transforms of that shape —
-libraries cover it.
+together. But a running detection/segmentation front-end needs a different shape: **read one
+field, write a field of a DIFFERENT type**. Turning a numeric array into a displayable image,
+thresholding an array into a boolean mask, and labelling that mask into a set of bin boxes are
+each a *type change* (`array → Image`, `array → Mask`, `Mask → Regions`), not an in-place
+per-type edit. No library provides them.
 
-But a running detection/segmentation front-end needs a different shape: **read one field, write a
-field of a DIFFERENT type**. Turning a numeric array into a displayable image, thresholding an
-array into a boolean mask, and labelling that mask into a set of bin boxes are each a *type
-change* (`array → Image`, `array → Mask`, `Mask → Regions`), not an in-place per-type edit. No
-library provides them, and the earlier ops that did (`ConvertToImage`, `ThresholdOp`,
-`ConnectedComponentsOp`) operated on a flat `(input, target, metadata)` triple, which the typed
-model does not carry. Without typed equivalents a `Sample` pipeline could not reach `Regions` from a
-raw array — the critical path for typed detection was blocked.
-
-### Decision
+### Decision (historical)
 
 Add native typed **twins** that subclass `Transform` and OVERRIDE `__call__` (rather than register
-a kernel), reading one field and writing a different-typed item — the same shape the domain
-package's `Spectrogram` twin (`Signal → Spectrogram`) already established:
+a kernel), reading one field and writing a different-typed item; resolve the source field by an
+explicit `field=` name or the first item of the natural type, with every miss raising a
+`ValueError` naming the sample's fields; write the output with role tags chosen semantically; and
+delegate each twin to its legacy op's math verbatim for byte-parity.
 
-- A twin declares `handles` / `consumes` / `produces` **truthfully** as graph metadata (e.g.
-  `ConnectedComponents`: `consumes=(Mask,)`, `produces=(Regions,)`), but does its work in
-  `__call__`, not through the kernel-dispatch loop — kernel dispatch is for same-type per-field
-  edits, and a type change has one input field and one output field.
-- The source field is resolved by a small `_find_*` helper: an explicit `field=` name, else the
-  first item of the natural type (a `Mask` for `ConnectedComponents`) or the first array-bearing
-  item — every miss raises a `ValueError` naming the sample's fields.
-- The output is written with `sample.replace_field(output, item)` + `sample.set_role(output, role)`
-  (copy-on-write), and the role is chosen semantically: the working image is `input`, a threshold
-  mask and raw connected-component boxes are `aux` (intermediates, and specifically NOT `pred` —
-  that role is reserved for a detector's output).
-- Each twin **reuses its legacy op's math verbatim** so the numbers are pinned identical:
-  `ConvertToImage` calls the shared `_render_rgb`/`_bound_longest_side` render core;
-  `ConnectedComponents` calls the shared `connected_component_bboxes` helper; `Threshold`
-  delegates to a legacy `ThresholdOp` instance run on a shim `Sample`. The twins are STRICTLY
-  ADDITIVE — the legacy ops are untouched, because many consumers still use them via the `Sample`
-  path.
+### What survived, and what was undone (2026-07-25)
 
-The generic connected-components output format is a hard contract: `Regions.boxes` is a list of
-`(row_min, row_max, col_min, col_max)` inclusive integer tuples (**row bounds first, then column
-bounds**). A downstream back-projection reads exactly that order to map bins to a world / signal
-coordinate frame, so the tuple order is load-bearing, not incidental.
+- **Survived:** the two-shapes rule; the `field=`-or-first-natural-type source resolution with loud
+  `ValueError` misses; the `(row_min, row_max, col_min, col_max)` inclusive integer bin-box
+  contract of `connected_component_bboxes` (**still load-bearing** — a downstream back-projection
+  reads exactly that order); truthful `consumes`/`produces` graph metadata.
+- **Undone:** role tags on outputs (an op now writes a named `output` key — `Threshold`'s default
+  `output="mask"`, `ConvertToImage`'s `output="image"`); the legacy `(input, target, metadata)` ops
+  and the shim-`Sample` delegation (the legacy ops are deleted; the math lives in the shared free
+  functions `threshold_array` / `connected_component_bboxes` / `value_to_image`).
 
-### Consequences
-
-- A `Sample` carrying a raw 2-D array runs `ConvertToImage → Threshold → ConnectedComponents`
-  end-to-end and arrives at a `Regions` field with no legacy `Sample` anywhere — the typed
-  detection/segmentation front-end is unblocked.
-- Parity is free and provable: because each twin reuses the legacy math, a twin's output is
-  byte-identical to a legacy run on the equivalent `Sample` (pinned in
-  `tests/test_typed_generic_ops.py`).
-- `ConvertToImage` does NOT republish `image_width_px` / `image_height_px` (the legacy op wrote
-  them into the shared metadata dict). The `Image` item's array SHAPE carries the pixel
-  dimensions, and the typed model has no shared dict to write into — a consumer reads the dims off
-  the payload.
-- `Threshold`'s `{meta_key}` expression grammar has no typed home (an item owns its own metadata;
-  there is no shared sample dict), so only numeric literals and `$ENV` bounds resolve in the twin;
-  a `{key}` bound raises loudly. Literal dB thresholds — the critical path — are unaffected.
-- The twins carry `category="op"` + `group="image"`/`"numpy"`, so they are discoverable exactly
-  like the legacy ops (their modules were already entry-pointed; a class added to a registered
-  module needs no new entry point).
-- The two DETECTION-TARGET twins `CocoToTorchVisionDetection` / `MasksToDetectionBoxes`
-  (`sampleflux/ops/target.py`, `group="structure"`) are the SAME shape reaching one step further:
-  they read one source field (a `Label` carrying a COCO `objects` mapping, or a `Mask`) and write
-  the torchvision detection target as a `Regions` item — `boxes` = the `[N,4]` xyxy tensor,
-  `labels` = the class-id tensor — tagged **`target`** (not `aux`: this IS the supervised target a
-  loss consumes, whereas `ConnectedComponents`'s raw blobs are an intermediate). `Regions` is the
-  natural typed home for a bounding-box set and the batch-friendly one — `typed_collate` gathers
-  per-sample `Regions` into a list of targets (the variable-N detection batch convention, since
-  boxes can't be stacked), exactly as it gathers a classification target `Label`. Byte-parity is
-  again free (each delegates to its legacy `*Op` on a shim `Sample`). Pinned in
-  `tests/test_typed_detection_target_ops.py`.
-
-### Example
+### Example (current successor shape)
 
 ```python
-from sampleflux import Sample, Mask
-from sampleflux.ops.image import ConvertToImage
-from sampleflux.ops.numpy import Threshold, ConnectedComponents
+from sampleflux.ops.numpy import ConnectedComponents, Threshold
 
-sample = Sample({"spec": Mask(db_spectrogram)})            # a raw 2-D array item
-sample = ConvertToImage()(sample)                               # + Image field (role "input")
-sample = Threshold(field="spec", low_level=-30.0)(sample)       # + Mask field (role "aux")
-sample = ConnectedComponents(field="mask")(sample)              # + Regions field (role "aux")
-
-sample["boxes"].boxes  # [(row_min, row_max, col_min, col_max), ...] — the pinned bin-box contract
+record = Threshold(field="spec", low_level=-30.0)(record)      # + record["mask"]  (a Mask)
+record = ConnectedComponents(field="mask")(record)             # + record["regions"] (a Regions)
 ```
 
-### What you may change (and where it's documented)
+### What you may change
 
-- **A twin's source-field resolution or output role** — keep the `_find_*` → `replace_field` →
-  `set_role` shape and a loud `ValueError` on a miss; `aux` vs `pred` is a semantic choice
-  (raw detections are `aux`).
-- **The `(row_min, row_max, col_min, col_max)` bin-box order is a contract** — a back-projection
-  depends on it; changing it is an architectural change that must update this record and every
-  consumer.
-- **Do not modify the legacy ops or reimplement their math in a twin** — a twin reuses the legacy
-  math so parity is guaranteed; the twins are additive and the legacy `Sample`-path consumers must
-  keep working.
+The bin-box tuple order remains a contract (see the successor record); everything else here is
+history.
 
-## A typed field cannot hold a live torch tensor — `ToTensor` stores CHW-float numpy (`ToTensor`/`EncodeTarget`/`DecodeTarget`/`MetadataToTarget`, 2026-07-22)
+---
 
-### Context
+## ~~A typed field cannot hold a live torch tensor — `ToTensor` stores CHW-float numpy (2026-07-22)~~ — SUPERSEDED (decision REVERSED 2026-07-25)
 
-The typed detection twins above reach `Regions`; a typed CLASSIFICATION front-end needs the other
-two shapes: turn the working image into the model's **input tensor**, and turn the class-name label
-into the encoded **target id**. The earlier ops that did this (`ToTensor`, `MetadataToTargetOp`,
-`EncodeTargetOp` / `DecodeTargetOp`) operated on a flat `(input, target, metadata)` triple. Two
-facts of the typed model shape the twins: (1) there is NO shared metadata dict — the label already
-rides a `Label` field that owns its metadata; (2) an array item is an `np.ndarray` SUBCLASS whose
-`__new__` runs `np.asarray(data)`, so **a field payload is coerced to numpy** — an `Image` cannot
-hold a live `torch.Tensor` (verified: `item_data(Image(tensor))` is an `ndarray`), and a bare tensor
-stored directly as a field value has no registered item type, so `typed_collate` / the storage codec
-(`bag.io.encode_item`) cannot serialize it.
+> **Superseded (2026-07-25, user decision)**: the constraint below was a TYPED-BAG artifact —
+> every field had to be a typed item, and an `NDArrayItem` coerces its payload through
+> `np.asarray`, so a live tensor could not ride a field. In the RECORD model a value can be
+> ANYTHING (the `"plain"` codec tag covers storage, `collate_records._stack` stacks torch
+> tensors natively, a bare torchvision-v2 op transforms them as-is), so **`ToTensor` now writes
+> the LIVE CHW-float `torch.Tensor` under the key** (in place by default, `output=` for a new
+> key) — no numpy round-trip, and the op's name is again the truth. `Image` itself still cannot
+> hold a tensor (it IS an ndarray subclass); the torch-`Tensor`-subclass ITEM base (a typed
+> tensor value with attrs) remains the documented follow-up (root `TASKS.md`).
 
-### Decision
+### Context (historical)
 
-Add native typed twins subclassing `Transform` and overriding `__call__` (the same shape as the
-detection twins), each reusing its legacy op VERBATIM on a shim `Sample` for byte-parity:
+A typed classification front-end needs to turn the working image into the model's input tensor and
+the class-name label into the encoded target id. Two facts shape the ops: (1) there is no shared
+metadata dict — the label already rides a `Label` value that owns its metadata; (2) an array item
+is an `np.ndarray` SUBCLASS whose `__new__` runs `np.asarray(data)`, so **a payload is coerced to
+numpy** — an `Image` cannot hold a live `torch.Tensor`, and a bare tensor stored directly has no
+registered item type for the collate / storage codec.
 
-- **`ToTensor`** (`ops/torch.py`, `group="torch"`) resolves an array-bearing field (explicit `field`
-  or the first array/PIL item), runs `ToTensor` (HWC→CHW + `normalize`), and writes an `Image`
-  with `layout="CHW"`. Because `NDArrayItem` coerces the payload, the stored value is a CHW `float32`
-  **numpy** array whose values equal `ToTensor(...).input.numpy()` — NOT a live tensor. By default
-  it REPLACES the source field in place so the field's `input` role is preserved (`output` writes a
-  new field tagged `input` instead). `typed_collate` stacks these payloads with `np.stack`; the
-  numpy→tensor conversion is the collate / model boundary's job, exactly as for any numpy dataset. A
-  Tensor-subclass item that would let a field carry a live tensor is the documented follow-up
-  (`bag/items.py` note + root TASKS.md).
-- **`EncodeTarget` / `DecodeTarget`** (`ops/target.py`, `group="structure"`) resolve a `Label` field,
-  map its `.value` through the config-pinned `mapping` by delegating to `EncodeTargetOp` /
-  `DecodeTargetOp` (so the non-empty-mapping validation AND the shared `_lookup` are byte-identical),
-  and write a new `Label` (carrying the source label's `classes`) tagged `target`. In place by
-  default (`output` blank).
-- **`MetadataToTarget`** is provided for PARITY / config-compat but is largely REDUNDANT in the typed
-  model: a source emits the label directly as a `Label` field already tagged `target`, so no
-  metadata→target move is needed. The twin reads a field's natural value (a `Label`'s `.value`, else
-  its array payload) or a named attribute (`key=`) and writes a target `Label` — the escape hatch for
-  a label that rode as another item's attribute.
+### Decision (historical, largely still in force)
 
-### Consequences
+`ToTensor` resolves an array-bearing key, runs the HWC→CHW + `normalize` conversion, and writes an
+`Image(layout="CHW")` whose payload is CHW `float32` numpy — NOT a live tensor; in place by
+default so the working key keeps its name. `EncodeTarget` / `DecodeTarget` map a `Label`'s value
+through a config-pinned `mapping` and write the encoded `Label` back (carrying the source label's
+`classes`). `MetadataToTarget` stays as the escape hatch for a label that rode as another value's
+attribute — largely redundant when a source emits the label as a `Label` under its own key.
 
-- A `Sample` carrying an HWC `Image` (role input) + a name `Label` (role target) runs
-  `ToTensor → EncodeTarget` into a CHW-float input field + an int-id target field, with no legacy
-  `Sample` anywhere — the typed classification front-end is unblocked.
-- The model-input payload is CHW-float **numpy**, not a live `torch.Tensor`; a consumer / trainer
-  tensorizes at the collate or forward boundary. This is a deliberate current limitation, not a bug —
-  it disappears when the Tensor-subclass item lands.
-- The twins carry `category="op"` + the legacy `group`, so they are discoverable like the legacy ops
-  (their modules — `sampleflux-ops-torch` / `sampleflux-ops-target` — are already entry-pointed; a
-  class added to a registered module needs no new entry point).
-
-### Example
+### Example (current successor shape)
 
 ```python
-from sampleflux import Sample, Image, Label
-from sampleflux.ops.torch import ToTensor
 from sampleflux.ops.target import EncodeTarget
+from sampleflux.ops.torch import ToTensor
 
-sample = Sample(
-    {"image": Image(hwc_uint8), "class": Label("cat")},
-    roles={"image": "input", "class": "target"},
-)
-sample = ToTensor(field="image")(sample)                 # image -> CHW float32 Image (role input, in place)
-sample = EncodeTarget(mapping={"cat": 0, "dog": 1}, field="class")(sample)  # class -> Label(0) (role target)
+record = {"image": Image(hwc_uint8), "class": Label("cat")}
+record = ToTensor(field="image")(record)                                     # record["image"] is now a LIVE CHW float32 torch.Tensor
+record = EncodeTarget(mapping={"cat": 0, "dog": 1}, field="class")(record)   # Label(0), classes kept
 ```
 
-### What you may change (and where it's documented)
+### What you may change
 
-- **The Tensor-subclass item follow-up** — once a field can carry a live tensor, `ToTensor` should
-  store it directly; update this record and the `bag/items.py` note together.
-- **`ToTensor`'s replace-in-place default vs a new output field** — keep role preservation (in place)
-  as the default; a new `output` field is tagged `input`.
-- **Do not modify the legacy ops or reimplement their math in a twin** — the twins delegate to the
-  legacy ops for byte-parity and are strictly additive.
+- **The Tensor-subclass item follow-up** — the tensor currently rides as a PLAIN value (no item
+  attrs); a torch-`Tensor`-subclass item base would make it a typed value with metadata again.
+  Update this record and the `sampleflux/items.py` note together when it lands.

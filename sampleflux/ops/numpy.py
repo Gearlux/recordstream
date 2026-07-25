@@ -7,9 +7,8 @@ import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
-from sampleflux.bag.items import Mask, NDArrayItem, Regions, item_data
-from sampleflux.bag.sample import Sample
-from sampleflux.bag.transform import Transform
+from sampleflux.items import Mask, NDArrayItem, Record, Regions, item_data
+from sampleflux.transform import Transform
 
 logger = get_logger(__name__)
 
@@ -21,8 +20,8 @@ def resolve_expression(value: str, meta: Optional[Dict[str, Any]] = None) -> str
     """Substitute ``{key}`` from ``meta`` and ``$NAME`` from ``os.environ``.
 
     Returns the substituted string verbatim — the caller is responsible for any further
-    casting (e.g. ``float(...)`` for a numeric expression). In the typed-bag model an item
-    owns its own metadata (there is no shared sample dict), so ``meta`` is usually empty and
+    casting (e.g. ``float(...)`` for a numeric expression). In the record model an item
+    owns its own metadata (there is no shared metadata dict), so ``meta`` is usually empty and
     only literals / ``$ENV`` expressions resolve; a ``{key}`` bound then raises ``KeyError``.
 
     Args:
@@ -125,15 +124,15 @@ def threshold_array(
 class Threshold(Transform):
     """An array-bearing field → a boolean ``Mask`` item.
 
-    Reads the array at ``field`` (blank = the first array-bearing item in the bag) and thresholds
+    Reads the array at ``field`` (blank = the first array-bearing item in the record) and thresholds
     it into a boolean mask with the bound / comparison / expression math (:func:`threshold_array`),
-    writing a :class:`~sampleflux.Mask` item under ``output`` tagged ``aux`` (a threshold mask is an
-    intermediate that a later op — e.g. :class:`ConnectedComponents` — consumes). Any other field
+    writing a :class:`~sampleflux.Mask` item under ``output`` (a threshold mask is an
+    intermediate that a later op — e.g. :class:`ConnectedComponents` — consumes). Any other key
     passes through untouched.
 
     Each bound is a numeric literal or a ``resolve_expression`` string — ``5.5`` / ``"5.5"``
     (literal) or ``"$REF_SNR"`` (environment variable). NOTE: ``{meta_key}`` expressions have no
-    typed metadata source in the bag model, so only literals and ``$ENV`` resolve here.
+    metadata source in the record model, so only literals and ``$ENV`` resolve here.
 
     Args:
         low_level: Lower bound (numeric literal or ``$ENV`` expression) compared with ``low_op`` when set;
@@ -143,7 +142,7 @@ class Threshold(Transform):
         low_op: Lower-bound comparison — ``">"`` (strict, default) or ``">="`` (inclusive).
         high_op: Upper-bound comparison — ``"<"`` (strict, default) or ``"<="`` (inclusive).
         field: Name of the array field to threshold; blank (default) picks the first array-bearing item.
-        output: Name of the field the boolean ``Mask`` item is written to (added if new; role ``aux``).
+        output: Name of the key the boolean ``Mask`` item is written to (added if new).
     """
 
     handles = (NDArrayItem,)
@@ -167,26 +166,25 @@ class Threshold(Transform):
         self.field = field
         self.output = output
 
-    def _find_array(self, sample: Sample) -> np.ndarray:
+    def _find_array(self, record: Record) -> np.ndarray:
         """Resolve the array to threshold (``self.field`` or the first array-bearing item)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(f"Threshold: field {self.field!r} not in sample (fields: {list(sample.keys())})")
-            data = item_data(sample[self.field])
+            if self.field not in record:
+                raise ValueError(f"Threshold: field {self.field!r} not in record (keys: {list(record)})")
+            data = item_data(record[self.field])
             if not isinstance(data, np.ndarray):
                 raise TypeError(f"Threshold: field {self.field!r} payload is {type(data).__name__}, expected an array")
             return data
-        for _key, item in sample.items():
+        for _key, item in record.items():
             data = item_data(item)
             if isinstance(data, np.ndarray):
                 return data
-        raise ValueError(f"Threshold: no array-bearing field in sample (fields: {list(sample.keys())})")
+        raise ValueError(f"Threshold: no array-bearing field in record (keys: {list(record)})")
 
-    def __call__(self, sample: Sample) -> Sample:
-        arr = self._find_array(sample)
+    def __call__(self, record: Record) -> Record:
+        arr = self._find_array(record)
         mask = threshold_array(arr, self.low_level, self.high_level, self.low_op, self.high_op)
-        out = sample.replace_field(self.output, Mask(mask))
-        return out.set_role(self.output, "aux")
+        return {**record, self.output: Mask(mask)}
 
 
 def connected_component_bboxes(
@@ -237,11 +235,11 @@ def connected_component_bboxes(
 class ConnectedComponents(Transform):
     """A boolean ``Mask`` → a ``Regions`` item.
 
-    Reads the :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the bag, else the
+    Reads the :class:`~sampleflux.Mask` at ``field`` (blank = the first ``Mask`` in the record, else the
     first array-bearing item) as a 2-D boolean array and labels its connected ``True`` regions into
     ``(row_min, row_max, col_min, col_max)`` inclusive bin-box tuples via
     :func:`connected_component_bboxes`, writing them as a :class:`~sampleflux.Regions` item under
-    ``output`` tagged ``aux`` (RAW detections, not model predictions). Any other field passes through.
+    ``output`` (RAW detections, not model predictions). Any other key passes through.
 
     Components smaller than ``min_area_bins`` are dropped; ``connectivity`` selects the 4- or
     8-neighborhood. Requires ``scipy`` (``pip install sampleflux[vision]``).
@@ -250,7 +248,7 @@ class ConnectedComponents(Transform):
         min_area_bins: Minimum component area in bins; smaller connected regions are dropped (``>= 1``).
         connectivity: Pixel neighborhood — ``4`` (orthogonal only) or ``8`` (orthogonal + diagonal).
         field: Name of the ``Mask`` field to label; blank (default) picks the first ``Mask`` (else first array).
-        output: Name of the field the ``Regions`` item is written to (added if new; role ``aux``).
+        output: Name of the key the ``Regions`` item is written to (added if new).
     """
 
     handles = (Mask,)
@@ -270,29 +268,27 @@ class ConnectedComponents(Transform):
         self.field = field
         self.output = output
 
-    def _find_mask(self, sample: Sample) -> np.ndarray:
+    def _find_mask(self, record: Record) -> np.ndarray:
         """Resolve the mask to label (``self.field``, else the first ``Mask``, else the first array)."""
         if self.field:
-            if self.field not in sample.keys():
-                raise ValueError(
-                    f"ConnectedComponents: field {self.field!r} not in sample (fields: {list(sample.keys())})"
-                )
-            data = item_data(sample[self.field])
+            if self.field not in record:
+                raise ValueError(f"ConnectedComponents: field {self.field!r} not in record (keys: {list(record)})")
+            data = item_data(record[self.field])
         else:
             data = None
-            for _key, item in sample.items():
+            for _key, item in record.items():
                 if isinstance(item, Mask):
                     data = item_data(item)
                     break
             if data is None:
-                for _key, item in sample.items():
+                for _key, item in record.items():
                     payload = item_data(item)
                     if isinstance(payload, np.ndarray):
                         data = payload
                         break
             if data is None:
                 raise ValueError(
-                    f"ConnectedComponents: no Mask or array-bearing field in sample (fields: {list(sample.keys())})"
+                    f"ConnectedComponents: no Mask or array-bearing field in record (keys: {list(record)})"
                 )
         if not isinstance(data, np.ndarray):
             raise TypeError(f"ConnectedComponents expects an np.ndarray mask, got {type(data).__name__}")
@@ -300,11 +296,10 @@ class ConnectedComponents(Transform):
             raise ValueError(f"ConnectedComponents expects a 2-D mask; got shape {data.shape}")
         return data
 
-    def __call__(self, sample: Sample) -> Sample:
-        mask = self._find_mask(sample)
+    def __call__(self, record: Record) -> Record:
+        mask = self._find_mask(record)
         bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
-        out = sample.replace_field(self.output, Regions(boxes=list(bboxes)))
-        return out.set_role(self.output, "aux")
+        return {**record, self.output: Regions(boxes=list(bboxes))}
 
 
 __all__ = [
