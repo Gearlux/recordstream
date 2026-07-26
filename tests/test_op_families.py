@@ -269,3 +269,110 @@ class TestFilterDropRoutes:
     def test_unset_predicate_raises_lazily(self) -> None:
         with pytest.raises(ValueError, match="predicate"):
             FilterOp()({"i": 0})
+
+
+# --------------------------------------------------------------------------- #
+# The open op-family registry (register_op_family) — third-party libraries
+# --------------------------------------------------------------------------- #
+class FakeLibScale:
+    """Stands in for a foreign library's op type — deliberately NOT record-callable,
+    so a test passing proves dispatch went through the registered invoker."""
+
+    def __init__(self, factor: float = 2.0) -> None:
+        self.factor = factor
+
+
+def is_fakelib(op: object) -> bool:
+    """Module-level matcher (pickles by reference for the spawn test)."""
+    return isinstance(op, FakeLibScale)
+
+
+def invoke_fakelib(record: Record, op: FakeLibScale) -> Record:
+    """Module-level invoker — the fake library's calling convention."""
+    return {**record, "gain_db": record["gain_db"] * op.factor}
+
+
+def invoke_fakelib_override(record: Record, op: FakeLibScale) -> Record:
+    """A second invoker for the shadowing / replacement tests."""
+    return {**record, "gain_db": -999.0}
+
+
+@pytest.fixture()
+def family_registry():
+    """Snapshot/restore the global registry so registrations never leak between tests."""
+    from sampleflux import core
+
+    snapshot = list(core._OP_FAMILIES)
+    yield
+    core._OP_FAMILIES[:] = snapshot
+
+
+class TestOpFamilyRegistry:
+    def test_builtins_are_registered_through_the_same_registry(self) -> None:
+        from sampleflux import registered_op_families
+
+        assert registered_op_families()[:2] == ("albumentations", "torchvision_v2")
+
+    def test_registered_family_dispatches_via_invoker(self, family_registry) -> None:
+        from sampleflux import register_op_family
+
+        register_op_family("fakelib", is_fakelib, invoke_fakelib)
+        out = _apply_op(_base_record(), FakeLibScale(factor=3.0))
+        assert out is not None and out["gain_db"] == -9.0  # -3.0 * 3 — via the invoker, op never called
+        assert isinstance(out["image"], Image)  # rest of the record untouched
+
+    def test_registered_family_runs_in_flux_ops_list(self, family_registry) -> None:
+        from sampleflux import register_op_family
+
+        register_op_family("fakelib", is_fakelib, invoke_fakelib)
+        out = list(Flux(source=[_base_record()], ops=[FakeLibScale(factor=2.0), lambda r: {**r, "tag": 1}]))
+        assert out[0]["gain_db"] == -6.0 and out[0]["tag"] == 1  # mixes with native ops in ONE list
+
+    def test_last_registered_family_wins_overlap(self, family_registry) -> None:
+        from sampleflux import register_op_family
+
+        register_op_family("fakelib", is_fakelib, invoke_fakelib)
+        register_op_family("fakelib_specific", is_fakelib, invoke_fakelib_override)  # same matcher, later
+        out = _apply_op(_base_record(), FakeLibScale())
+        assert out is not None and out["gain_db"] == -999.0
+
+    def test_reregistering_name_replaces_in_place(self, family_registry) -> None:
+        from sampleflux import register_op_family, registered_op_families
+
+        register_op_family("fakelib", is_fakelib, invoke_fakelib)
+        n = len(registered_op_families())
+        register_op_family("fakelib", is_fakelib, invoke_fakelib_override)
+        assert len(registered_op_families()) == n  # replaced, not duplicated
+        out = _apply_op(_base_record(), FakeLibScale())
+        assert out is not None and out["gain_db"] == -999.0
+
+    def test_unmatched_op_falls_back_to_native_call(self, family_registry) -> None:
+        out = _apply_op(_base_record(), lambda r: {**r, "native": True})
+        assert out is not None and out["native"] is True
+
+    def test_spawn_parallel_ships_family_to_workers(self, family_registry) -> None:
+        from sampleflux import register_op_family
+
+        register_op_family("fakelib", is_fakelib, invoke_fakelib)
+        flux = Flux(source=spawn_records(), ops=[FakeLibScale(factor=2.0)]).parallel(2)
+        results = list(flux)
+        assert len(results) == 4
+        assert all(r["gain_db"] == -6.0 for r in results)  # invoker ran INSIDE the workers
+
+
+class TestFormulaReducers:
+    def test_array_reducers_are_function_style(self) -> None:
+        # amax/amin/mean/std/median are pre-bound numpy callables in the sandbox namespace.
+        from sampleflux.ops.formula import FormulaOp
+
+        rec = {"image": Image(np.arange(16, dtype=np.float32).reshape(4, 4) / 15.0)}
+        out = FormulaOp(formula="amax(a) * 0.5", field="image")(rec)
+        assert float(np.asarray(out["image"])) == pytest.approx(0.5)
+
+    def test_attribute_reduction_is_not_part_of_the_contract(self) -> None:
+        # a.max() depends on numpy's lazy-import cache (KeyError '__import__' in a cold
+        # process): the FUNCTION form is the sanctioned spelling. We only pin that the
+        # function form never regresses; the attribute form is deliberately unpinned.
+        from sampleflux.ops.formula import _FORMULA_NAMESPACE
+
+        assert {"amax", "amin", "mean", "std", "median"} <= set(_FORMULA_NAMESPACE)

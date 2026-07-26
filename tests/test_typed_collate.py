@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from sampleflux import Image, Label, Mask, Record, collate, collate_records, get_collate, register_item
+from sampleflux import Image, Label, Mask, Record, Regions, collate, collate_records, get_collate, register_item
 
 
 @register_item
@@ -79,3 +79,55 @@ class TestRecordCollate:
     def test_unknown_key_raises_with_known_keys(self) -> None:
         with pytest.raises(KeyError, match="no collate registered"):
             get_collate("nope")
+
+
+# --------------------------------------------------------------------------- #
+# The collate REGISTRY: a task collate opts out of the generic folding rules
+# (the docs/record-model.md detection example — variable-N boxes cannot stack).
+# --------------------------------------------------------------------------- #
+def _ragged_detection_records():
+    return [
+        {
+            "image": Image(np.zeros((4, 4, 3), dtype=np.float32)),
+            "target": Regions(boxes=[[0, 0, 2, 2]], labels=[1]),
+            "pack": "a",
+        },
+        {
+            "image": Image(np.zeros((4, 4, 3), dtype=np.float32)),
+            "target": Regions(boxes=[[0, 0, 1, 1], [1, 1, 3, 3], [0, 2, 2, 4]], labels=[0, 1, 0]),
+            "pack": "b",
+        },
+    ]
+
+
+def test_generic_collate_leaves_ragged_regions_as_lists() -> None:
+    # Rule 2: the generic fold can only give per-record lists for a wrapper item —
+    # exactly why detection registers its own collate.
+    batch = collate_records(_ragged_detection_records())
+    assert isinstance(batch["target"], Regions)
+    assert [len(b) for b in batch["target"].boxes] == [1, 3]
+
+
+def test_registered_task_collate_produces_its_own_batch_contract() -> None:
+    import torch
+
+    from sampleflux import collate, get_collate, register_collate
+
+    @register_collate("_test_detection")
+    def detection_collate(items):
+        images = torch.stack([torch.as_tensor(np.asarray(r["image"])).permute(2, 0, 1) for r in items])
+        targets = [
+            {
+                "boxes": torch.as_tensor(r["target"].boxes, dtype=torch.float32).reshape(-1, 4),
+                "labels": torch.as_tensor(r["target"].labels, dtype=torch.int64),
+            }
+            for r in items
+        ]
+        metadata = [{k: v for k, v in r.items() if k not in ("image", "target")} for r in items]
+        return {"images": images, "targets": targets, "metadata": metadata}
+
+    assert get_collate("_test_detection") is detection_collate
+    batch = collate(_ragged_detection_records(), key="_test_detection")
+    assert tuple(batch["images"].shape) == (2, 3, 4, 4)
+    assert [tuple(t["boxes"].shape) for t in batch["targets"]] == [(1, 4), (3, 4)]  # raggedness preserved
+    assert batch["metadata"] == [{"pack": "a"}, {"pack": "b"}]

@@ -37,7 +37,7 @@ class ConfigureOp:
 
         - !class:sampleflux.ops.configure.ConfigureOp
           ops:
-            - !class:sampleflux.ops.formula.FormulaOp {field: image, formula: "a.max() * 0.5"}
+            - !class:sampleflux.ops.formula.FormulaOp {field: image, formula: "amax(a) * 0.5"}
           source: image
           target: !class:sampleflux.ops.numpy.Threshold
             low_op: ">="

@@ -6,7 +6,7 @@ Submodules:
       connected_component_bboxes / resolve_expression helpers)
     - sampleflux.ops.torch: ToTensor (+ to_tensor helper)
     - sampleflux.ops.image: ConvertToImage (+ value_to_image / normalize_to_uint8 …)
-    - sampleflux.ops.target: MetadataToTarget, EncodeTarget, DecodeTarget,
+    - sampleflux.ops.target: EncodeTarget, DecodeTarget,
       CocoToTorchVisionDetection, MasksToDetectionBoxes
     - sampleflux.ops.structure: RenameField, DropField, CopyField, SelectFields
     - sampleflux.ops.parallel: Parallel (worker-pool sub-pipeline)
@@ -14,7 +14,7 @@ Submodules:
     - sampleflux.ops.random_apply: RandomApply (gate any op behind a Bernoulli flip)
     - sampleflux.ops.configure: ConfigureOp (per-record parameter injection)
     - sampleflux.ops.formula: FormulaOp (math formula over one record entry)
-    - sampleflux.ops.sink: SampleSinkOp (adapt a DataSink as a pass-through op)
+    - sampleflux.ops.sink: RecordSinkOp (adapt a DataSink as a pass-through op)
     - sampleflux.ops.context: Save, Use, Drop, Apply, Capture, MergeFields (the per-record
       Context graph plane — the flat-list building blocks a branchy flow: document lowers to)
     - sampleflux.ops.debug: PrintSampleOp (per-record summary probe)
@@ -32,15 +32,9 @@ from sampleflux.ops.image import ConvertToImage
 from sampleflux.ops.numpy import ConnectedComponents, Threshold
 from sampleflux.ops.parallel import Parallel
 from sampleflux.ops.random_apply import RandomApply
-from sampleflux.ops.sink import SampleSinkOp
+from sampleflux.ops.sink import RecordSinkOp
 from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
-from sampleflux.ops.target import (
-    CocoToTorchVisionDetection,
-    DecodeTarget,
-    EncodeTarget,
-    MasksToDetectionBoxes,
-    MetadataToTarget,
-)
+from sampleflux.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
 from sampleflux.ops.torch import ToTensor
 
 __all__ = [
@@ -59,13 +53,12 @@ __all__ = [
     "FormulaOp",
     "MasksToDetectionBoxes",
     "MergeFields",
-    "MetadataToTarget",
     "Parallel",
     "PrintSampleOp",
     "RandomApply",
     "RenameField",
     "Save",
-    "SampleSinkOp",
+    "RecordSinkOp",
     "SelectFields",
     "Threshold",
     "ToTensor",

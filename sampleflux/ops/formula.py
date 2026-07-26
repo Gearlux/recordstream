@@ -12,6 +12,7 @@ value survives serialization.
 import math as _math
 from typing import Any, Dict
 
+import numpy as _np
 from confluid import configurable
 
 from sampleflux.items import Record, item_data, with_data
@@ -20,6 +21,12 @@ from sampleflux.items import Record, item_data, with_data
 # node's namespace. The bound variable shadows same-named constants (e.g. ``e``).
 _FORMULA_NAMESPACE: Dict[str, Any] = {k: getattr(_math, k) for k in dir(_math) if not k.startswith("_")}
 _FORMULA_NAMESPACE.update({"abs": abs, "min": min, "max": max, "round": round, "pow": pow})
+# Array reducers, FUNCTION style (``amax(a) * 0.5``) — pre-bound numpy callables whose
+# internal lazy imports resolve via numpy's own globals. The ATTRIBUTE form (``a.max()``)
+# is NOT guaranteed under the sandbox: numpy's C reductions lazy-import through the
+# CALLING frame, whose ``__builtins__`` is empty here (KeyError: '__import__') unless some
+# earlier code already warmed that import in this process. Teach the function form.
+_FORMULA_NAMESPACE.update({"amax": _np.max, "amin": _np.min, "mean": _np.mean, "std": _np.std, "median": _np.median})
 
 
 @configurable(category="op", group="compose")
@@ -27,7 +34,7 @@ class FormulaOp:
     """Replace the ``field``-keyed record value with ``formula`` evaluated over it.
 
     Args:
-        formula: Expression over ``var`` (e.g. ``"a * 0.2"``); ``math.*`` + ``abs``/``min``/``max``/``round`` allowed.
+        formula: Expression over ``var`` — math.*, abs/min/max/round/pow + reducers amax/amin/mean/std/median.
         field: Record key whose value the formula reads and replaces; required at call time.
         var: Variable name the incoming value binds to. Defaults to ``a``.
     """

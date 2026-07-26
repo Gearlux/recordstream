@@ -4,7 +4,7 @@ A sample is a **plain `dict`** of **typed values**. Import the whole surface fro
 LEVEL (`from sampleflux import Record, Image, Mask, Regions, Label, Transform, Pipeline,
 as_transform, item_data, with_data, register_item, register_kernel, register_io, collate_records, ...`).
 The design rationale is recorded in
-[architecture.md](architecture.md#one-type-dispatched-op-engine--plain-dict-records-libraries-as-is-2026-07-25).
+[architecture.md](architecture.md#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25).
 
 ## Why
 
@@ -324,9 +324,41 @@ storable — with no core edit.
 
 ### A new library family
 
-Supporting a new external transform library is NOT an adapter class — it is one new branch in
-`core._apply_op` (an MRO module-name matcher plus the library's native calling convention), so every
-engine route and composing op picks it up at once.
+Supporting a new external transform library (kornia, DALI, an albumentations fork, a
+signal-processing library) is NOT an adapter class — it is one **registered op family**: a matcher
+that recognises the library's op objects plus an invoker that applies one op with the library's own
+calling convention. Every engine route (sequential, spawn-parallel, streamed, random-access) and
+every composing op picks it up at once, because they all funnel through `_apply_op`:
+
+```python
+from sampleflux import register_op_family
+
+def is_kornia(op) -> bool:
+    # Keep the matcher IMPORT-FREE: inspect MRO module names, never import the library.
+    return any(c.__module__.startswith("kornia.augmentation") for c in type(op).__mro__)
+
+def invoke_kornia(record, op):
+    # kornia augmentations are nn.Modules over batched BCHW tensors — one draw per call.
+    img = record["image"]                    # a CHW torch.Tensor (e.g. after ToTensor)
+    out = op(img.unsqueeze(0)).squeeze(0)
+    return {**record, "image": out}
+
+register_op_family("kornia", is_kornia, invoke_kornia)
+
+# From here on, bare kornia ops sit in ANY ops list — Flux, Pipeline, RandomApply, flow steps:
+flux = Flux(source=records, ops=[ToTensor(field="image"), K.RandomHorizontalFlip(p=1.0)])
+```
+
+The rules: dispatch checks families **last-registered first**, so a more specific family (say a
+fork extending albumentations) registers after the built-ins and wins the overlap; re-registering a
+name replaces that family in place; matcher and invoker must be **module-level functions** — the
+spawn-parallel routes pickle them by reference to rebuild the registry inside worker processes
+(defining them in a script's `__main__` or a REPL breaks `.parallel()`; a module import side effect
+is the sanctioned place, exactly like `register_item`/`register_kernel`). The built-in
+`albumentations` / `torchvision_v2` families register through this same API at import — there is no
+privileged code path. When a library's convention needs per-op configuration instead (which key to
+read, per-op state), write a normal `Transform` op that wraps it explicitly — the registry is for
+AS-IS drop-in.
 
 ## Engines — Flux and FlowGraph carry the record
 
@@ -411,13 +443,62 @@ like a Python keyword (e.g. `class`) can't be addressed in an expression — use
 `predicate` or a non-keyword key name. Live records expose the same nested shape via
 `sampleflux.storage.query.record_metadata(record)`. See [storage.md](storage.md).
 
-## Batching — `collate_records`
+## Batching — `collate_records` and the collate registry
 
-`collate_records` (the collate registry's `"record"` default) turns N record dicts into ONE batched
-record: per key, typed payloads stack (torch → stacked tensor, numpy → stacked array, else a list)
-and each declared item attr becomes a LIST of per-record values, decoded back into one batched item
-of the same type; a plain value batches as the plain list. Batches must be key-homogeneous — a
-mismatch raises. See [kinds.md](kinds.md).
+A torch `DataLoader` (or `Flux.batch`) hands a collate function a LIST of N records and expects
+ONE object back. `collate_records` — the registry's `"record"` default — folds per key with three
+rules (all records must share the same key set; a mismatch raises):
+
+1. **array-backed item** → payloads stacked into one array/tensor with a leading batch dim, SAME
+   item type back; each declared attr becomes a per-record list;
+2. **wrapper item** (`Label`, `Regions`) → ONE item whose fields are per-record LISTS — deliberately
+   not auto-tensorized (turning class names into an `[N]` int64 tensor is the model boundary's one
+   explicit step, not a generic-engine guess);
+3. **plain value** → a plain list.
+
+```python
+records = [{"image": Image(...2×2×3...), "class": Label(i % 2, classes=["noise", "drone"]),
+            "snr_db": 10.0 * i} for i in range(3)]
+batch = collate_records(records)
+# image:  Image (3, 2, 2, 3)      layout: ['HWC', 'HWC', 'HWC']
+# class:  Label value=[0, 1, 0]   classes: [['noise', 'drone'], ×3]
+# snr_db: [0.0, 10.0, 20.0]
+```
+
+### When the generic rules cannot work: register a task collate
+
+Stacking is task-shaped, and detection is the canonical failure: each record carries a DIFFERENT
+number of boxes, and rule 2 can only give you `Regions(boxes=[<1 box>, <3 boxes>])` — per-record
+lists no detection model accepts. A detection model family has its own batch contract (stacked
+images + RAGGED per-record target dicts), so the task package registers a collate that produces
+exactly that:
+
+```python
+from sampleflux import Image, Regions, collate, register_collate
+
+@register_collate("detection")
+def detection_collate(items):
+    """The torchvision detection contract: stacked images + ragged per-record targets."""
+    images = torch.stack([torch.as_tensor(np.asarray(r["image"])).permute(2, 0, 1) for r in items])
+    targets = [
+        {"boxes": torch.as_tensor(r["target"].boxes, dtype=torch.float32).reshape(-1, 4),
+         "labels": torch.as_tensor(r["target"].labels, dtype=torch.int64)}
+        for r in items
+    ]
+    metadata = [{k: v for k, v in r.items() if k not in ("image", "target")} for r in items]
+    return {"images": images, "targets": targets, "metadata": metadata}
+
+batch = collate(records, key="detection")     # or: DataLoader(..., collate_fn=get_collate("detection"))
+# images:     [2, 3, 4, 4]                    — uniform, so stacked
+# targets[0]: {'boxes': [1, 4], 'labels': [1]}
+# targets[1]: {'boxes': [3, 4], 'labels': [3]}  — raggedness PRESERVED, per record
+```
+
+The registration is what "solves" detection: the registry lets the task OPT OUT of the generic
+folding entirely and emit its model family's native batch shape — while the engine keeps owning
+only the GROUPING (yielding lists of records) and never grows task knowledge. Registration is
+additive (an import side effect of the task package); a config wires the collate by reference
+(`collate_fn: !ref:mypkg.detection_collate`) like any other slot. See [kinds.md](kinds.md).
 
 ## What is NOT here yet (follow-ups)
 

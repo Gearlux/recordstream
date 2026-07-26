@@ -1,4 +1,4 @@
-"""``SampleSinkOp`` — adapt a :class:`~sampleflux.storage.base.DataSink` as a pass-through op.
+"""``RecordSinkOp`` — adapt a :class:`~sampleflux.storage.base.DataSink` as a pass-through op.
 
 Lets any storage sink (``HDF5Sink``, ``ZarrGroupSink``, a domain package's JSON
 sinks …) slot into a record-based op chain: on first call it opens the
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 
 @configurable(category="op", group="sink")
-class SampleSinkOp:
+class RecordSinkOp:
     """Adapter: wrap a :class:`sampleflux.storage.base.DataSink` as a pass-through op.
 
     Sinks implement the ``open()`` / ``write(record)`` / ``close()`` protocol and
@@ -34,7 +34,7 @@ class SampleSinkOp:
 
     YAML::
 
-        - !class:sampleflux.ops.sink.SampleSinkOp
+        - !class:sampleflux.ops.sink.RecordSinkOp
           sink: !class:sampleflux.storage.hdf5.HDF5Sink
             path: ./records.h5
 
@@ -49,7 +49,7 @@ class SampleSinkOp:
 
     def __call__(self, record: Record) -> Record:
         if self.sink is None:
-            raise ValueError("SampleSinkOp requires a non-None 'sink'.")
+            raise ValueError("RecordSinkOp requires a non-None 'sink'.")
         if not self._opened:
             opener = getattr(self.sink, "open", None)
             if callable(opener):
@@ -68,4 +68,4 @@ class SampleSinkOp:
         self._opened = False
 
 
-__all__ = ["SampleSinkOp"]
+__all__ = ["RecordSinkOp"]

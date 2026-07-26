@@ -28,7 +28,8 @@ capabilities from one class — the merged train+eval classes drive ``fit`` /
 method with the ``task`` value it runs and a ``role`` label (``"trainer"`` /
 ``"evaluator"`` / ``"predictor"``). A discovery consumer (a config generator, a visual
 editor) reads these via :func:`runnable_entrypoints` to learn that one class both
-trains and evaluates, instead of assuming a separate class per role.
+trains and evaluates, instead of assuming a separate class per role. Straightforward
+worked example (the class + the exact introspector outputs): ``docs/runnable.md``.
 """
 
 from typing import Callable, Dict, List, Optional
@@ -106,6 +107,31 @@ def entrypoint(task: str, role: str = "runnable", primary: bool = False) -> Call
     runnables: ``fit`` / ``evaluate`` / ``test`` / ``predict``) annotates each entry-point
     method so a discovery consumer (a config generator, a visual editor) can learn — from
     ONE class — which capabilities it exposes, instead of assuming a separate class per role.
+
+    Example — one class, four capabilities (full walkthrough in ``docs/runnable.md``)::
+
+        class Classifier(TorchRunner, ProgressReporting):
+            def run(self) -> None:
+                {"fit": self.fit, "evaluate": self.evaluate,
+                 "test": self.test, "predict": self.predict}[self.task]()
+
+            @entrypoint("fit", role="trainer", primary=True)
+            def fit(self) -> None: ...
+
+            @entrypoint("evaluate", role="evaluator")          # validation-split metrics
+            def evaluate(self) -> None: ...
+
+            @entrypoint("test", role="evaluator", primary=True)  # held-out metrics = the default evaluator
+            def test(self) -> None: ...
+
+            @entrypoint("predict", role="predictor", primary=True)
+            def predict(self) -> None: ...
+
+        entrypoint_tasks(Classifier, "evaluator")   # -> ["test", "evaluate"]  (primary first)
+        entrypoint_tasks(Classifier, "trainer")     # -> ["fit"]
+
+    A consumer asked for "an evaluator config" takes ``entrypoint_tasks(cls, "evaluator")[0]``
+    and pins ``task: test`` in the config it emits.
 
     Args:
         task: The ``task`` value the runnable's ``run()`` dispatches to for this method

@@ -218,3 +218,65 @@ class TestRecordsThroughFlux:
         flux = Flux(source=[_seed(1.0)], ops=[Pipeline(transforms=[_AddOffset(offset=1.0), _AddOffset(offset=2.0)])])
         (out,) = list(flux)
         assert np.allclose(np.asarray(out["image"]), 4.0)
+
+
+# --------------------------------------------------------------------------- #
+# YAML flow documents end-to-end (docs/graph.md's exact spellings) — closes the
+# gap where bind: was only ever exercised through Python-built flow dicts.
+# --------------------------------------------------------------------------- #
+class TestFlowYaml:
+    def _doc(self) -> str:
+        return """
+flow:
+  spec:    {}
+  masked:  !class:sampleflux.ops.numpy.Threshold {low_level: 0.5, from: spec}
+  thresh:  !class:sampleflux.ops.formula.FormulaOp {formula: "amax(a) * 0.6", field: image, from: spec}
+  gated:
+    op: !class:sampleflux.ops.numpy.Threshold {output: gated_mask}
+    from: spec
+    bind:
+      low_level: thresh[image]
+  out: {from: gated, merge_from: [masked]}
+outputs: out
+"""
+
+    def _record(self):
+        return {"image": Image(np.arange(16, dtype=np.float32).reshape(4, 4) / 15.0)}
+
+    def test_yaml_bind_via_plain_mapping_step(self, tmp_path) -> None:
+        # Scalar reserved keys ride in the marker mapping; the nested bind: mapping MUST use
+        # the plain-mapping (op:) step form — a nested mapping under a !class: marker is
+        # consumed by confluid as addressed configuration and never reaches parse_flow.
+        path = tmp_path / "graph.yaml"
+        path.write_text(self._doc())
+        out = list(FlowGraph.from_yaml(str(path), source=[self._record()]))[0]
+        assert set(out) == {"image", "mask", "gated_mask"}
+        assert int(np.asarray(out["mask"]).sum()) == 8  # fixed 0.5 threshold
+        assert int(np.asarray(out["gated_mask"]).sum()) == 6  # per-record amax(a)*0.6 bind
+
+    def test_yaml_bind_parity_with_lowered_flux(self, tmp_path) -> None:
+        path = tmp_path / "graph.yaml"
+        path.write_text(self._doc())
+        a = list(FlowGraph.from_yaml(str(path), source=[self._record()]))[0]
+        b = list(Flux.from_flow_yaml(str(path), source=[self._record()]))[0]
+        assert np.array_equal(np.asarray(a["gated_mask"]), np.asarray(b["gated_mask"]))
+        assert np.array_equal(np.asarray(a["mask"]), np.asarray(b["mask"]))
+
+    def test_nested_bind_under_marker_is_consumed_not_parsed(self, tmp_path) -> None:
+        # Pin the confluid behavior that makes the op:-form MANDATORY for bind — if this
+        # ever starts surviving in marker kwargs, the doc rule can be relaxed.
+        path = tmp_path / "graph.yaml"
+        path.write_text(
+            """
+flow:
+  spec: {}
+  gated: !class:sampleflux.ops.numpy.Threshold
+    from: spec
+    bind:
+      low_level: spec[image]
+"""
+        )
+        import confluid
+
+        marker = confluid.resolve(str(path))["flow"]["gated"]
+        assert "bind" not in marker.kwargs  # consumed as addressed configuration

@@ -61,7 +61,7 @@ def yolo_collate(items): ...
 loader = DataLoader(flux, collate_fn=get_collate("yolo"))
 ```
 
-The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17-updated-2026-07-25).
+The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#2-batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17).
 
 ## 1→N expanding ops (iterable-only pipelines)
 

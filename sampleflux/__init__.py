@@ -12,7 +12,7 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 # --- shared infrastructure -----------------------------------------------------------------
 from sampleflux.collate import collate, collate_records, get_collate, register_collate, registered_collates
 from sampleflux.context import Context
-from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
+from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp, register_op_family, registered_op_families
 
 # --- the record data model + transforms + item codec ----------------------------------------
 from sampleflux.dispatch import dispatch, register_kernel, registered_kernels
@@ -83,6 +83,8 @@ __all__ = [
     "JointFlux",
     "FilterOp",
     "WrappedOp",
+    "register_op_family",
+    "registered_op_families",
     "FlowGraph",
     "from_ops",
     "to_ops",

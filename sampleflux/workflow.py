@@ -3,12 +3,12 @@
 A *runnable* is any object exposing a no-arg ``run(self)`` (a trainer, an
 evaluator, a :class:`~sampleflux.processing.DatasetProcessor`). This module adds
 Confluid-``@configurable`` *combinators* that HOLD other runnables and orchestrate
-them — the runnable-level analogue of the higher-order ops (``Parallel`` /
-``TransformChain`` / ``Enable``):
+them — the runnable-level analogue of the composing ops (``Pipeline`` /
+``Parallel`` / ``Enable``):
 
 * :class:`Sequence` — run a list of runnables in order (the workflow itself).
 * :class:`Conditional` — run one of two runnables depending on a condition.
-* :class:`Switch` — run one of several runnables keyed by a selector value.
+* :class:`Switch` — run one of several runnables keyed by a select value.
 
 Conditions are themselves Confluid-``@configurable`` *predicates* — a no-arg
 ``__call__(self) -> bool`` (:class:`PathExists` / :class:`Not` / :class:`AllOf`
@@ -33,6 +33,8 @@ unchosen branch is never run (and, wired ``!lazy:``, never even built, so no
 model / dataset is materialised). This is the *memoise-and-continue* answer to
 "don't recompute, move on": the next ``steps:`` entry runs regardless, because
 ``Sequence`` drives them in order — no execution-blocking, no dead branches.
+Runnable proof (the resume-safe train→evaluate pipeline, run twice, both
+guarantees asserted): ``examples/workflow_pipeline.py``; usage: ``docs/workflow.md``.
 
 All combinators are zero-arg constructible and do NO functional work in
 ``__init__`` (the workspace lazy-construction convention); branches and
@@ -158,24 +160,24 @@ class Conditional(TorchRunner, ProgressReporting):
 
 @configurable
 class Switch(TorchRunner, ProgressReporting):
-    """Run one of several runnables keyed by a selector's value.
+    """Run one of several runnables keyed by a select's value.
 
     Args:
-        selector: A no-arg callable / predicate / deferred value producing the
+        select: A no-arg callable / predicate / deferred value producing the
             case KEY (coerced to ``str``). ``None`` (or a ``None`` result) selects
             ``default``.
         cases: Mapping of key -> runnable. The runnable whose key matches the
-            selector runs; an unmatched key falls back to ``default``.
+            select runs; an unmatched key falls back to ``default``.
         default: Runnable to run when no case matches. ``None`` = no-op.
     """
 
     def __init__(
         self,
-        selector: Any = None,
+        select: Any = None,
         cases: Optional[Dict[str, Any]] = None,
         default: Any = None,
     ) -> None:
-        self.selector = selector
+        self.select = select
         self.cases: Dict[str, Any] = dict(cases) if cases else {}
         self.default = default
 
@@ -190,7 +192,7 @@ class Switch(TorchRunner, ProgressReporting):
         _run(branch, self._progress_callback)
 
     def _select(self) -> Optional[str]:
-        selector = _resolve(self.selector)
+        selector = _resolve(self.select)
         if selector is None:
             return None
         value = selector() if callable(selector) else selector

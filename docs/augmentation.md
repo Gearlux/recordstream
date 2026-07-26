@@ -112,6 +112,15 @@ Stochasticity lives where each library puts it — the engine adds no seed plumb
 - per-record gating of any op (native or library): `RandomApply(op=..., probability=...,
   random_state=N)`.
 
+## Other libraries — register an op family
+
+albumentations and torchvision v2 are the built-in families, registered through the same OPEN
+registry any package can use: `register_op_family(name, matcher, invoker)` teaches the engine a
+new library's native calling convention (kornia, DALI, a fork extending albumentations, a
+signal-processing library), and bare ops of that library then sit in ANY ops list — every engine
+route and composing op, including spawn-parallel workers. Full example + rules:
+[record-model.md → "A new library family"](record-model.md#a-new-library-family).
+
 ## Example
 
 [`examples/record_pipeline.py`](../examples/record_pipeline.py) — the tour: a bare

@@ -72,12 +72,15 @@ class Parallel:
         ctx = multiprocessing.get_context("spawn")
         limit = max(2 * self.workers, self.workers + 1)
 
+        from sampleflux.core import _extra_op_families
+
         with concurrent.futures.ProcessPoolExecutor(max_workers=self.workers, mp_context=ctx) as executor:
             pending: "deque[concurrent.futures.Future[Optional[Record]]]" = deque()
+            extra_families = _extra_op_families()  # ship third-party op families to the workers
             for s in samples:
                 if s is None:
                     continue
-                pending.append(executor.submit(_worker_task, s, self.ops))
+                pending.append(executor.submit(_worker_task, s, self.ops, extra_families))
                 if len(pending) >= limit:
                     yield pending.popleft().result()
             while pending:

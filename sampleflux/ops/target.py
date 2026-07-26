@@ -1,6 +1,5 @@
 """Target-shaping transforms over plain-dict records.
 
-* :class:`MetadataToTarget` promotes a field / attr value into a target ``Label``.
 * :class:`EncodeTarget` / :class:`DecodeTarget` map a class-name ``Label`` to a class-id
   ``Label`` and back through an explicit lookup ``mapping`` — the declarative analogue of
   scikit-learn's ``LabelEncoder``. The mapping is pinned in config, NOT fitted, so
@@ -133,63 +132,6 @@ def masks_to_detection(
         boxes_t = torch.zeros((0, 4), dtype=torch.float32)
         labels_t = torch.zeros((0,), dtype=torch.int64)
     return {"boxes": boxes_t, "labels": labels_t}
-
-
-@configurable(category="op", group="structure")
-class MetadataToTarget(Transform):
-    """Promote a field / attr value into a target ``Label``.
-
-    Reads a value from a SOURCE field (``field``; blank picks the first ``Label``, else the
-    first field) — either the field's natural value (a ``Label``'s ``.value``, otherwise the
-    item's array payload) or, when ``key`` is set, the named ATTRIBUTE of the source item —
-    and writes a fresh :class:`~sampleflux.Label` under ``output``.
-
-    In a typical classification pipeline the source emits the label directly as a
-    ``Label`` field, so this op is usually a NO-OP-ish re-home; it
-    exists for the case where a label rode as another item's attribute (``key=``).
-
-    Args:
-        field: Source field to read; blank (default) picks the first ``Label`` field, else the first field.
-        key: Optional attribute name to read off the source item; blank (default) reads the item's natural value.
-        output: Key the target ``Label`` is written to (added if new).
-    """
-
-    handles = (Label,)
-    consumes = (Label,)
-    produces = (Label,)
-
-    def __init__(self, field: str = "", key: str = "", output: str = "target") -> None:
-        super().__init__()
-        self.field = str(field)
-        self.key = str(key)
-        self.output = str(output)
-
-    def _find_source(self, record: Record) -> str:
-        """Resolve the KEY of the source field (``self.field``, else first ``Label``, else first field)."""
-        if self.field:
-            if self.field not in record:
-                raise ValueError(f"MetadataToTarget: field {self.field!r} not in record (keys: {list(record)})")
-            return self.field
-        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
-            return key
-        for key in record:
-            return key
-        raise ValueError("MetadataToTarget: record is empty — no source field to read")
-
-    def __call__(self, record: Record) -> Record:
-        key = self._find_source(record)
-        item = record[key]
-        if self.key:
-            if not hasattr(item, self.key):
-                raise AttributeError(
-                    f"MetadataToTarget: field {key!r} ({type(item).__name__}) has no attribute {self.key!r}"
-                )
-            value = getattr(item, self.key)
-        elif isinstance(item, Label):
-            value = item.value
-        else:
-            value = item_data(item)
-        return {**record, self.output: Label(value)}
 
 
 @configurable(category="op", group="structure")
@@ -449,7 +391,6 @@ class MasksToDetectionBoxes(Transform):
 
 
 __all__ = [
-    "MetadataToTarget",
     "EncodeTarget",
     "DecodeTarget",
     "CocoToTorchVisionDetection",

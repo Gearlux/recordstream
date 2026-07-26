@@ -57,19 +57,21 @@ class Enable:
     Disambiguating multiple wrappers
     --------------------------------
     When two or more ``Enable`` instances live in the same pipeline, give
-    each a ``name:`` in YAML. That name becomes the preferred identifier
-    in Confluid's hierarchy (``--help``) and Liquify's override matcher,
-    so you can toggle them independently:
+    each a ``name:`` in YAML and use the GENERIC toggle name ``enable`` —
+    the name scopes the flag, so a semantic attribute name per wrapper is
+    unnecessary. ``name`` becomes the preferred identifier in Confluid's
+    hierarchy (``--help``) and Liquify's override matcher, so you can
+    toggle them independently:
 
     .. code-block:: yaml
 
         - !class:sampleflux.ops.enable.Enable
           name: overlay                 # dotted-override key
-          visualize: false              # same attr name is fine — name scopes it
+          enable: false                 # generic toggle — the name scopes it
           ops: [render-with-overlays, save-to ./debug_png]
         - !class:sampleflux.ops.enable.Enable
           name: labelstudio
-          visualize: false
+          enable: false
           ops: [render-clean, save-to ./ls_png]
 
     CLI:
@@ -77,10 +79,11 @@ class Enable:
     .. code-block:: bash
 
         # Targeted — only the overlay chain fires.
-        sampleflux run pipeline.yaml --overlay.visualize true
+        sampleflux run pipeline.yaml --overlay.enable true
+        sampleflux run pipeline.yaml --overlay.enable+     # polarity shorthand → True
 
-        # Broadcast — every Fluid with a `visualize` kwarg flips.
-        sampleflux run pipeline.yaml --visualize true
+        # Broadcast — every Fluid with an `enable` kwarg flips.
+        sampleflux run pipeline.yaml --enable true
 
     ``name`` is a plain string on the instance; Confluid's post-construction
     paradigm setattr's it automatically from YAML with no ctor change.
@@ -93,6 +96,11 @@ class Enable:
         dunders) may be set on the wrapper — that's the toggle.
         ``RuntimeError`` is raised on first call if zero or multiple are
         present.
+      * RESERVED names: the toggle may be ANY boolean attribute name EXCEPT the
+        class's own members — ``ops``, ``enabled``, ``flag_name`` (read-only
+        introspection properties; a YAML kwarg with one of those names raises
+        ``AttributeError`` at configure time). Use ``enable`` as the generic
+        toggle name; ``enabled`` (the property) then READS whatever toggle is set.
 
     Args:
         ops: Non-empty list of ops (native or bare library transforms) gated by the toggle.
@@ -150,7 +158,7 @@ class Enable:
         return current
 
     def close(self) -> None:
-        """Propagate close to inner ops that own resources (e.g. SampleSinkOp)."""
+        """Propagate close to inner ops that own resources (e.g. RecordSinkOp)."""
         for op in self.ops:
             close_fn = getattr(op, "close", None)
             if callable(close_fn):

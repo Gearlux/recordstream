@@ -4,7 +4,6 @@ Pins the native transforms that build a classification pipeline's model INPUT ar
 encoded TARGET ``Label`` on plain record dicts:
 
 * :class:`sampleflux.ops.torch.ToTensor` — array-bearing key → a LIVE CHW-float ``torch.Tensor`` (a plain record value);
-* :class:`sampleflux.ops.target.MetadataToTarget` — a key / attr value → a target ``Label``;
 * :class:`sampleflux.ops.target.EncodeTarget` / ``DecodeTarget`` — class-name ↔ class-id ``Label``.
 
 Each op REUSES its shared conversion helper, so the op output is pinned identical to the
@@ -18,7 +17,7 @@ from confluid.registry import get_registry, resolve_class
 
 from sampleflux import Image, Label, Mask, collate_records, item_data
 from sampleflux.ops.image import ConvertToImage
-from sampleflux.ops.target import DecodeTarget, EncodeTarget, MetadataToTarget
+from sampleflux.ops.target import DecodeTarget, EncodeTarget
 from sampleflux.ops.torch import ToTensor, to_tensor
 
 _MAP = {"cat": 0, "dog": 1, "fox": 2}
@@ -94,38 +93,6 @@ class TestToTensor:
         b = ToTensor()({"image": Image(_hwc_uint8())})
         batch = collate_records([a, b])
         assert np.asarray(batch["image"]).shape == (2, 3, 4, 5)
-
-
-# --------------------------------------------------------------------------- #
-# MetadataToTarget
-# --------------------------------------------------------------------------- #
-class TestMetadataToTarget:
-    def test_promotes_label_value_to_target(self) -> None:
-        out = MetadataToTarget(field="class", output="target")({"class": Label("cat")})
-        assert isinstance(out["target"], Label)
-        assert out["target"].value == "cat"
-
-    def test_default_picks_first_label(self) -> None:
-        rec = {"image": Image(_hwc_uint8()), "y": Label("dog")}
-        out = MetadataToTarget()(rec)
-        assert out["target"].value == "dog"
-
-    def test_read_named_attribute(self) -> None:
-        # Read a carried attribute off an item (metadata lives ON the value that owns it).
-        out = MetadataToTarget(field="y", key="classes", output="vocab")({"y": Label("cat", classes=["cat", "dog"])})
-        assert out["vocab"].value == ["cat", "dog"]
-
-    def test_missing_attribute_raises(self) -> None:
-        with pytest.raises(AttributeError, match="no attribute 'nope'"):
-            MetadataToTarget(field="y", key="nope")({"y": Label("cat")})
-
-    def test_missing_field_raises(self) -> None:
-        with pytest.raises(ValueError, match="field 'nope' not in record"):
-            MetadataToTarget(field="nope")({"y": Label("cat")})
-
-    def test_empty_record_raises(self) -> None:
-        with pytest.raises(ValueError, match="record is empty"):
-            MetadataToTarget()({})
 
 
 # --------------------------------------------------------------------------- #
@@ -222,7 +189,6 @@ def test_convert_then_tensor_chain() -> None:
 # --------------------------------------------------------------------------- #
 def test_zero_arg_constructible() -> None:
     assert ToTensor().output == ""
-    assert MetadataToTarget().output == "target"
     assert EncodeTarget().mapping == {}
     assert DecodeTarget().mapping == {}
 
@@ -231,7 +197,6 @@ def test_zero_arg_constructible() -> None:
     ("name", "cls", "group"),
     [
         ("ToTensor", ToTensor, "torch"),
-        ("MetadataToTarget", MetadataToTarget, "structure"),
         ("EncodeTarget", EncodeTarget, "structure"),
         ("DecodeTarget", DecodeTarget, "structure"),
     ],

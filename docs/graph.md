@@ -6,15 +6,24 @@ The **readable authoring form** of a graph pipeline is a `flow:` document — na
 
 ```yaml
 flow:
-  spec:    !class:mypkg.MakeSpectrogram()                   # input: the source record
-  masked:  !class:sampleflux.ops.numpy.Threshold(low_level=0.5) {from: spec}   # 2nd reader of `spec` = fan-out
-  thresh:  !class:sampleflux.ops.formula.FormulaOp(formula="a*0.5", field=spec) {from: spec}
-  gated:   !class:sampleflux.ops.numpy.Threshold()
+  spec:    !class:mypkg.MakeSpectrogram {}                  # input: the source record (writes key `image`)
+  masked:  !class:sampleflux.ops.numpy.Threshold {low_level: 0.5, from: spec}   # 2nd reader of `spec` = fan-out
+  thresh:  !class:sampleflux.ops.formula.FormulaOp {formula: "amax(a) * 0.6", field: image, from: spec}
+  gated:                                                    # a step with bind: uses the plain-mapping form (op: + reserved keys)
+    op: !class:sampleflux.ops.numpy.Threshold {output: gated_mask}
     from: spec
-    bind: {low_level: thresh[spec]}    # per-record param := the `spec` entry of thresh's result
+    bind:
+      low_level: thresh[image]     # per-record param := the `image` entry of thresh's result
   out: {from: gated, merge_from: [masked]}                  # fan-in (no op)
 outputs: out
 ```
+
+Two YAML spelling rules (both verified): SCALAR/list reserved keys (`from:`, `merge_from:`) may ride
+inside a `!class:` marker's mapping alongside its kwargs — but **`bind:` (a nested mapping) MUST use
+the plain-mapping step form** (`op:` + reserved keys, the `gated` step above): a nested mapping under
+a `!class:` marker is consumed by Confluid as addressed configuration and never reaches the step
+grammar. Write bind refs in block style or quoted — `{low_level: thresh[image]}` inline is a YAML
+parse error (`[` opens a flow sequence).
 
 Step grammar (three reserved keys, stripped before the op is built):
 
@@ -75,7 +84,7 @@ with activate(Context()):
         record = op(record)
 ```
 
-Cells hold whole records (from `Save`) or raw values (from `Capture`); `Apply` reads a record cell's `key`-named entry (whole record when `key` is blank), `MergeFields` unions each cell's entries. Copy discipline: cells are stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). On a deliberate key collision at the fan-in, rename on the producing branch first (`RenameField`, `sampleflux.ops.structure`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-record store instead of extra record keys (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#the-per-record-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17).
+Cells hold whole records (from `Save`) or raw values (from `Capture`); `Apply` reads a record cell's `key`-named entry (whole record when `key` is blank), `MergeFields` unions each cell's entries. Copy discipline: cells are stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). On a deliberate key collision at the fan-in, rename on the producing branch first (`RenameField`, `sampleflux.ops.structure`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-record store instead of extra record keys (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#3-the-per-record-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17).
 
 > **Carrying a snapshot the context ops cannot?** Context cells are the wiring plane, but they deliberately raise across a `Parallel` boundary and never persist into a sink. For the two jobs cells cannot do — carrying a snapshot **across a `Parallel` boundary** and deliberately **persisting a snapshot into a sink** — copy the value under its own key with `CopyField` (`sampleflux.ops.structure`); the snapshot then rides the record as a real entry. Everything else — fan-out, fan-in, cross-branch values — uses the context ops above.
 
@@ -90,4 +99,4 @@ from sampleflux.sources import HuggingFaceSource
 flux = Flux.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="mnist"))
 ```
 
-The helper **materializes** the deferred `!class:` markers before attaching (via `confluid.materialize`) — necessary because `confluid.load` leaves markers nested under a mapping key deferred, and a `Flux` rejects deferred markers at iteration by design. The manual equivalent is `Flux(source=src, ops=confluid.materialize(confluid.load("ops.yaml")["ops"]))`.
+The helper **materializes** the deferred `!class:` markers eagerly (via `confluid.materialize`) so a broken op fails at load time with the YAML in hand. It is a convenience, not a necessity: `Flux` also flows any still-deferred marker in place at engine-route entry (the same lazy-flow convention the composing ops use), which is what lets a bare mapping-form `!class:albumentations.HorizontalFlip {p: 0.5}` sit directly in an `ops:` list. The manual equivalent is `Flux(source=src, ops=confluid.materialize(confluid.load("ops.yaml")["ops"]))`.

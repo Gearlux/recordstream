@@ -1,5 +1,9 @@
 # Storage — sinks, sources and queryable metadata (`sampleflux.storage`)
 
+> Runnable tour: [`examples/storage_roundtrip.py`](../examples/storage_roundtrip.py) — the same
+> records through all three sink/source pairs (typed values + a plain scalar, byte-identical
+> round-trips) plus a `MetadataFilterSource` query that never loads an array.
+
 SampleFlux makes it easy to move data between different formats:
 
 ```python

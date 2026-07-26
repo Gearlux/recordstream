@@ -20,15 +20,9 @@ from sampleflux.ops.image import ConvertToImage
 from sampleflux.ops.numpy import ConnectedComponents, Threshold
 from sampleflux.ops.parallel import Parallel
 from sampleflux.ops.random_apply import RandomApply
-from sampleflux.ops.sink import SampleSinkOp
+from sampleflux.ops.sink import RecordSinkOp
 from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
-from sampleflux.ops.target import (
-    CocoToTorchVisionDetection,
-    DecodeTarget,
-    EncodeTarget,
-    MasksToDetectionBoxes,
-    MetadataToTarget,
-)
+from sampleflux.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
 from sampleflux.ops.torch import ToTensor
 from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
 from sampleflux.storage.directory import DirectorySink
@@ -65,8 +59,7 @@ def test_op_classes_tagged() -> None:
         Pipeline,
         Parallel,
         RandomApply,
-        SampleSinkOp,
-        MetadataToTarget,
+        RecordSinkOp,
         EncodeTarget,
         DecodeTarget,
         CocoToTorchVisionDetection,
@@ -107,7 +100,6 @@ def test_op_group_tags() -> None:
     assert ConvertToImage.__confluid_group__ == "image"
     assert SelectFields.__confluid_group__ == "structure"
     assert PrintSampleOp.__confluid_group__ == "debug"
-    assert MetadataToTarget.__confluid_group__ == "structure"
     assert EncodeTarget.__confluid_group__ == "structure"
     assert DecodeTarget.__confluid_group__ == "structure"
     assert CocoToTorchVisionDetection.__confluid_group__ == "structure"
@@ -120,7 +112,7 @@ def test_op_group_tags() -> None:
     assert RandomApply.__confluid_group__ == "compose"
     assert ConfigureOp.__confluid_group__ == "compose"
     assert FormulaOp.__confluid_group__ == "compose"
-    assert SampleSinkOp.__confluid_group__ == "sink"
+    assert RecordSinkOp.__confluid_group__ == "sink"
 
 
 def test_categories_enumerable_via_registry() -> None:
@@ -138,15 +130,14 @@ def test_categories_enumerable_via_registry() -> None:
         "ConvertToImage",
         "Enable",
         "Pipeline",
-        "SampleSinkOp",
-        "MetadataToTarget",
+        "RecordSinkOp",
         "EncodeTarget",
         "DecodeTarget",
         "CocoToTorchVisionDetection",
         "MasksToDetectionBoxes",
     } <= registry.list_classes(category="op")
     assert {"HDF5Sink", "ZarrGroupSink", "ZarrBatchSink", "DirectorySink"} <= registry.list_classes(category="sink")
-    assert "SampleSinkOp" not in registry.list_classes(category="sink")
+    assert "RecordSinkOp" not in registry.list_classes(category="sink")
 
 
 def test_groups_enumerable_via_registry() -> None:
@@ -157,9 +148,8 @@ def test_groups_enumerable_via_registry() -> None:
     assert {"Parallel", "Enable", "Pipeline", "RandomApply", "ConfigureOp", "FormulaOp"} <= registry.list_classes(
         group="compose"
     )
-    assert {"SampleSinkOp"} <= registry.list_classes(group="sink")
+    assert {"RecordSinkOp"} <= registry.list_classes(group="sink")
     assert {
-        "MetadataToTarget",
         "EncodeTarget",
         "DecodeTarget",
         "CocoToTorchVisionDetection",

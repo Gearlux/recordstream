@@ -29,7 +29,6 @@ from sampleflux.ops.target import (
     DecodeTarget,
     EncodeTarget,
     MasksToDetectionBoxes,
-    MetadataToTarget,
 )
 from sampleflux.ops.torch import ToTensor
 from sampleflux.sources import HuggingFaceSource
@@ -46,7 +45,6 @@ _NODE_CLASSES = [
     ConnectedComponents,
     ConvertToImage,
     ToTensor,
-    MetadataToTarget,
     EncodeTarget,
     DecodeTarget,
     CocoToTorchVisionDetection,

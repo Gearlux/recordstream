@@ -112,12 +112,12 @@ def test_conditional_accepts_predicate_condition() -> None:
 # Switch
 # --------------------------------------------------------------------------- #
 def test_switch_selects_matching_case() -> None:
-    Switch(selector=lambda: "b", cases={"a": _RunStep("a"), "b": _RunStep("b")}).run()
+    Switch(select=lambda: "b", cases={"a": _RunStep("a"), "b": _RunStep("b")}).run()
     assert _RUN_LOG == ["b"]
 
 
 def test_switch_falls_back_to_default_on_miss() -> None:
-    Switch(selector=lambda: "z", cases={"a": _RunStep("a")}, default=_RunStep("d")).run()
+    Switch(select=lambda: "z", cases={"a": _RunStep("a")}, default=_RunStep("d")).run()
     assert _RUN_LOG == ["d"]
 
 
@@ -127,12 +127,12 @@ def test_switch_none_selector_uses_default() -> None:
 
 
 def test_switch_no_match_no_default_is_noop() -> None:
-    Switch(selector=lambda: "z", cases={"a": _RunStep("a")}).run()
+    Switch(select=lambda: "z", cases={"a": _RunStep("a")}).run()
     assert _RUN_LOG == []
 
 
 def test_switch_coerces_non_string_key() -> None:
-    Switch(selector=lambda: 2, cases={"2": _RunStep("two")}).run()
+    Switch(select=lambda: 2, cases={"2": _RunStep("two")}).run()
     assert _RUN_LOG == ["two"]
 
 
