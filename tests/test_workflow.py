@@ -1,4 +1,4 @@
-"""Tests for sampleflux.workflow — higher-order runnable combinators.
+"""Tests for recordstream.workflow — higher-order runnable combinators.
 
 Covers Sequence / Conditional / Switch orchestration, the PathExists / Not /
 AllOf / AnyOf predicates, zero-arg construction (the lazy-construction mandate),
@@ -13,7 +13,7 @@ import confluid
 import pytest
 from confluid import configurable
 
-from sampleflux.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
+from recordstream.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
 
 # A module-global run log so the @configurable runnables below survive a Confluid
 # round-trip: their only config is a tag, and run() appends it here.
@@ -190,18 +190,18 @@ def test_predicate_zero_arg_construct_and_call(cls: Any) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# FluxStudio canvas integration — TorchRunner + ProgressReporting forwarding
+# StreamStudio canvas integration — TorchRunner + ProgressReporting forwarding
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("cls", [Sequence, Conditional, Switch])
 def test_combinators_declare_torch_runner(cls: Any) -> None:
-    # A combinator may wrap a trainer, so it declares __torch_runner__ — FluxStudio's executor
+    # A combinator may wrap a trainer, so it declares __torch_runner__ — StreamStudio's executor
     # re-enables autograd for the whole run (otherwise the inner loss.backward() dies under
     # ComfyUI's inference_mode).
     assert cls().__torch_runner__ is True
 
 
 def test_progress_callback_forwarded_to_running_branch() -> None:
-    from sampleflux.runnable import ProgressReporting
+    from recordstream.runnable import ProgressReporting
 
     received: List[str] = []
 

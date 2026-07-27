@@ -4,11 +4,11 @@ from typing import Any
 
 import pytest
 
-from sampleflux.discovery import get_callable_path, introspect_callable, resolve_callable, scan_module
+from recordstream.discovery import get_callable_path, introspect_callable, resolve_callable, scan_module
 
 
 def sample_func(a: int, b: str = "default") -> str:
-    """Sample docstring."""
+    """Record docstring."""
     return f"{a}-{b}"
 
 
@@ -45,7 +45,7 @@ def test_resolve_callable_errors() -> None:
 
     # Test AttributeError
     with pytest.raises(AttributeError):
-        resolve_callable("sampleflux.discovery:nonexistent_func")
+        resolve_callable("recordstream.discovery:nonexistent_func")
 
 
 def test_introspect_errors() -> None:
@@ -111,7 +111,7 @@ def test_resolve_callable_direct() -> None:
 def test_introspect_callable() -> None:
     schema = introspect_callable(sample_func)
     assert schema["name"] == "sample_func"
-    assert schema["doc"] == "Sample docstring."
+    assert schema["doc"] == "Record docstring."
     assert len(schema["parameters"]) == 2
 
     p0 = schema["parameters"][0]
@@ -160,7 +160,7 @@ class ClassInScript:
     assert "ClassInScript" in names
 
     # Standard module scan
-    schemas_self = scan_module("sampleflux.discovery")
+    schemas_self = scan_module("recordstream.discovery")
     names_self = [s["name"] for s in schemas_self]
     assert "scan_module" in names_self
     assert "get_callable_path" in names_self

@@ -1,14 +1,14 @@
 """The two detection target-shaping ops over dict records.
 
 Pins the native transforms that build a detection pipeline's torchvision-style
-``{boxes, labels}`` target as a :class:`~sampleflux.Regions` item:
+``{boxes, labels}`` target as a :class:`~recordstream.Regions` item:
 
-* :class:`sampleflux.ops.target.CocoToTorchVisionDetection` — a HuggingFace / COCO ``objects``
+* :class:`recordstream.ops.target.CocoToTorchVisionDetection` — a HuggingFace / COCO ``objects``
   annotation → a target ``Regions``;
-* :class:`sampleflux.ops.target.MasksToDetectionBoxes` — a segmentation ``Mask`` → a target ``Regions``.
+* :class:`recordstream.ops.target.MasksToDetectionBoxes` — a segmentation ``Mask`` → a target ``Regions``.
 
 Each op REUSES its conversion helper, so the op's ``boxes`` / ``labels`` tensors are pinned
-byte-identical to the helper (parity). sampleflux-only — no domain-package import.
+byte-identical to the helper (parity). recordstream-only — no domain-package import.
 """
 
 import numpy as np
@@ -16,8 +16,8 @@ import pytest
 import torch
 from confluid.registry import get_registry, resolve_class
 
-from sampleflux import Image, Label, Mask, Regions, collate_records
-from sampleflux.ops.target import (
+from recordstream import Image, Label, Mask, Regions, collate_records
+from recordstream.ops.target import (
     CocoToTorchVisionDetection,
     MasksToDetectionBoxes,
     coco_to_detection,

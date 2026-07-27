@@ -1,7 +1,7 @@
 """A resume-safe train → evaluate workflow — ONE Confluid document of runnables.
 
 The compelling case for the workflow combinators: a pipeline you can re-run after a crash
-(or a second `sampleflux run`) that SKIPS the work whose artifact already exists and
+(or a second `recordstream run`) that SKIPS the work whose artifact already exists and
 carries on — *memoise and continue*, expressed declaratively:
 
 1. ``Sequence`` drives the stages in order (the workflow itself).
@@ -76,12 +76,12 @@ class Evaluate:
 def workflow_yaml(work: Path) -> str:
     """The whole pipeline — stages, the cache guard, AND the format switch — as ONE document."""
     return f"""
-runnable: !class:sampleflux.workflow.Sequence
+runnable: !class:recordstream.workflow.Sequence
   steps:
     # Stage 1 — the expensive stage, guarded: train ONLY when the checkpoint is missing.
     # On a cache hit the !lazy: branch is never even BUILT (no model materialised).
-    - !class:sampleflux.workflow.Conditional
-      condition: !class:sampleflux.workflow.PathExists
+    - !class:recordstream.workflow.Conditional
+      condition: !class:recordstream.workflow.PathExists
         path: {work / "model.ckpt"}
       if_true: null                       # cache hit  -> skip, Sequence continues
       if_false: !lazy:TrainModel  # @configurable classes resolve by registered NAME
@@ -89,7 +89,7 @@ runnable: !class:sampleflux.workflow.Sequence
 
     # Stage 2 — always runs; the report FORMAT is a Switch on a plain config value
     # (override from a CLI with --select text — the workflow shape never changes).
-    - !class:sampleflux.workflow.Switch
+    - !class:recordstream.workflow.Switch
       select: json
       cases:
         json: !lazy:Evaluate
@@ -104,7 +104,7 @@ runnable: !class:sampleflux.workflow.Sequence
 
 
 def run_document(path: Path) -> None:
-    """What ``sampleflux run <config>`` does: bind the top-level ``runnable:`` and run it."""
+    """What ``recordstream run <config>`` does: bind the top-level ``runnable:`` and run it."""
     loaded = confluid.load(str(path))
     runnable = loaded["runnable"]
     if isinstance(runnable, Fluid):

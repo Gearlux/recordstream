@@ -1,17 +1,17 @@
-# SampleFlux
+# RecordStream
 
-**SampleFlux** is a high-performance, functional data processing engine built for modern Machine Learning pipelines. It provides a clean, fluent API for streaming and transforming data from any source while maintaining strict compatibility with PyTorch and Hugging Face.
+**RecordStream** is a high-performance, functional data processing engine built for modern Machine Learning pipelines. It provides a clean, fluent API for streaming and transforming data from any source while maintaining strict compatibility with PyTorch and Hugging Face.
 
-Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `SampleFlux`.
+Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordStream`.
 
 ## 🚀 Key Features
 
--   **A sample is a plain dict:** the [record model](docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Regions`, `Label`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
+-   **A record is a plain dict:** the [record model](docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Regions`, `Label`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
 -   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
 -   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
--   **Graph pipelines, serial engine:** readable [`flow:` documents](docs/graph.md) with named steps, fan-out/fan-in and per-record `bind:` parameters — executed natively by `FlowGraph` or lowered (bidirectionally, with pinned execution parity) to a flat context-ops list on the plain sequential `Flux` engine.
+-   **Graph pipelines, serial engine:** readable [`flow:` documents](docs/graph.md) with named steps, fan-out/fan-in and per-record `bind:` parameters — executed natively by `FlowGraph` or lowered (bidirectionally, with pinned execution parity) to a flat context-ops list on the plain sequential `Stream` engine.
 -   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
--   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](docs/storage.md#queryable-metadata-samplefluxstoragequery) — filter stored datasets without loading a single array.
+-   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
 -   **Passive Introspection:** ops declare the value types they [handle / consume / produce](docs/record-model.md) and are discoverable by category for visual editors and schema generators.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
 
@@ -22,7 +22,7 @@ One pipeline mixing a **bare albumentations Compose** (image + mask + boxes move
 ```python
 import albumentations as A
 import numpy as np
-from sampleflux import Flux, Image, Label, Mask, as_transform
+from recordstream import Stream, Image, Label, Mask, as_transform
 
 records = [
     {
@@ -36,7 +36,7 @@ records = [
     for rng in (np.random.default_rng(i) for i in range(100))
 ]
 
-flux = Flux(
+stream = Stream(
     source=records,
     ops=[
         A.Compose(                                    # bare albumentations — as-is
@@ -48,7 +48,7 @@ flux = Flux(
     ],
 ).parallel(workers=4)
 
-for record in flux:
+for record in stream:
     print(record["image"].shape, record["class"].value)   # image+mask+boxes flipped together
 ```
 
@@ -60,7 +60,7 @@ ops:
     p: 0.5
   - !class:albumentations.GaussNoise
     p: 1.0
-  - !class:sampleflux.ops.numpy.Threshold
+  - !class:recordstream.ops.numpy.Threshold
     low_level: 0.5
 ```
 
@@ -70,37 +70,37 @@ ops:
 |---|---|
 | [docs/record-model.md](docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
 | [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`), 1→N expanding ops |
-| [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, the six Context ops on the serial engine, bidirectional flow⇄ops conversion, `Flux.from_ops_yaml` |
+| [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, the six Context ops on the serial engine, bidirectional flow⇄ops conversion, `Stream.from_ops_yaml` |
 | [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing |
 | [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), `num_classes`, the fittable `LabelMap` |
 | [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), array introspection helpers |
 | [docs/configure.md](docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
-| [docs/runnable.md](docs/runnable.md) | Runnables (`run()` + `sampleflux run`), the `@entrypoint` task/role markers with a worked example, `TorchRunner` / `ProgressReporting` |
+| [docs/runnable.md](docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers with a worked example, `TorchRunner` / `ProgressReporting` |
 | [docs/workflow.md](docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
 | [docs/augmentation.md](docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
 | [docs/architecture.md](docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
 
 ## 🧭 Scope: a modality-neutral engine
 
-SampleFlux deliberately contains **no domain-specific code** — every op, source and sink in this package is meaningful for any modality (arrays, tensors, images, generic metadata). Domain packages build on it and keep their own vocabulary:
+RecordStream deliberately contains **no domain-specific code** — every op, source and sink in this package is meaningful for any modality (arrays, tensors, images, generic metadata). Domain packages build on it and keep their own vocabulary:
 
 - Signal/waveform items and ops (spectrograms, FFT windows, recording formats) live in the domain package, which registers its item types into the same registries.
 - Task-specific trainers, collates and models live in their consuming projects.
 
 ## 🌐 Ecosystem Integration
 
-SampleFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines:
+RecordStream is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines:
 
 - **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability (see [docs/sources.md](docs/sources.md)).
 - **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node — including bare library transforms — every run reproducible.
-- **PyTorch**: `Flux` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#batching--collate_records--the-collate-registry-samplefluxcollate) (`collate_records` is the default).
+- **PyTorch**: `Stream` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#batching--collate_records--the-collate-registry-recordstreamcollate) (`collate_records` is the default).
 - **Augmentation libraries**: [albumentations](https://albumentations.ai) and torchvision `transforms.v2` transforms run **as-is** in any ops list — the engine speaks each library's native convention (kwarg vocabulary vs dict walk), so there is nothing to wrap (see [docs/augmentation.md](docs/augmentation.md)).
 
 ## 🔧 Installation
 
 ```bash
-pip install git+https://github.com/Gearlux/sampleflux.git@main
+pip install git+https://github.com/Gearlux/recordstream.git@main
 ```
 
 ## 📄 License

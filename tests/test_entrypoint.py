@@ -1,6 +1,6 @@
 """Tests for the runnable entry-point marker (entrypoint / runnable_entrypoints)."""
 
-from sampleflux.runnable import entrypoint, entrypoint_tasks, runnable_entrypoints
+from recordstream.runnable import entrypoint, entrypoint_tasks, runnable_entrypoints
 
 
 class _Runnable:

@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from sampleflux import Image, Label, Mask, Record, Regions, collate, collate_records, get_collate, register_item
+from recordstream import Image, Label, Mask, Record, Regions, collate, collate_records, get_collate, register_item
 
 
 @register_item
@@ -111,7 +111,7 @@ def test_generic_collate_leaves_ragged_regions_as_lists() -> None:
 def test_registered_task_collate_produces_its_own_batch_contract() -> None:
     import torch
 
-    from sampleflux import collate, get_collate, register_collate
+    from recordstream import collate, get_collate, register_collate
 
     @register_collate("_test_detection")
     def detection_collate(items):

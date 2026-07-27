@@ -1,17 +1,17 @@
-# Storage — sinks, sources and queryable metadata (`sampleflux.storage`)
+# Storage — sinks, sources and queryable metadata (`recordstream.storage`)
 
 > Runnable tour: [`examples/storage_roundtrip.py`](../examples/storage_roundtrip.py) — the same
 > records through all three sink/source pairs (typed values + a plain scalar, byte-identical
 > round-trips) plus a `MetadataFilterSource` query that never loads an array.
 
-SampleFlux makes it easy to move data between different formats:
+RecordStream makes it easy to move data between different formats:
 
 ```python
-from sampleflux.storage.hdf5 import HDF5Source
-from sampleflux.storage.zarr import ZarrGroupSink
+from recordstream.storage.hdf5 import HDF5Source
+from recordstream.storage.zarr import ZarrGroupSink
 
 # Stream from HDF5 to Zarr in parallel
-Flux.from_source(HDF5Source("input.h5")) \
+Stream.from_source(HDF5Source("input.h5")) \
     .parallel(workers=8) \
     .map(heavy_op, key="image") \
     .to_sink(ZarrGroupSink("output.zarr"))
@@ -29,19 +29,19 @@ Every sink has a source that reads its layout back into record dicts of typed va
 | Directory (one dir / record) | `DirectorySink` | `DirectorySource` | all keys + item types + attrs |
 
 ```python
-from sampleflux.storage.zarr import ZarrGroupSink, ZarrGroupSource
+from recordstream.storage.zarr import ZarrGroupSink, ZarrGroupSource
 
-Flux(records).to_sink(ZarrGroupSink("ds.zarr", overwrite=True))
+Stream(records).to_sink(ZarrGroupSink("ds.zarr", overwrite=True))
 for record in ZarrGroupSource("ds.zarr"):   # exact keys, item types and attrs reconstructed
     ...
 ```
 
 All four backends share ONE logical schema — the **record key-group layout**, stamped
-`sampleflux_format = "typedrecord-v1"`: per record, one group per KEY carrying the value's
+`recordstream_format = "typedrecord-v1"`: per record, one group per KEY carrying the value's
 registered type name, the payload as a `data` dataset, and its attrs (scalars natively; structured
 values JSON-tagged so tuples survive); a plain (non-item) value rides the `"plain"` type tag — an
 array payload as `data`, a scalar under the `value` attr. Everything serializes through the item
-codec (`sampleflux/io.py`), so an externally-registered item type round-trips with zero storage
+codec (`recordstream/io.py`), so an externally-registered item type round-trips with zero storage
 edits (see [record-model.md](record-model.md#storage--the-record-key-group-layout)).
 
 > **No backward compatibility.** A store whose format tag is missing or pre-record
@@ -62,16 +62,16 @@ its own sub-dataset under `attrs/` instead — a large array never overflows the
 is a first-class `Mask` value under its own key with its own payload.
 
 ```python
-from sampleflux import Image, Mask, item_data
+from recordstream import Image, Mask, item_data
 
 record = {"image": Image(data), "mask": Mask(mask_2d)}
-Flux([record]).to_sink(HDF5Sink("ds.h5", overwrite=True))
+Stream([record]).to_sink(HDF5Sink("ds.h5", overwrite=True))
 loaded = next(iter(HDF5Source("ds.h5")))
 item_data(loaded["mask"])   # the full mask array, byte-exact (not a truncated repr)
 loaded["image"].layout      # item attrs round-trip too
 ```
 
-## Queryable metadata (`sampleflux.storage.query`)
+## Queryable metadata (`recordstream.storage.query`)
 
 Filter stored records by metadata predicates *without loading arrays*: sources implementing the
 `SupportsMetadataScan` protocol (`iter_metadata()`) scan only attrs / `.zattrs` / sidecar JSON —
@@ -80,11 +80,11 @@ structural protocol without importing this module), so **record-layout HDF5/Zarr
 queryable with no extra index**:
 
 ```python
-from sampleflux.storage.query import MetadataFilterSource
+from recordstream.storage.query import MetadataFilterSource
 
 view = MetadataFilterSource(source=HDF5Source(path="d.h5"), where="signal.samplerate > 1e6")
 len(view)          # matches counted from a metadata-only scan
-flux = Flux(source=view, ops=[...])   # arrays load ONLY for matching records
+stream = Stream(source=view, ops=[...])   # arrays load ONLY for matching records
 ```
 
 The scans yield the nested `{key: {attr: value}}` shape, and a `where` expression addresses it as

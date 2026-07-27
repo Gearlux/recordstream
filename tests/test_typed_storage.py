@@ -7,12 +7,12 @@ import h5py
 import numpy as np
 import pytest
 
-from sampleflux import Image, Label, Regions, register_item
-from sampleflux.storage.base import TYPED_FORMAT, require_record_format, restore_attrs, split_attrs
-from sampleflux.storage.directory import DirectorySink, DirectorySource
-from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
-from sampleflux.storage.query import MetadataFilterSource, record_metadata, scan_hdf5_metadata, scan_zarr_metadata
-from sampleflux.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
+from recordstream import Image, Label, Regions, register_item
+from recordstream.storage.base import TYPED_FORMAT, require_record_format, restore_attrs, split_attrs
+from recordstream.storage.directory import DirectorySink, DirectorySource
+from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
+from recordstream.storage.query import MetadataFilterSource, record_metadata, scan_hdf5_metadata, scan_zarr_metadata
+from recordstream.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
 
 
 @register_item
@@ -106,14 +106,14 @@ class TestFormatGuard:
         # NO backward compat: a pre-record-model store must fail loudly with the clear error.
         path = tmp_path / "old.h5"
         with h5py.File(path, "w") as handle:
-            handle.attrs["sampleflux_format"] = "typedsample-v1"
+            handle.attrs["recordstream_format"] = "typedsample-v1"
         with pytest.raises(ValueError, match="typedrecord-v1"):
             HDF5Source(path=path).open()
 
     def test_hdf5_sink_rejects_appending_to_old_tag(self, tmp_path: Path) -> None:
         path = tmp_path / "old.h5"
         with h5py.File(path, "w") as handle:
-            handle.attrs["sampleflux_format"] = "typedsample-v1"
+            handle.attrs["recordstream_format"] = "typedsample-v1"
         sink = HDF5Sink(path=path)
         with sink:
             with pytest.raises(ValueError, match="typedrecord-v1"):
@@ -124,7 +124,7 @@ class TestFormatGuard:
 
         path = str(tmp_path / "old.zarr")
         root = zarr.open_group(path, mode="a")
-        root.attrs["sampleflux_format"] = "typedsample-v1"
+        root.attrs["recordstream_format"] = "typedsample-v1"
         with pytest.raises(ValueError, match="typedrecord-v1"):
             ZarrGroupSource(path=path).open()
 
@@ -147,7 +147,7 @@ class TestHDF5:
         with HDF5Sink(path=path, overwrite=True) as sink:
             sink.write(_records()[0])
         with h5py.File(path, "r") as handle:
-            assert handle.attrs["sampleflux_format"] == TYPED_FORMAT
+            assert handle.attrs["recordstream_format"] == TYPED_FORMAT
 
     def test_non_dict_write_raises(self, tmp_path: Path) -> None:
         # The sink only accepts a record dict; a bare array is rejected loudly.

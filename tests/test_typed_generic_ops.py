@@ -3,21 +3,21 @@
 Pins the three native type-changing transforms that run the detection/segmentation
 front-end on plain record dicts:
 
-* :class:`sampleflux.ops.image.ConvertToImage` — array-bearing key → ``Image`` item;
-* :class:`sampleflux.ops.numpy.Threshold` — array key → boolean ``Mask`` item;
-* :class:`sampleflux.ops.numpy.ConnectedComponents` — ``Mask`` → ``Regions`` item.
+* :class:`recordstream.ops.image.ConvertToImage` — array-bearing key → ``Image`` item;
+* :class:`recordstream.ops.numpy.Threshold` — array key → boolean ``Mask`` item;
+* :class:`recordstream.ops.numpy.ConnectedComponents` — ``Mask`` → ``Regions`` item.
 
 Each op REUSES its shared math helper, so the op output is pinned identical to the helper
-(parity). sampleflux-only — no domain-package import.
+(parity). recordstream-only — no domain-package import.
 """
 
 import numpy as np
 import pytest
 from confluid.registry import get_registry, resolve_class
 
-from sampleflux import Image, Mask, Regions
-from sampleflux.ops.image import ConvertToImage, _bound_longest_side, _render_rgb
-from sampleflux.ops.numpy import ConnectedComponents, Threshold, connected_component_bboxes, threshold_array
+from recordstream import Image, Mask, Regions
+from recordstream.ops.image import ConvertToImage, _bound_longest_side, _render_rgb
+from recordstream.ops.numpy import ConnectedComponents, Threshold, connected_component_bboxes, threshold_array
 
 
 def _ramp_2d() -> np.ndarray:

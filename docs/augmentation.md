@@ -1,27 +1,27 @@
 # Augmentation — well-known libraries run AS-IS
 
-SampleFlux does not reimplement augmentations, and it does not wrap them either. A bare
+RecordStream does not reimplement augmentations, and it does not wrap them either. A bare
 [albumentations](https://albumentations.ai) transform or a bare torchvision `transforms.v2`
-transform drops **as-is** into any ops list — `Flux(ops=[...])`, a `Pipeline`, a `flow:` step,
+transform drops **as-is** into any ops list — `Stream(ops=[...])`, a `Pipeline`, a `flow:` step,
 inside `RandomApply` / `Enable` — and the engine's op-family dispatch
-(`sampleflux.core._apply_op`) invokes it the way its own library expects. There are no adapter
+(`recordstream.core._apply_op`) invokes it the way its own library expects. There are no adapter
 classes and no generated per-transform op families.
 
 ```python
 import albumentations as A
 from torchvision.transforms import v2
-from sampleflux import Flux, Pipeline
+from recordstream import Stream, Pipeline
 
-flux = Flux(source=records, ops=[
+stream = Stream(source=records, ops=[
     A.HorizontalFlip(p=0.5),          # bare albumentations
     A.GaussNoise(p=1.0),              # bare albumentations
-    my_native_op,                     # native sampleflux op — same list
+    my_native_op,                     # native recordstream op — same list
 ])
 
 Pipeline([v2.ToImage(), v2.RandomCrop(8)])(record)   # bare torchvision v2
 ```
 
-Torchvision is optional (`pip install "sampleflux[vision]"`); albumentations is a core
+Torchvision is optional (`pip install "recordstream[vision]"`); albumentations is a core
 dependency. The family check is by MRO module name — neither library is imported until you
 actually put one of its transforms in a pipeline.
 
@@ -44,11 +44,11 @@ actually put one of its transforms in a pipeline.
 
 Key names carry meaning: albumentations sees only its own vocabulary, so a value augments only if
 it rides one of those keys. If your pipeline produced the value under another name, route it with
-`RenameField` (`sampleflux.ops.structure`) before the library op:
+`RenameField` (`recordstream.ops.structure`) before the library op:
 
 ```yaml
 ops:
-  - !class:sampleflux.ops.structure.RenameField {src: spec_view, dst: image}
+  - !class:recordstream.ops.structure.RenameField {src: spec_view, dst: image}
   - !class:albumentations.GaussNoise
     p: 1.0
 ```
@@ -77,7 +77,7 @@ engine adds nothing on top. The detection-target ops (`CocoToTorchVisionDetectio
 ## YAML — bare library transforms are ordinary `!class:` nodes
 
 No library-specific serialization format — a transform is a Confluid `!class:` node like any op,
-in mapping form or call form. `Flux` flows deferred markers at route entry, and composing ops
+in mapping form or call form. `Stream` flows deferred markers at route entry, and composing ops
 (`Pipeline` / `Enable` / `RandomApply`) flow theirs lazily:
 
 ```yaml
@@ -85,7 +85,7 @@ ops:
   - !class:albumentations.HorizontalFlip
     p: 0.5
   - !class:albumentations.GaussNoise {p: 1.0}
-  - !class:sampleflux.ops.numpy.Threshold
+  - !class:recordstream.ops.numpy.Threshold
     low_level: 0.5
 ```
 

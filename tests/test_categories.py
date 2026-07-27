@@ -1,5 +1,5 @@
 # mypy: disable-error-code="attr-defined,union-attr"
-"""Discovery-category coverage for sampleflux ``@configurable`` classes.
+"""Discovery-category coverage for recordstream ``@configurable`` classes.
 
 These ``category=`` tags drive navigaitor's ``list_configurable_classes(category=...)``
 MCP tool and, downstream, the visual-editor form-spec picker (``get_node_form_spec``).
@@ -9,30 +9,30 @@ pinned here as a regression gate.
 
 from confluid.registry import get_registry
 
-from sampleflux import Pipeline
-from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from sampleflux.ops.configure import ConfigureOp
-from sampleflux.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
-from sampleflux.ops.debug import PrintSampleOp
-from sampleflux.ops.enable import Enable
-from sampleflux.ops.formula import FormulaOp
-from sampleflux.ops.image import ConvertToImage
-from sampleflux.ops.numpy import ConnectedComponents, Threshold
-from sampleflux.ops.parallel import Parallel
-from sampleflux.ops.random_apply import RandomApply
-from sampleflux.ops.sink import RecordSinkOp
-from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
-from sampleflux.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
-from sampleflux.ops.torch import ToTensor
-from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
-from sampleflux.storage.directory import DirectorySink
-from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
-from sampleflux.storage.zarr import ZarrBatchSink, ZarrGroupSink
+from recordstream import Pipeline
+from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
+from recordstream.ops.configure import ConfigureOp
+from recordstream.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
+from recordstream.ops.debug import PrintRecordOp
+from recordstream.ops.enable import Enable
+from recordstream.ops.formula import FormulaOp
+from recordstream.ops.image import ConvertToImage
+from recordstream.ops.numpy import ConnectedComponents, Threshold
+from recordstream.ops.parallel import Parallel
+from recordstream.ops.random_apply import RandomApply
+from recordstream.ops.sink import RecordSinkOp
+from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
+from recordstream.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
+from recordstream.ops.torch import ToTensor
+from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+from recordstream.storage.directory import DirectorySink
+from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
+from recordstream.storage.zarr import ZarrBatchSink, ZarrGroupSink
 
 
 def test_engine_classes_tagged() -> None:
-    assert Flux.__confluid_category__ == "engine"
-    assert JointFlux.__confluid_category__ == "engine"
+    assert Stream.__confluid_category__ == "engine"
+    assert JointStream.__confluid_category__ == "engine"
 
 
 def test_raw_callable_wrappers_uncategorised() -> None:
@@ -76,7 +76,7 @@ def test_op_classes_tagged() -> None:
         Apply,
         Capture,
         MergeFields,
-        PrintSampleOp,
+        PrintRecordOp,
     ):
         assert cls.__confluid_category__ == "op", cls.__name__
 
@@ -99,7 +99,7 @@ def test_op_group_tags() -> None:
     assert ToTensor.__confluid_group__ == "torch"
     assert ConvertToImage.__confluid_group__ == "image"
     assert SelectFields.__confluid_group__ == "structure"
-    assert PrintSampleOp.__confluid_group__ == "debug"
+    assert PrintRecordOp.__confluid_group__ == "debug"
     assert EncodeTarget.__confluid_group__ == "structure"
     assert DecodeTarget.__confluid_group__ == "structure"
     assert CocoToTorchVisionDetection.__confluid_group__ == "structure"
@@ -117,7 +117,7 @@ def test_op_group_tags() -> None:
 
 def test_categories_enumerable_via_registry() -> None:
     registry = get_registry()
-    assert {"Flux", "JointFlux"} <= registry.list_classes(category="engine")
+    assert {"Stream", "JointStream"} <= registry.list_classes(category="engine")
     assert "DatasetSplit" not in registry.list_classes(category="engine")
     assert not ({"FilterOp", "WrappedOp"} & registry.list_classes(category="engine"))
     assert {"HuggingFaceSource", "DatasetSplit", "RangeSource", "ConcatSource"} <= registry.list_classes(

@@ -1,6 +1,6 @@
 """Typed items — array-subclass attribute preservation, wrappers, payload accessors, registry.
 
-Only the MODALITY-NEUTRAL core items live in sampleflux (Image / Mask / Regions / Label). The
+Only the MODALITY-NEUTRAL core items live in recordstream (Image / Mask / Regions / Label). The
 data-bearing-wrapper and multi-attribute-array paths (which the signal-domain items in a domain
 package exercise for real) are covered here with small test-local item types, so the core stays
 tested without importing a domain package.
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from sampleflux.items import (
+from recordstream.items import (
     Image,
     Label,
     Mask,

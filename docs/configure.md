@@ -3,7 +3,7 @@
 Some op parameters are only known *per record*. Two mechanisms cover this:
 
 - **`ConfigureOp(ops, target, param, source)`** — runs the `ops` compute-chain on the record as a SIDE branch (its transformations are discarded — the original record continues); the `source`-keyed entry of the chain's final record becomes the VALUE (payload-unwrapped via `item_data`), which is set as the `param` attribute of `target` — post-construction configuration, the confluid paradigm — and then `target` is applied to the original record. Use it when the value is *derived from the record itself* (e.g. a threshold from the record's own max) — the whole derivation reads as one node/YAML block.
-- **`Capture` + `Apply`** (`sampleflux.ops.context`, see [graph.md](graph.md)) — when the value is an op's runtime **`@output`** (possibly stochastic — a random draw that can't be recomputed): `Capture(op, output, name)` applies the producer and records its live `@output` into a Context cell; a later `Apply(op, param, source)` sets the consumer's `param` from that cell and applies it. This is what graph exporters emit for `@output` → param wires, and the preferred form whenever the value already lives in a cell.
+- **`Capture` + `Apply`** (`recordstream.ops.context`, see [graph.md](graph.md)) — when the value is an op's runtime **`@output`** (possibly stochastic — a random draw that can't be recomputed): `Capture(op, output, name)` applies the producer and records its live `@output` into a Context cell; a later `Apply(op, param, source)` sets the consumer's `param` from that cell and applies it. This is what graph exporters emit for `@output` → param wires, and the preferred form whenever the value already lives in a cell.
 
 Concretely — a producer that draws a random gain per record and publishes what it ACTUALLY drew
 as a confluid `@output` (apply `@output` UNDER `@property`), and a consumer whose `level` gets set
@@ -14,7 +14,7 @@ original image, which proves the LIVE draw — not a recomputation — reached t
 ```python
 # mypackage/ops.py
 from confluid import configurable, output
-from sampleflux import Record, item_data, with_data
+from recordstream import Record, item_data, with_data
 import numpy as np
 
 @configurable(category="op", random=True)
@@ -60,12 +60,12 @@ class CompensateOp:
 ```yaml
 ops:
   # AugmentOp draws a random gain each call; capture the LIVE @output into a cell.
-  - !class:sampleflux.ops.context.Capture
+  - !class:recordstream.ops.context.Capture
     op: !class:mypackage.ops.AugmentOp {}      # or the registered short name: !class:AugmentOp {}
     output: applied_level
     name: __captured_level
   # …then inject the captured value into the consumer's parameter, per record.
-  - !class:sampleflux.ops.context.Apply
+  - !class:recordstream.ops.context.Apply
     op: !class:mypackage.ops.CompensateOp {}
     param: level
     source: __captured_level
@@ -81,11 +81,11 @@ A self-contained `ConfigureOp` example — derive a per-record threshold from th
 
 ```yaml
 ops:
-  - !class:sampleflux.ops.configure.ConfigureOp
+  - !class:recordstream.ops.configure.ConfigureOp
     ops:
-      - !class:sampleflux.ops.formula.FormulaOp {field: image, formula: "amax(a) * 0.5"}
+      - !class:recordstream.ops.formula.FormulaOp {field: image, formula: "amax(a) * 0.5"}
     source: image
-    target: !class:sampleflux.ops.numpy.Threshold
+    target: !class:recordstream.ops.numpy.Threshold
       low_op: ">="
     param: low_level
 ```

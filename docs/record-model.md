@@ -1,7 +1,7 @@
-# The record model — THE sampleflux data model
+# The record model — THE recordstream data model
 
-A sample is a **plain `dict`** of **typed values**. Import the whole surface from the PACKAGE TOP
-LEVEL (`from sampleflux import Record, Image, Mask, Regions, Label, Transform, Pipeline,
+A record is a **plain `dict`** of **typed values**. Import the whole surface from the PACKAGE TOP
+LEVEL (`from recordstream import Record, Image, Mask, Regions, Label, Transform, Pipeline,
 as_transform, item_data, with_data, register_item, register_kernel, register_io, collate_records, ...`).
 The design rationale is recorded in
 [architecture.md](architecture.md#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25).
@@ -13,7 +13,7 @@ region boxes, a signal's samplerate, an image's layout, a label's class names �
 flat `metadata` dict keyed by string, it is disconnected from the value it describes. And if the
 carrier is a bespoke container class, every external library needs an adapter before it can touch it.
 
-The record model fixes both. **A sample is a plain dict, values are typed, and metadata lives on the
+The record model fixes both. **A record is a plain dict, values are typed, and metadata lives on the
 value it describes** — an `Image` carries its `layout`, a `Label` its `classes`. **Key names carry
 meaning** (`"image"`, `"mask"`, `"bboxes"`, `"labels"`, `"class"` — the same convention as every torch
 batch dict and albumentations' keyword vocabulary), so libraries that already understand dicts or
@@ -31,18 +31,18 @@ record = {
 ```
 
 There is deliberately **no container class** — `Record` is a type alias (`Dict[str, Any]` in
-`sampleflux.items`), ops receive and return ordinary dicts, and `None` means "drop this record"
+`recordstream.items`), ops receive and return ordinary dicts, and `None` means "drop this record"
 (filter semantics).
 
 ## The pieces
 
 ### Items — typed values that own their metadata
 
-sampleflux is **modality-neutral**, so its core ships only generic items — images, masks, boxes,
+recordstream is **modality-neutral**, so its core ships only generic items — images, masks, boxes,
 labels. (Domain items — a signal, a spectrogram — live in the domain package; see below.)
 
 ```python
-from sampleflux import Image, Mask, Regions, Label
+from recordstream import Image, Mask, Regions, Label
 
 Image(rgb_hwc, layout="HWC")                        # an image knows its layout ("HWC" default / "CHW")
 Mask(seg_hw)                                         # a mask shares its image's frame
@@ -57,7 +57,7 @@ wrappers (a bounding-box set is not an array). A uniform payload accessor hides 
 kernels:
 
 ```python
-from sampleflux import item_data, with_data
+from recordstream import item_data, with_data
 item_data(Image(arr))                  # -> the plain ndarray
 with_data(Image(a, layout="CHW"), b)   # a copy carrying b, layout preserved
 ```
@@ -68,16 +68,16 @@ decorator, no core edit).
 
 ### Ops — type dispatch with once-per-record parameters
 
-A `Transform` (`sampleflux.transform`) samples its parameters ONCE per record
+A `Transform` (`recordstream.transform`) samples its parameters ONCE per record
 (`get_params(record)`), then applies a per-type **kernel** to every value whose type it handles
-(`@MyOp.kernel(ItemType)`, resolved MRO-aware by `sampleflux.dispatch`). Values it does not handle
+(`@MyOp.kernel(ItemType)`, resolved MRO-aware by `recordstream.dispatch`). Values it does not handle
 pass through. Because the parameters are sampled once and shared, one op moves every handled value
 with the SAME decision — the torchvision-v2 model. Targeting is by TYPE; the `field=` constructor
 parameter pins an op to one named key when a record holds several values of a handled type.
 
 ```python
 import numpy as np
-from sampleflux import Image, Record, Transform
+from recordstream import Image, Record, Transform
 
 class Brighten(Transform):
     handles = (Image,)
@@ -226,13 +226,13 @@ Rules of use:
   refuse to run without an input, validate lazily in `__call__` with a clear error — the same
   lazy-validation convention every op follows.
 
-**sampleflux ships no native augmentation ops** — geometric/photometric augmentation comes from
+**recordstream ships no native augmentation ops** — geometric/photometric augmentation comes from
 torchvision `transforms.v2` / albumentations run as-is (next section); native ops exist only where
 no library covers them.
 
 ### Mixing libraries — as-is, no adapters
 
-The engine's single op-application chokepoint, `sampleflux.core._apply_op(record, op)`, dispatches
+The engine's single op-application chokepoint, `recordstream.core._apply_op(record, op)`, dispatches
 on the op's FAMILY (by MRO module name, no eager import) and invokes each family the way its own
 library expects:
 
@@ -245,12 +245,12 @@ library expects:
   silently.
 - **everything else** — `op(record)`; `None` drops the record.
 
-So bare library transforms sit in one list with native ops — in `Flux(ops=[...])`, in a `Pipeline`,
+So bare library transforms sit in one list with native ops — in `Stream(ops=[...])`, in a `Pipeline`,
 in a `flow:` step:
 
 ```python
 import albumentations as A
-from sampleflux import Pipeline
+from recordstream import Pipeline
 
 Pipeline([
     A.Compose(                                   # box-carrying augmentation: the library's own Compose
@@ -279,7 +279,7 @@ Runnable end-to-end: [`examples/record_pipeline.py`](../examples/record_pipeline
 
 ### `Pipeline` — the sequential composer
 
-`Pipeline(transforms=[...])` (`sampleflux.transform`, `@configurable(category="op",
+`Pipeline(transforms=[...])` (`recordstream.transform`, `@configurable(category="op",
 group="compose")`) wraps an ordered op list so it appears as one named block in a config and one
 node on a visual canvas: zero-arg/lazy (config-deferred markers flow on first call), entries applied
 through `_apply_op` (so bare library transforms nest exactly as in a bare ops list), `None`
@@ -291,7 +291,7 @@ resources.
 ### A custom op from a plain function
 
 ```python
-from sampleflux import as_transform, Image
+from recordstream import as_transform, Image
 brighten = as_transform(lambda d: d + 0.1, handles=(Image,), field="image")
 ```
 
@@ -299,7 +299,7 @@ brighten = as_transform(lambda d: d + 0.1, handles=(Image,), field="image")
 
 ```python
 from dataclasses import dataclass, field
-from sampleflux import register_item
+from recordstream import register_item
 from mypkg.transforms import MyGeoTransform   # any Transform subclass
 
 @register_item
@@ -317,7 +317,7 @@ subclass transform inherits its base's kernels until it overrides them.
 
 ### Domain items live in the domain package
 
-The same mechanism, applied across packages: because sampleflux is modality-neutral, a signal-domain
+The same mechanism, applied across packages: because recordstream is modality-neutral, a signal-domain
 package defines its own items (a signal, a spectrogram) and its own type-changing ops, registers
 them with `register_item`, and they become first-class record values — dispatchable, collatable,
 storable — with no core edit.
@@ -331,7 +331,7 @@ calling convention. Every engine route (sequential, spawn-parallel, streamed, ra
 every composing op picks it up at once, because they all funnel through `_apply_op`:
 
 ```python
-from sampleflux import register_op_family
+from recordstream import register_op_family
 
 def is_kornia(op) -> bool:
     # Keep the matcher IMPORT-FREE: inspect MRO module names, never import the library.
@@ -345,8 +345,8 @@ def invoke_kornia(record, op):
 
 register_op_family("kornia", is_kornia, invoke_kornia)
 
-# From here on, bare kornia ops sit in ANY ops list — Flux, Pipeline, RandomApply, flow steps:
-flux = Flux(source=records, ops=[ToTensor(field="image"), K.RandomHorizontalFlip(p=1.0)])
+# From here on, bare kornia ops sit in ANY ops list — Stream, Pipeline, RandomApply, flow steps:
+stream = Stream(source=records, ops=[ToTensor(field="image"), K.RandomHorizontalFlip(p=1.0)])
 ```
 
 The rules: dispatch checks families **last-registered first**, so a more specific family (say a
@@ -360,21 +360,21 @@ privileged code path. When a library's convention needs per-op configuration ins
 read, per-op state), write a normal `Transform` op that wraps it explicitly — the registry is for
 AS-IS drop-in.
 
-## Engines — Flux and FlowGraph carry the record
+## Engines — Stream and FlowGraph carry the record
 
-Every carrier is a plain record dict, and every route applies ops through `_apply_op` — sequential,
-spawn-parallel, streamed, and random-access (`__getitem__`) alike, in `Flux` and in `FlowGraph`.
+Every carrier is a plain dict, and every route applies ops through `_apply_op` — sequential,
+spawn-parallel, streamed, and random-access (`__getitem__`) alike, in `Stream` and in `FlowGraph`.
 Composing ops (`Pipeline`, `RandomApply`, `Enable`, `Parallel`, `ConfigureOp`, the context ops
 `Apply`/`Capture`) route their inner ops through the same chokepoint, so a bare library transform
 nests anywhere a native op does.
 
 ```python
-Flux(source=my_source, ops=[A.GaussNoise(p=1.0), Brighten()]).to_sink(HDF5Sink(path="out.h5"))
+Stream(source=my_source, ops=[A.GaussNoise(p=1.0), Brighten()]).to_sink(HDF5Sink(path="out.h5"))
 ```
 
-`Flux.map(func, key=None)` lifts a plain function over one record entry (`key=None` hands it the
+`Stream.map(func, key=None)` lifts a plain function over one record entry (`key=None` hands it the
 whole dict — internally a `WrappedOp`, which stores the callable as its importable path so it
-pickles across `spawn` workers); `Flux.project(keys)` yields partial records restricted to the
+pickles across `spawn` workers); `Stream.project(keys)` yields partial records restricted to the
 requested keys (see [projection.md](projection.md)).
 
 ### Graph fan-in (`merge_from`) and entry binds (`step[key]`)
@@ -386,8 +386,8 @@ produce, `SelectFields` the new key(s), merge:
 ```yaml
 flow:
   start:     {}
-  masked:    {op: !class:sampleflux.ops.numpy.Threshold(low_level=0.5), from: start}
-  mask_only: {op: !class:sampleflux.ops.structure.SelectFields(keys: [mask]), from: masked}
+  masked:    {op: !class:recordstream.ops.numpy.Threshold(low_level=0.5), from: start}
+  mask_only: {op: !class:recordstream.ops.structure.SelectFields(keys: [mask]), from: masked}
   boosted:   {op: !class:mypkg.Boost(), from: start}
   out:       {from: boosted, merge_from: [mask_only]}
 ```
@@ -405,10 +405,10 @@ schema: per record, one group per KEY carrying the value's registered type name 
 the payload as a `data` dataset, and its attrs (scalars natively — queryable; arrays as sub-datasets
 under `attrs/`; structured values JSON-tagged so tuples survive). A plain (non-item) value rides the
 `"plain"` type tag — an array payload as `data`, a scalar under the `value` attr. Key order is
-preserved in `__field_order__`; the store is stamped `sampleflux_format = "typedrecord-v1"`.
+preserved in `__field_order__`; the store is stamped `recordstream_format = "typedrecord-v1"`.
 
 Backends never inspect item internals — everything serializes through the item codec
-(`sampleflux/io.py`: `encode_item` / `decode_item` / `encode_record` / `decode_record`), so an
+(`recordstream/io.py`: `encode_item` / `decode_item` / `encode_record` / `decode_record`), so an
 externally-registered item type round-trips with zero storage edits;
 `register_io(MyItem, encode=..., decode=...)` overrides the default structural codec when needed.
 Decoding requires the item type to be registered (imported) in the reading process — the same
@@ -417,7 +417,7 @@ contract as Confluid's `!class:`.
 ```python
 sink = HDF5Sink(path="out.h5", overwrite=True)
 with sink:
-    for record in flux:
+    for record in stream:
         sink.write(record)
 back = list(HDF5Source(path="out.h5"))   # exact records: keys, types, order, tuple attrs
 ```
@@ -441,11 +441,11 @@ fast = MetadataFilterSource(source=HDF5Source(path="out.h5"), where="signal.samp
 Array-valued attrs appear as shape/dtype stubs (presence/shape testable, never loaded). A key named
 like a Python keyword (e.g. `class`) can't be addressed in an expression — use the programmatic
 `predicate` or a non-keyword key name. Live records expose the same nested shape via
-`sampleflux.storage.query.record_metadata(record)`. See [storage.md](storage.md).
+`recordstream.storage.query.record_metadata(record)`. See [storage.md](storage.md).
 
 ## Batching — `collate_records` and the collate registry
 
-A torch `DataLoader` (or `Flux.batch`) hands a collate function a LIST of N records and expects
+A torch `DataLoader` (or `Stream.batch`) hands a collate function a LIST of N records and expects
 ONE object back. `collate_records` — the registry's `"record"` default — folds per key with three
 rules (all records must share the same key set; a mismatch raises):
 
@@ -474,7 +474,7 @@ images + RAGGED per-record target dicts), so the task package registers a collat
 exactly that:
 
 ```python
-from sampleflux import Image, Regions, collate, register_collate
+from recordstream import Image, Regions, collate, register_collate
 
 @register_collate("detection")
 def detection_collate(items):

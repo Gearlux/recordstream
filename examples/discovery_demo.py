@@ -5,11 +5,11 @@ Standalone, zero-arg, exit 0.
 
 import json
 
-from sampleflux.discovery import scan_module
+from recordstream.discovery import scan_module
 
 
 def main() -> None:
-    module = "sampleflux.ops.numpy"
+    module = "recordstream.ops.numpy"
     print(f"--- Scanning Module: {module} ---")
     schemas = scan_module(module)
 

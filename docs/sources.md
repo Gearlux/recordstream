@@ -1,4 +1,4 @@
-# Sources — HuggingFace, splits, ranges, concatenation (`sampleflux.sources`)
+# Sources — HuggingFace, splits, ranges, concatenation (`recordstream.sources`)
 
 ## Hugging Face datasets
 
@@ -7,7 +7,7 @@
 - **`metadata_features` (which extra columns become record entries):** the sentinel **`"*"`** (or `["*"]`, the default) keeps **every column except `input_feature` / `target_feature`** — the full-traceability option, resolved against the dataset's real columns at load; an explicit list keeps exactly those columns; `None` / `[]` keep none.
 
 ```yaml
-hf_train: !class:sampleflux.sources.HuggingFaceSource()
+hf_train: !class:recordstream.sources.HuggingFaceSource()
   path: mnist
   input_feature: image
   target_feature: label
@@ -23,7 +23,7 @@ hf_train: !class:sampleflux.sources.HuggingFaceSource()
 **Property API (preferred).** Configure **one** `DatasetSplit` with a `seed` and the held-out fraction(s), then read the three cached views off it — `split.train` / `split.val` / `split.test`:
 
 ```python
-from sampleflux import DatasetSplit
+from recordstream import DatasetSplit
 split = DatasetSplit(source=src, val_fraction=0.1, test_fraction=0.1, seed=42)
 split.train   # ≈80% — the remainder      split.val   # ≈10%      split.test  # ≈10%
 ```
@@ -31,27 +31,27 @@ split.train   # ≈80% — the remainder      split.val   # ≈10%      split.te
 The views are disjoint and complementary, computed once over a single deterministic shuffle (cached), so the underlying source is consumed once. In Confluid YAML they're reachable by **attribute reference** — `!ref:my_split.train` / `.val` / `.test`. All three refs resolve to the *same* `DatasetSplit` instance, so the upstream source is loaded **exactly once**:
 
 ```yaml
-hf_train: !class:sampleflux.sources.HuggingFaceSource()
+hf_train: !class:recordstream.sources.HuggingFaceSource()
   path: mnist
   split: train
 
-my_split: !class:sampleflux.sources.DatasetSplit()
+my_split: !class:recordstream.sources.DatasetSplit()
   source: !ref:hf_train
   val_fraction: 0.1
   test_fraction: 0.1
   seed: 42
 
-train_set: !class:sampleflux.core.Flux() { source: !ref:my_split.train }
-val_set:   !class:sampleflux.core.Flux() { source: !ref:my_split.val }
-test_set:  !class:sampleflux.core.Flux() { source: !ref:my_split.test }
+train_set: !class:recordstream.core.Stream() { source: !ref:my_split.train }
+val_set:   !class:recordstream.core.Stream() { source: !ref:my_split.val }
+test_set:  !class:recordstream.core.Stream() { source: !ref:my_split.test }
 ```
 
 Omit `test_fraction` for a plain two-way train/val split; omit both fractions and `train` is the whole source (`val`/`test` empty).
 
-**Select-one API.** Passing `split` makes the `DatasetSplit` *itself* iterate that one view (`split=None` ⇒ `train`), so it's directly usable as a single `source:`. `split` is the closed `Literal["train", "val", "test"]`, exported as `sampleflux.SplitName`.
+**Select-one API.** Passing `split` makes the `DatasetSplit` *itself* iterate that one view (`split=None` ⇒ `train`), so it's directly usable as a single `source:`. `split` is the closed `Literal["train", "val", "test"]`, exported as `recordstream.SplitName`.
 
 ```yaml
-val_set: !class:sampleflux.sources.DatasetSplit()
+val_set: !class:recordstream.sources.DatasetSplit()
   source: !ref:hf_train
   split: val
   val_fraction: 0.1
@@ -63,21 +63,21 @@ val_set: !class:sampleflux.sources.DatasetSplit()
 - **`RangeSource(source, start, stop)`** — a contiguous index slice `[start:stop)` over a source (negatives count from the end; clamped). The plain-slice counterpart to `DatasetSplit`.
 
     ```yaml
-    first_half: !class:sampleflux.sources.RangeSource()
+    first_half: !class:recordstream.sources.RangeSource()
       source: !ref:hf_train
       start: 0
       stop: 5000
     ```
 
-- **`ConcatSource(sources)`** — joins multiple indexable sources into one longer indexable source (the indexable counterpart to `JointFlux`, which is iteration-only). Because it's indexable, a `ConcatSource` can itself be wrapped by `DatasetSplit` / `RangeSource`.
+- **`ConcatSource(sources)`** — joins multiple indexable sources into one longer indexable source (the indexable counterpart to `JointStream`, which is iteration-only). Because it's indexable, a `ConcatSource` can itself be wrapped by `DatasetSplit` / `RangeSource`.
 
     ```yaml
-    combined: !class:sampleflux.sources.ConcatSource()
+    combined: !class:recordstream.sources.ConcatSource()
       sources:
         - !ref:train_main
         - !ref:extra_shard
     ```
 
-**HuggingFace native slicing** (alternative, no SampleFlux split needed): `split: "train[:90%]"` / `"train[90%:]"` on two `HuggingFaceSource`s.
+**HuggingFace native slicing** (alternative, no RecordStream split needed): `split: "train[:90%]"` / `"train[90%:]"` on two `HuggingFaceSource`s.
 
 > **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key (including attribute refs like `!ref:my_split.train`), so a single `HuggingFaceSource` is loaded once and shared. Use `!clone:` when you want an independent deep copy instead.

@@ -1,9 +1,9 @@
-# Image conversion (`sampleflux.ops.image`)
+# Image conversion (`recordstream.ops.image`)
 
 The single, modality-agnostic "any value → image" layer — generic so every consuming project (spectrogram previews, dataset browsers, GUI viewers) reuses one implementation. Domain-specific rendering (overlays, signal plots) stays in the consuming package.
 
 ```python
-from sampleflux.ops.image import ConvertToImage, value_to_image
+from recordstream.ops.image import ConvertToImage, value_to_image
 
 # Op: an array-bearing record value (2-D map / CHW tensor / PIL / bool mask) -> an Image item.
 op = ConvertToImage(
@@ -21,13 +21,13 @@ rgb = value_to_image(some_value, colormap="magma", max_size=512)
 # normalize_to_uint8: the standalone min-max value -> uint8 quantization step
 # (decoupled from colormap / PIL). vmin/vmax default None = per-array auto-contrast;
 # set them to pin a fixed scale across records (out-of-range values clamp).
-from sampleflux.ops.image import normalize_to_uint8
+from recordstream.ops.image import normalize_to_uint8
 
 u8 = normalize_to_uint8(arr)                          # auto per-array min/max
 u8 = normalize_to_uint8(arr, vmin=-80.0, vmax=0.0)    # fixed dB window across a dataset
 ```
 
-`sample_to_image(record, ...)` renders a record's first array-bearing (2-D / 3-D) value the same way — the ad-hoc whole-record preview for viewer tooling. Pillow is a runtime dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
+`record_to_image(record, ...)` renders a record's first array-bearing (2-D / 3-D) value the same way — the ad-hoc whole-record preview for viewer tooling. Pillow is a runtime dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
 
 ## Introspection helpers
 

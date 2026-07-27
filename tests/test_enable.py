@@ -9,7 +9,7 @@ YAML kwarg loudly at configure time.
 
 import pytest
 
-from sampleflux.ops.enable import Enable
+from recordstream.ops.enable import Enable
 
 
 def _tag(record):

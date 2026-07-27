@@ -1,11 +1,11 @@
-"""Pins the "Lazy Initialization & Zero-Arg Construction" convention for ALL sampleflux configurables.
+"""Pins the "Lazy Initialization & Zero-Arg Construction" convention for ALL recordstream configurables.
 
-Every ``@configurable`` class in sampleflux MUST be constructible with no arguments and do no
+Every ``@configurable`` class in recordstream MUST be constructible with no arguments and do no
 functional work in ``__init__`` (no I/O, no network, no eager materialization). This walks the
 whole package, discovers every ``@configurable`` class, and asserts ``Cls()`` succeeds — so a
 newly-added class that violates the convention (a required ctor arg, or a constructor that opens a
 file / loads a dataset) fails here. See confluid ``AGENTS.md`` → "Lazy Initialization & Zero-Arg
-Construction" and sampleflux ``AGENTS.md`` → "Lazy Evaluation".
+Construction" and recordstream ``AGENTS.md`` → "Lazy Evaluation".
 """
 
 import importlib
@@ -14,13 +14,13 @@ from typing import List
 
 import pytest
 
-import sampleflux
+import recordstream
 
 
-def _all_sampleflux_configurables() -> List[type]:
-    """Import every sampleflux submodule and collect the ``@configurable`` classes defined in sampleflux."""
+def _all_recordstream_configurables() -> List[type]:
+    """Import every recordstream submodule and collect the ``@configurable`` classes defined in recordstream."""
     seen: dict = {}
-    for modinfo in pkgutil.walk_packages(sampleflux.__path__, prefix="sampleflux."):
+    for modinfo in pkgutil.walk_packages(recordstream.__path__, prefix="recordstream."):
         try:
             module = importlib.import_module(modinfo.name)
         except Exception:  # pragma: no cover - optional/heavy deps absent in some envs
@@ -29,18 +29,18 @@ def _all_sampleflux_configurables() -> List[type]:
             if (
                 isinstance(obj, type)
                 and getattr(obj, "__confluid_configurable__", False)
-                and getattr(obj, "__module__", "").startswith("sampleflux")
+                and getattr(obj, "__module__", "").startswith("recordstream")
             ):
                 seen[f"{obj.__module__}.{obj.__qualname__}"] = obj
     return list(seen.values())
 
 
-_CONFIGURABLES = _all_sampleflux_configurables()
+_CONFIGURABLES = _all_recordstream_configurables()
 
 
 def test_discovery_found_the_configurables() -> None:
     # Guard against the walker silently finding nothing (which would make the parametrized
-    # test below vacuously pass). sampleflux has well over a dozen @configurable classes.
+    # test below vacuously pass). recordstream has well over a dozen @configurable classes.
     assert len(_CONFIGURABLES) >= 20
 
 
@@ -55,7 +55,7 @@ def test_zero_arg_construction(cls: type) -> None:
 def test_sources_do_not_materialize_on_construction() -> None:
     # The lazy caches stay empty until first use — no dataset load / partition / offset compute
     # happens in __init__.
-    from sampleflux.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+    from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
 
     assert HuggingFaceSource()._dataset is None
     assert DatasetSplit()._views == {}

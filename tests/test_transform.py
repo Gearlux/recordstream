@@ -1,6 +1,6 @@
 """Transforms — type dispatch, once-per-record params, cross-key consistency, ``field=`` pin.
 
-Native-kernel machinery is pinned via the test fixture ``FixtureFlip`` (sampleflux ships no
+Native-kernel machinery is pinned via the test fixture ``FixtureFlip`` (recordstream ships no
 native augmentation transforms — libraries drop into ops lists bare, invoked natively by the
 engine's op-family dispatch).
 """
@@ -8,7 +8,7 @@ engine's op-family dispatch).
 import numpy as np
 import pytest
 
-from sampleflux import Image, Label, Mask, Pipeline, Record, Regions, Transform, as_transform
+from recordstream import Image, Label, Mask, Pipeline, Record, Regions, Transform, as_transform
 from tests._fixtures import FixtureFlip
 
 

@@ -9,8 +9,8 @@ import confluid
 import numpy as np
 import pytest
 
-from sampleflux import FilterOp, Image, Label, Mask, Pipeline, Record
-from sampleflux.ops.structure import RenameField
+from recordstream import FilterOp, Image, Label, Mask, Pipeline, Record
+from recordstream.ops.structure import RenameField
 from tests._fixtures import FixtureFlip
 
 
@@ -24,7 +24,7 @@ class TestImportSafety:
         # op-family dispatch detects them by MRO module NAME — no import), so discovery stays
         # safe on hosts missing the libraries.
         code = (
-            "import sys; import sampleflux; "
+            "import sys; import recordstream; "
             "assert 'torchvision' not in sys.modules; "
             "assert 'albumentations' not in sys.modules"
         )

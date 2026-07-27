@@ -1,7 +1,7 @@
 # Runnables and entry points
 
 A **runnable** is any object exposing a no-arg `run()` — a trainer, an evaluator, a dataset
-processor, a workflow. It is the unit `sampleflux run` executes:
+processor, a workflow. It is the unit `recordstream run` executes:
 
 ```yaml
 # config.yaml — the ONE runner shape for every kind of run
@@ -11,7 +11,7 @@ runnable: !class:mypkg.Classifier
 ```
 
 ```bash
-python -m sampleflux.cli run config.yaml     # builds `runnable:`, calls .run()
+python -m recordstream.cli run config.yaml     # builds `runnable:`, calls .run()
 ```
 
 ## The problem entry points solve
@@ -25,7 +25,7 @@ declares exactly that, per method.
 ## A straightforward example
 
 ```python
-from sampleflux import ProgressReporting, TorchRunner, entrypoint
+from recordstream import ProgressReporting, TorchRunner, entrypoint
 
 class Classifier(TorchRunner, ProgressReporting):
     """One class, four capabilities — run() dispatches off the ``task`` knob."""
@@ -61,7 +61,7 @@ secondary, validation-split variant).
 Real output for the class above (these are executed facts, not sketches):
 
 ```python
->>> from sampleflux import runnable_entrypoints, entrypoint_tasks
+>>> from recordstream import runnable_entrypoints, entrypoint_tasks
 >>> runnable_entrypoints(Classifier)
 {'fit':      {'task': 'fit',      'role': 'trainer',   'primary': True},
  'evaluate': {'task': 'evaluate', 'role': 'evaluator', 'primary': False},
@@ -83,7 +83,7 @@ wins) and reads the marker off the raw function object, so property getters neve
 
 A config generator asked for "an evaluator config for `Classifier`" calls
 `entrypoint_tasks(Classifier, "evaluator")[0]` → `"test"` and pins `task: test` in the YAML
-it emits — one `sampleflux run` then dispatches correctly with no human editing. The same
+it emits — one `recordstream run` then dispatches correctly with no human editing. The same
 walk over every discovered class tells a visual editor which classes to offer in a
 "trainer" picker versus an "evaluator" picker, even when both answers are the same class.
 

@@ -2,8 +2,8 @@ import time
 
 import numpy as np
 
-from sampleflux import Image, item_data
-from sampleflux.core import Flux
+from recordstream import Image, item_data
+from recordstream.core import Stream
 
 
 def heavy_op(x: np.ndarray) -> np.ndarray:
@@ -16,7 +16,7 @@ def test_parallel_execution() -> None:
 
     start = time.time()
     # Use a real top-level function for pickling; key= targets the record entry's payload.
-    pipeline = Flux(source).map(heavy_op, key="x").parallel(workers=4)
+    pipeline = Stream(source).map(heavy_op, key="x").parallel(workers=4)
     results = pipeline.collect()
     duration = time.time() - start
 

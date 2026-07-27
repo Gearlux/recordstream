@@ -3,11 +3,12 @@
 Pins the native transforms that build a classification pipeline's model INPUT array and its
 encoded TARGET ``Label`` on plain record dicts:
 
-* :class:`sampleflux.ops.torch.ToTensor` — array-bearing key → a LIVE CHW-float ``torch.Tensor`` (a plain record value);
-* :class:`sampleflux.ops.target.EncodeTarget` / ``DecodeTarget`` — class-name ↔ class-id ``Label``.
+* :class:`recordstream.ops.torch.ToTensor` — array-bearing key → a LIVE CHW-float ``torch.Tensor``
+  (a plain record value);
+* :class:`recordstream.ops.target.EncodeTarget` / ``DecodeTarget`` — class-name ↔ class-id ``Label``.
 
 Each op REUSES its shared conversion helper, so the op output is pinned identical to the
-helper (parity). sampleflux-only — no domain-package import.
+helper (parity). recordstream-only — no domain-package import.
 """
 
 import numpy as np
@@ -15,10 +16,10 @@ import pytest
 import torch
 from confluid.registry import get_registry, resolve_class
 
-from sampleflux import Image, Label, Mask, collate_records, item_data
-from sampleflux.ops.image import ConvertToImage
-from sampleflux.ops.target import DecodeTarget, EncodeTarget
-from sampleflux.ops.torch import ToTensor, to_tensor
+from recordstream import Image, Label, Mask, collate_records, item_data
+from recordstream.ops.image import ConvertToImage
+from recordstream.ops.target import DecodeTarget, EncodeTarget
+from recordstream.ops.torch import ToTensor, to_tensor
 
 _MAP = {"cat": 0, "dog": 1, "fox": 2}
 _INV = {0: "cat", 1: "dog", 2: "fox"}
@@ -157,7 +158,7 @@ class TestEncodeDecodeTarget:
 
 
 # --------------------------------------------------------------------------- #
-# End-to-end classification input/target path (sampleflux-only).
+# End-to-end classification input/target path (recordstream-only).
 # --------------------------------------------------------------------------- #
 def test_classification_input_and_target_chain() -> None:
     # Source-shaped record: an HWC image + a class-NAME label — key names carry meaning.

@@ -5,10 +5,10 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pytest
 
-from sampleflux import FlowGraph, Flux, Image, Label, Mask, Pipeline, Record, Transform, to_ops
-from sampleflux.flow import from_ops, parse_flow
-from sampleflux.ops.context import MergeFields
-from sampleflux.ops.structure import RenameField, SelectFields
+from recordstream import FlowGraph, Image, Label, Mask, Pipeline, Record, Stream, Transform, to_ops
+from recordstream.flow import from_ops, parse_flow
+from recordstream.ops.context import MergeFields
+from recordstream.ops.structure import RenameField, SelectFields
 
 
 class _AddOffset(Transform):
@@ -159,11 +159,11 @@ class TestLoweringParity:
             "out": {"from": "boosted", "merge_from": ["mask_only"]},
         }
 
-    def test_to_ops_runs_on_flux(self) -> None:
+    def test_to_ops_runs_on_stream(self) -> None:
         # The lowered flat op list (MergeFields wiring) matches the native FlowGraph result.
         steps, outputs = parse_flow(self._flow())
         native = list(FlowGraph(source=[_seed(0.25)], flow=self._flow(), outputs="out"))
-        lowered = list(Flux(source=[_seed(0.25)], ops=to_ops(steps, outputs)))
+        lowered = list(Stream(source=[_seed(0.25)], ops=to_ops(steps, outputs)))
         assert len(native) == len(lowered) == 1
         assert list(native[0].keys()) == list(lowered[0].keys())
         assert np.array_equal(np.asarray(native[0]["image"]), np.asarray(lowered[0]["image"]))
@@ -175,7 +175,7 @@ class TestLoweringParity:
         assert any(isinstance(op, MergeFields) for op in ops)
         lifted, lifted_out = from_ops(ops)
         relowered = to_ops(*parse_flow(lifted, lifted_out))
-        native = list(Flux(source=[_seed(0.5)], ops=relowered))
+        native = list(Stream(source=[_seed(0.5)], ops=relowered))
         assert len(native) == 1 and "mask" in native[0]
 
     def test_key_bind_round_trip(self) -> None:
@@ -198,25 +198,27 @@ class TestLoweringParity:
         # the key-bind grammar survives the round trip
         final_step = lifted["final"] if "final" in lifted else list(lifted.values())[-1]
         assert isinstance(final_step, dict) and final_step["bind"]["item"].endswith("[image]")
-        (out,) = list(Flux(source=[_seed(0.0)], ops=ops))
+        (out,) = list(Stream(source=[_seed(0.0)], ops=ops))
         assert np.allclose(np.asarray(out["echo"]), 3.0)
 
 
-class TestRecordsThroughFlux:
-    def test_flux_carries_record_dicts_verbatim(self) -> None:
-        flux = Flux(source=[_seed(1.0)], ops=[_AddOffset(offset=1.0)])
-        (out,) = list(flux)
+class TestRecordsThroughStream:
+    def test_stream_carries_record_dicts_verbatim(self) -> None:
+        stream = Stream(source=[_seed(1.0)], ops=[_AddOffset(offset=1.0)])
+        (out,) = list(stream)
         assert isinstance(out, dict) and np.allclose(np.asarray(out["image"]), 2.0)
 
     def test_getitem(self) -> None:
-        flux = Flux(source=[_seed(1.0), _seed(2.0)], ops=[RenameField(src="label", dst="klass")])
-        out = flux[1]
+        stream = Stream(source=[_seed(1.0), _seed(2.0)], ops=[RenameField(src="label", dst="klass")])
+        out = stream[1]
         assert "klass" in out and np.allclose(np.asarray(out["image"]), 2.0)
 
     def test_compose_ops_route_records(self) -> None:
         # Pipeline (the compose-group grouping op — TransformChain's replacement).
-        flux = Flux(source=[_seed(1.0)], ops=[Pipeline(transforms=[_AddOffset(offset=1.0), _AddOffset(offset=2.0)])])
-        (out,) = list(flux)
+        stream = Stream(
+            source=[_seed(1.0)], ops=[Pipeline(transforms=[_AddOffset(offset=1.0), _AddOffset(offset=2.0)])]
+        )
+        (out,) = list(stream)
         assert np.allclose(np.asarray(out["image"]), 4.0)
 
 
@@ -229,10 +231,10 @@ class TestFlowYaml:
         return """
 flow:
   spec:    {}
-  masked:  !class:sampleflux.ops.numpy.Threshold {low_level: 0.5, from: spec}
-  thresh:  !class:sampleflux.ops.formula.FormulaOp {formula: "amax(a) * 0.6", field: image, from: spec}
+  masked:  !class:recordstream.ops.numpy.Threshold {low_level: 0.5, from: spec}
+  thresh:  !class:recordstream.ops.formula.FormulaOp {formula: "amax(a) * 0.6", field: image, from: spec}
   gated:
-    op: !class:sampleflux.ops.numpy.Threshold {output: gated_mask}
+    op: !class:recordstream.ops.numpy.Threshold {output: gated_mask}
     from: spec
     bind:
       low_level: thresh[image]
@@ -254,11 +256,11 @@ outputs: out
         assert int(np.asarray(out["mask"]).sum()) == 8  # fixed 0.5 threshold
         assert int(np.asarray(out["gated_mask"]).sum()) == 6  # per-record amax(a)*0.6 bind
 
-    def test_yaml_bind_parity_with_lowered_flux(self, tmp_path) -> None:
+    def test_yaml_bind_parity_with_lowered_stream(self, tmp_path) -> None:
         path = tmp_path / "graph.yaml"
         path.write_text(self._doc())
         a = list(FlowGraph.from_yaml(str(path), source=[self._record()]))[0]
-        b = list(Flux.from_flow_yaml(str(path), source=[self._record()]))[0]
+        b = list(Stream.from_flow_yaml(str(path), source=[self._record()]))[0]
         assert np.array_equal(np.asarray(a["gated_mask"]), np.asarray(b["gated_mask"]))
         assert np.array_equal(np.asarray(a["mask"]), np.asarray(b["mask"]))
 
@@ -270,7 +272,7 @@ outputs: out
             """
 flow:
   spec: {}
-  gated: !class:sampleflux.ops.numpy.Threshold
+  gated: !class:recordstream.ops.numpy.Threshold
     from: spec
     bind:
       low_level: spec[image]

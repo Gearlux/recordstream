@@ -1,4 +1,4 @@
-"""Guard: every node-facing sampleflux Source/Op documents all its constructor params.
+"""Guard: every node-facing recordstream Source/Op documents all its constructor params.
 
 These classes surface in visual editors (as widget tooltips) and MCP form-specs (as
 pydantic ``Field(description=...)``) purely from their docstring ``Args:`` block — see
@@ -12,31 +12,26 @@ from typing import List
 import pytest
 from confluid import parse_param_docs  # type: ignore[import-not-found]
 
-from sampleflux import Pipeline, Transform
-from sampleflux.core import FilterOp, Flux, JointFlux, WrappedOp
-from sampleflux.ops.configure import ConfigureOp
-from sampleflux.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
-from sampleflux.ops.debug import PrintSampleOp
-from sampleflux.ops.enable import Enable
-from sampleflux.ops.formula import FormulaOp
-from sampleflux.ops.image import ConvertToImage
-from sampleflux.ops.numpy import ConnectedComponents, Threshold
-from sampleflux.ops.parallel import Parallel
-from sampleflux.ops.random_apply import RandomApply
-from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
-from sampleflux.ops.target import (
-    CocoToTorchVisionDetection,
-    DecodeTarget,
-    EncodeTarget,
-    MasksToDetectionBoxes,
-)
-from sampleflux.ops.torch import ToTensor
-from sampleflux.sources import HuggingFaceSource
+from recordstream import Pipeline, Transform
+from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
+from recordstream.ops.configure import ConfigureOp
+from recordstream.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
+from recordstream.ops.debug import PrintRecordOp
+from recordstream.ops.enable import Enable
+from recordstream.ops.formula import FormulaOp
+from recordstream.ops.image import ConvertToImage
+from recordstream.ops.numpy import ConnectedComponents, Threshold
+from recordstream.ops.parallel import Parallel
+from recordstream.ops.random_apply import RandomApply
+from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
+from recordstream.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
+from recordstream.ops.torch import ToTensor
+from recordstream.sources import HuggingFaceSource
 
 _NODE_CLASSES = [
     HuggingFaceSource,
-    Flux,
-    JointFlux,
+    Stream,
+    JointStream,
     FilterOp,
     WrappedOp,
     Transform,
@@ -64,7 +59,7 @@ _NODE_CLASSES = [
     Enable,
     Parallel,
     RandomApply,
-    PrintSampleOp,
+    PrintRecordOp,
 ]
 
 

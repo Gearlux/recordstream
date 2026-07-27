@@ -21,11 +21,11 @@ from pathlib import Path
 
 import numpy as np
 
-from sampleflux import Image, Label, Record
-from sampleflux.storage.directory import DirectorySink, DirectorySource
-from sampleflux.storage.hdf5 import HDF5Sink, HDF5Source
-from sampleflux.storage.query import MetadataFilterSource
-from sampleflux.storage.zarr import ZarrGroupSink, ZarrGroupSource
+from recordstream import Image, Label, Record
+from recordstream.storage.directory import DirectorySink, DirectorySource
+from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
+from recordstream.storage.query import MetadataFilterSource
+from recordstream.storage.zarr import ZarrGroupSink, ZarrGroupSource
 
 
 def make_records(n: int = 4) -> list:

@@ -6,7 +6,7 @@ Shows the three things you need to know about the disk-cache primitive:
 3. The cache enforces an LRU budget — the oldest entry is evicted when a new
    one would push total usage past ``max_bytes``.
 
-Runs end-to-end with no external data and no SampleFlux pipeline.
+Runs end-to-end with no external data and no RecordStream pipeline.
 """
 
 import tempfile
@@ -14,11 +14,11 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from sampleflux.storage.cache import CacheBudgetExceeded, DiskCache
+from recordstream.storage.cache import CacheBudgetExceeded, DiskCache
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="sampleflux-cache-demo-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="recordstream-cache-demo-") as tmp:
         cache = DiskCache(Path(tmp), max_bytes=300)
         print(f"Cache root: {cache.root}  (max_bytes={cache.max_bytes})")
 

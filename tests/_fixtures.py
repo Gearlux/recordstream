@@ -1,6 +1,6 @@
 """Test-local record-model fixtures.
 
-``FixtureFlip`` is the former native ``HorizontalFlip`` kept ONLY as a test fixture: sampleflux
+``FixtureFlip`` is the former native ``HorizontalFlip`` kept ONLY as a test fixture: recordstream
 ships no native augmentation transforms (geometric/photometric augmentation comes from
 torchvision v2 / albumentations invoked natively by the engine's op-family dispatch), but the
 kernel-dispatch machinery (once-per-record params, per-type kernels, MRO resolution, the
@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from sampleflux import Image, Mask, Record, Regions, Transform, item_data, with_data
+from recordstream import Image, Mask, Record, Regions, Transform, item_data, with_data
 
 
 class FixtureFlip(Transform):

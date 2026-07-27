@@ -1,5 +1,5 @@
 [project]
-name = "sampleflux"
+name = "recordstream"
 version = "0.1.0"
 description = "Clean, functional data pipelines for ML research and production."
 authors = [{ name = "Taidal", email = "info@gearlux.ai" }]
@@ -18,7 +18,7 @@ dependencies = [
     "fsspec",
     "cloudpathlib",
     "scikit-learn",  # LabelMap.fit() uses sklearn.preprocessing.LabelEncoder (lazy-imported)
-    # liquifai powers the generic `sampleflux run <config.yaml>` CLI (sampleflux.cli) that
+    # liquifai powers the generic `recordstream run <config.yaml>` CLI (recordstream.cli) that
     # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
     # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
     "liquifai>=0.1.0",
@@ -46,7 +46,7 @@ notebook = [
 vision = [
     "scipy",
     # Bare torchvision transforms.v2 ops run as-is through the engine's op-family dispatch
-    # (sampleflux.core._apply_op); the extra makes `pip install sampleflux[vision]` the
+    # (recordstream.core._apply_op); the extra makes `pip install recordstream[vision]` the
     # documented way to enable them.
     "torchvision",
 ]
@@ -56,72 +56,72 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # CONFLUID-CONFIGURABLE DISCOVERY
-# Sources / ops live in separate submodules that `sampleflux/__init__.py`
+# Sources / ops live in separate submodules that `recordstream/__init__.py`
 # does not eagerly import. Listing them here makes navigaitor discover
 # every ``@configurable`` on bootstrap without hardcoding the list.
 [project.entry-points."confluid.configurables"]
-sampleflux = "sampleflux"
-sampleflux-core = "sampleflux.core"
-sampleflux-sources = "sampleflux.sources"
-sampleflux-ops-parallel = "sampleflux.ops.parallel"
-sampleflux-ops-enable = "sampleflux.ops.enable"
-sampleflux-ops-random-apply = "sampleflux.ops.random_apply"
-# ConfigureOp (per-sample parameter injection — the helios Configure pattern); entry-point
-# changes need an editable reinstall before FluxStudio/navigaitor discovery sees the module.
-sampleflux-ops-configure = "sampleflux.ops.configure"
-sampleflux-ops-formula = "sampleflux.ops.formula"
+recordstream = "recordstream"
+recordstream-core = "recordstream.core"
+recordstream-sources = "recordstream.sources"
+recordstream-ops-parallel = "recordstream.ops.parallel"
+recordstream-ops-enable = "recordstream.ops.enable"
+recordstream-ops-random-apply = "recordstream.ops.random_apply"
+# ConfigureOp (per-record parameter injection — the helios Configure pattern); entry-point
+# changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.
+recordstream-ops-configure = "recordstream.ops.configure"
+recordstream-ops-formula = "recordstream.ops.formula"
 # Context ops (Save/Use/Drop/Apply/Capture/MergeFields) — the graph-plane building blocks lowered from flow: docs
-sampleflux-ops-context = "sampleflux.ops.context"
+recordstream-ops-context = "recordstream.ops.context"
 # The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
-sampleflux-flow = "sampleflux.flow"
+recordstream-flow = "recordstream.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source
-sampleflux-storage-query = "sampleflux.storage.query"
-sampleflux-ops-sink = "sampleflux.ops.sink"
-sampleflux-ops-numpy = "sampleflux.ops.numpy"
-sampleflux-ops-torch = "sampleflux.ops.torch"
-sampleflux-ops-target = "sampleflux.ops.target"
-sampleflux-ops-image = "sampleflux.ops.image"
-# PrintSampleOp (log/print a per-sample summary). Entry-point changes need an editable reinstall
-# before FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
-sampleflux-ops-debug = "sampleflux.ops.debug"
+recordstream-storage-query = "recordstream.storage.query"
+recordstream-ops-sink = "recordstream.ops.sink"
+recordstream-ops-numpy = "recordstream.ops.numpy"
+recordstream-ops-torch = "recordstream.ops.torch"
+recordstream-ops-target = "recordstream.ops.target"
+recordstream-ops-image = "recordstream.ops.image"
+# PrintRecordOp (log/print a per-record summary). Entry-point changes need an editable reinstall
+# before StreamStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
+recordstream-ops-debug = "recordstream.ops.debug"
 # Storage SINKS (HDF5Sink / ZarrGroupSink / ZarrBatchSink / DirectorySink) carry
-# category="sink" so FluxStudio surfaces them as DatasetProcessor sink nodes. They live under
-# sampleflux.storage.* (NOT re-exported from the package root), and scan_module does not recurse
+# category="sink" so StreamStudio surfaces them as DatasetProcessor sink nodes. They live under
+# recordstream.storage.* (NOT re-exported from the package root), and scan_module does not recurse
 # submodules, so each storage module needs its own entry point. The matching SOURCES in these
 # modules stay uncategorised, so the positive {op,source,engine,sink} allowlist surfaces only the
 # tagged sinks. (Entry-point changes need an editable reinstall — `aisland setup`, never --reinstall.)
-sampleflux-storage-hdf5 = "sampleflux.storage.hdf5"
-sampleflux-storage-zarr = "sampleflux.storage.zarr"
-sampleflux-storage-directory = "sampleflux.storage.directory"
+recordstream-storage-hdf5 = "recordstream.storage.hdf5"
+recordstream-storage-zarr = "recordstream.storage.zarr"
+recordstream-storage-directory = "recordstream.storage.directory"
 # The record model's op surface: Transform (type-dispatched record ops) + Pipeline (THE
-# compose op) live in sampleflux.transform. Entry-point changes need an editable reinstall
-# before FluxStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
-sampleflux-transform = "sampleflux.transform"
+# compose op) live in recordstream.transform. Entry-point changes need an editable reinstall
+# before StreamStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
+recordstream-transform = "recordstream.transform"
 # Structure ops (RenameField/DropField/CopyField/SelectFields) — reshape a record's entries.
-sampleflux-ops-structure = "sampleflux.ops.structure"
+recordstream-ops-structure = "recordstream.ops.structure"
 # The runnable orchestration layer: DatasetProcessor (generic source→sink runner) and the
 # workflow combinators (Sequence/Conditional/Switch + PathExists/Not/AllOf/AnyOf predicates).
-# Discovered as @configurable runnables; run via `sampleflux run`.
-sampleflux-processing = "sampleflux.processing"
-sampleflux-workflow = "sampleflux.workflow"
+# Discovered as @configurable runnables; run via `recordstream run`.
+recordstream-processing = "recordstream.processing"
+recordstream-workflow = "recordstream.workflow"
 
-# The `sampleflux` console script — `sampleflux run <config.yaml>` runs any Confluid-wired
+# The `recordstream` console script — `recordstream run <config.yaml>` runs any Confluid-wired
 # runnable (a trainer, an evaluator, a DatasetProcessor, a workflow).
 [project.scripts]
-sampleflux = "sampleflux.cli:main"
+recordstream = "recordstream.cli:main"
 
 # Liquifai app registration: lets `liquifai-install-completions` discover this CLI via an
 # instant entry-point metadata read instead of a subprocess probe. Name = the binary name;
 # value = the LiquifyApp instance.
 [project.entry-points."liquifai.apps"]
-sampleflux = "sampleflux.cli:app"
+recordstream = "recordstream.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sampleflux*"]
+include = ["recordstream*"]
 
 [tool.setuptools.package-data]
-sampleflux = ["py.typed"]
+recordstream = ["py.typed"]
 
 [tool.black]
 line-length = 120

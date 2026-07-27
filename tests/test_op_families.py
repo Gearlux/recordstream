@@ -2,7 +2,7 @@
 
 Pins the record-model headline: native type-dispatched ops, BARE albumentations transforms
 (kwarg-vocabulary call, one joint draw, item re-wrap), and BARE torchvision ``transforms.v2``
-transforms (dict call) all sit in ONE ``Flux.ops`` list with no wrapper/adapter classes —
+transforms (dict call) all sit in ONE ``Stream.ops`` list with no wrapper/adapter classes —
 plus the family classifiers, YAML mapping-form ops docs, spawn-parallel with a bare library
 op, ``field=`` targeting, and the ``WrappedOp``/``FilterOp`` raw-callable routes.
 """
@@ -17,8 +17,8 @@ import torch
 from confluid import configurable
 from torchvision.transforms import v2
 
-from sampleflux import FilterOp, Image, Label, Mask, Pipeline, Record, Transform, WrappedOp
-from sampleflux.core import Flux, _apply_op, _is_albumentations, _is_torchvision_v2
+from recordstream import FilterOp, Image, Label, Mask, Pipeline, Record, Transform, WrappedOp
+from recordstream.core import Stream, _apply_op, _is_albumentations, _is_torchvision_v2
 
 
 # --------------------------------------------------------------------------- #
@@ -128,7 +128,7 @@ class TestAlbumentationsFamily:
 
 
 # --------------------------------------------------------------------------- #
-# Mixed ops list end-to-end through Flux.
+# Mixed ops list end-to-end through Stream.
 # --------------------------------------------------------------------------- #
 class TestMixedOpsList:
     _OPS = [
@@ -139,15 +139,15 @@ class TestMixedOpsList:
     ]
 
     def test_iteration(self) -> None:
-        flux = Flux(source=[_base_record()], ops=list(self._OPS))
-        (out,) = list(flux)
+        stream = Stream(source=[_base_record()], ops=list(self._OPS))
+        (out,) = list(stream)
         assert isinstance(out["image"], torch.Tensor)
         assert tuple(out["image"].shape) == (3, 4, 4)
         assert out["class"].value == "drone_x"  # rode through every family untouched
 
     def test_random_access(self) -> None:
-        flux = Flux(source=[_base_record(0), _base_record(1)], ops=list(self._OPS))
-        out = flux[1]
+        stream = Stream(source=[_base_record(0), _base_record(1)], ops=list(self._OPS))
+        out = stream[1]
         assert isinstance(out["image"], torch.Tensor) and tuple(out["image"].shape) == (3, 4, 4)
 
     def test_pipeline_nests_the_same_families(self) -> None:
@@ -164,8 +164,8 @@ class TestOpsYaml:
         path = tmp_path / "ops.yaml"
         path.write_text("ops:\n  - !class:albumentations.HorizontalFlip {p: 1.0}\n")
         record = _base_record()
-        flux = Flux.from_ops_yaml(str(path), source=[record])
-        (out,) = list(flux)
+        stream = Stream.from_ops_yaml(str(path), source=[record])
+        (out,) = list(stream)
         assert np.array_equal(np.asarray(out["image"]), np.asarray(record["image"])[:, ::-1])
         assert isinstance(out["image"], Image)
 
@@ -175,10 +175,10 @@ class TestOpsYaml:
         path = tmp_path / "ops.yaml"
         path.write_text("ops:\n  - !class:tests.test_op_families.AddOffset {offset: 3.0}\n")
         record = {"image": Image(np.zeros((2, 3, 3), dtype=np.float32))}
-        flux = Flux.from_ops_yaml(str(path), source=[record])
-        (out,) = list(flux)  # a @configurable entry stays a deferred marker until route entry
+        stream = Stream.from_ops_yaml(str(path), source=[record])
+        (out,) = list(stream)  # a @configurable entry stays a deferred marker until route entry
         assert np.allclose(np.asarray(out["image"]), 3.0)
-        (op,) = flux.ops  # _check_ops_materialized flowed + cached the live op in place
+        (op,) = stream.ops  # _check_ops_materialized flowed + cached the live op in place
         assert isinstance(op, AddOffset) and op.offset == 3.0
 
 
@@ -187,8 +187,8 @@ class TestOpsYaml:
 # --------------------------------------------------------------------------- #
 def test_spawn_parallel_with_bare_albumentations_op() -> None:
     records = [{**r, "idx": i} for i, r in enumerate(spawn_records())]
-    flux = Flux(source=records, ops=[A.HorizontalFlip(p=1.0), FilterOp(keep_even_gain)]).parallel(2)
-    results = flux.collect()
+    stream = Stream(source=records, ops=[A.HorizontalFlip(p=1.0), FilterOp(keep_even_gain)]).parallel(2)
+    results = stream.collect()
     assert [int(r["idx"]) for r in results] == [0, 2]  # FilterOp dropped odd records in workers
     for out, want in zip(results, [records[0], records[2]]):
         assert isinstance(out["image"], Image)  # item type survived pickle + re-wrap
@@ -210,7 +210,7 @@ def test_field_targets_one_of_two_image_keys() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Raw-callable routes: WrappedOp / Flux.map / FilterOp drops everywhere.
+# Raw-callable routes: WrappedOp / Stream.map / FilterOp drops everywhere.
 # --------------------------------------------------------------------------- #
 def double(x: np.ndarray) -> np.ndarray:
     """Module-level payload function for WrappedOp (stored as an importable path)."""
@@ -242,29 +242,29 @@ class TestWrappedOpAndMap:
         with pytest.raises(KeyError, match="nope"):
             WrappedOp(double, key="nope")({"m": Mask(np.ones(2))})
 
-    def test_flux_map_key(self) -> None:
-        flux = Flux(source=[{"m": Mask(np.ones((2, 2)))}]).map(double, key="m")
-        (out,) = list(flux)
+    def test_stream_map_key(self) -> None:
+        stream = Stream(source=[{"m": Mask(np.ones((2, 2)))}]).map(double, key="m")
+        (out,) = list(stream)
         assert isinstance(out["m"], Mask) and np.allclose(np.asarray(out["m"]), 2.0)
 
 
 class TestFilterDropRoutes:
     def test_sequential_iteration_drops(self) -> None:
         records = [{"i": 0}, {"i": 1}, {"i": 2}]
-        flux = Flux(source=records, ops=[FilterOp(lambda r: r["i"] != 1)])
-        assert [r["i"] for r in flux] == [0, 2]
+        stream = Stream(source=records, ops=[FilterOp(lambda r: r["i"] != 1)])
+        assert [r["i"] for r in stream] == [0, 2]
 
     def test_getitem_on_filtered_record_raises_index_error(self) -> None:
-        flux = Flux(source=[{"i": 0}], ops=[FilterOp(lambda r: False)])
+        stream = Stream(source=[{"i": 0}], ops=[FilterOp(lambda r: False)])
         with pytest.raises(IndexError, match="filtered out"):
-            flux[0]
+            stream[0]
 
     def test_pipeline_propagates_drop(self) -> None:
         assert Pipeline([FilterOp(lambda r: False)])({"i": 0}) is None
 
-    def test_flux_filter_helper(self) -> None:
-        flux = Flux(source=[{"i": 0}, {"i": 1}]).filter(lambda r: r["i"] > 0)
-        assert [r["i"] for r in flux] == [1]
+    def test_stream_filter_helper(self) -> None:
+        stream = Stream(source=[{"i": 0}, {"i": 1}]).filter(lambda r: r["i"] > 0)
+        assert [r["i"] for r in stream] == [1]
 
     def test_unset_predicate_raises_lazily(self) -> None:
         with pytest.raises(ValueError, match="predicate"):
@@ -300,7 +300,7 @@ def invoke_fakelib_override(record: Record, op: FakeLibScale) -> Record:
 @pytest.fixture()
 def family_registry():
     """Snapshot/restore the global registry so registrations never leak between tests."""
-    from sampleflux import core
+    from recordstream import core
 
     snapshot = list(core._OP_FAMILIES)
     yield
@@ -309,27 +309,27 @@ def family_registry():
 
 class TestOpFamilyRegistry:
     def test_builtins_are_registered_through_the_same_registry(self) -> None:
-        from sampleflux import registered_op_families
+        from recordstream import registered_op_families
 
         assert registered_op_families()[:2] == ("albumentations", "torchvision_v2")
 
     def test_registered_family_dispatches_via_invoker(self, family_registry) -> None:
-        from sampleflux import register_op_family
+        from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
         out = _apply_op(_base_record(), FakeLibScale(factor=3.0))
         assert out is not None and out["gain_db"] == -9.0  # -3.0 * 3 — via the invoker, op never called
         assert isinstance(out["image"], Image)  # rest of the record untouched
 
-    def test_registered_family_runs_in_flux_ops_list(self, family_registry) -> None:
-        from sampleflux import register_op_family
+    def test_registered_family_runs_in_stream_ops_list(self, family_registry) -> None:
+        from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
-        out = list(Flux(source=[_base_record()], ops=[FakeLibScale(factor=2.0), lambda r: {**r, "tag": 1}]))
+        out = list(Stream(source=[_base_record()], ops=[FakeLibScale(factor=2.0), lambda r: {**r, "tag": 1}]))
         assert out[0]["gain_db"] == -6.0 and out[0]["tag"] == 1  # mixes with native ops in ONE list
 
     def test_last_registered_family_wins_overlap(self, family_registry) -> None:
-        from sampleflux import register_op_family
+        from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
         register_op_family("fakelib_specific", is_fakelib, invoke_fakelib_override)  # same matcher, later
@@ -337,7 +337,7 @@ class TestOpFamilyRegistry:
         assert out is not None and out["gain_db"] == -999.0
 
     def test_reregistering_name_replaces_in_place(self, family_registry) -> None:
-        from sampleflux import register_op_family, registered_op_families
+        from recordstream import register_op_family, registered_op_families
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
         n = len(registered_op_families())
@@ -351,11 +351,11 @@ class TestOpFamilyRegistry:
         assert out is not None and out["native"] is True
 
     def test_spawn_parallel_ships_family_to_workers(self, family_registry) -> None:
-        from sampleflux import register_op_family
+        from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
-        flux = Flux(source=spawn_records(), ops=[FakeLibScale(factor=2.0)]).parallel(2)
-        results = list(flux)
+        stream = Stream(source=spawn_records(), ops=[FakeLibScale(factor=2.0)]).parallel(2)
+        results = list(stream)
         assert len(results) == 4
         assert all(r["gain_db"] == -6.0 for r in results)  # invoker ran INSIDE the workers
 
@@ -363,7 +363,7 @@ class TestOpFamilyRegistry:
 class TestFormulaReducers:
     def test_array_reducers_are_function_style(self) -> None:
         # amax/amin/mean/std/median are pre-bound numpy callables in the sandbox namespace.
-        from sampleflux.ops.formula import FormulaOp
+        from recordstream.ops.formula import FormulaOp
 
         rec = {"image": Image(np.arange(16, dtype=np.float32).reshape(4, 4) / 15.0)}
         out = FormulaOp(formula="amax(a) * 0.5", field="image")(rec)
@@ -373,6 +373,6 @@ class TestFormulaReducers:
         # a.max() depends on numpy's lazy-import cache (KeyError '__import__' in a cold
         # process): the FUNCTION form is the sanctioned spelling. We only pin that the
         # function form never regresses; the attribute form is deliberately unpinned.
-        from sampleflux.ops.formula import _FORMULA_NAMESPACE
+        from recordstream.ops.formula import _FORMULA_NAMESPACE
 
         assert {"amax", "amin", "mean", "std", "median"} <= set(_FORMULA_NAMESPACE)

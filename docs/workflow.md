@@ -1,9 +1,9 @@
 # Workflows — composing runnables
 
-The workflow combinators (`sampleflux.workflow`) are the RUNNABLE-level analogue of the
+The workflow combinators (`recordstream.workflow`) are the RUNNABLE-level analogue of the
 composing ops: they HOLD other runnables and orchestrate them, so a multi-stage pipeline
 (prepare → train → evaluate) is ONE Confluid document executed by the same
-`sampleflux run workflow.yaml` as any single runnable.
+`recordstream run workflow.yaml` as any single runnable.
 
 | Combinator | Runs |
 |---|---|
@@ -21,12 +21,12 @@ Re-run the SAME document after a crash (or just again tomorrow) and it skips the
 artifact already exists — *memoise and continue*:
 
 ```yaml
-runnable: !class:sampleflux.workflow.Sequence
+runnable: !class:recordstream.workflow.Sequence
   steps:
     # Train ONLY when the checkpoint is missing. On a cache hit the !lazy: branch is
     # not just skipped — it is never even BUILT (no model / dataset materialised).
-    - !class:sampleflux.workflow.Conditional
-      condition: !class:sampleflux.workflow.PathExists
+    - !class:recordstream.workflow.Conditional
+      condition: !class:recordstream.workflow.PathExists
         path: $MODEL_ROOT/run1/model.ckpt
       if_true: null                     # cache hit -> skip, Sequence continues
       if_false: !lazy:TrainModel        # @configurable classes resolve by registered NAME
@@ -34,7 +34,7 @@ runnable: !class:sampleflux.workflow.Sequence
 
     # Always runs; the report FORMAT is a Switch on a plain config value — one key a
     # CLI override can flip (--select text) without touching the workflow shape.
-    - !class:sampleflux.workflow.Switch
+    - !class:recordstream.workflow.Switch
       select: json
       cases:
         json: !lazy:Evaluate { report: $MODEL_ROOT/run1/report.json, fmt: json }

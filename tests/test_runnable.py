@@ -2,7 +2,7 @@
 
 from typing import List
 
-from sampleflux.runnable import ProgressReporting, TorchRunner
+from recordstream.runnable import ProgressReporting, TorchRunner
 
 
 def test_torch_runner_flag() -> None:

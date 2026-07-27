@@ -1,4 +1,4 @@
-"""The item codec registry (``sampleflux.io``) — default structural codec, overrides, records,
+"""The item codec registry (``recordstream.io``) — default structural codec, overrides, records,
 the ``"plain"`` codec path."""
 
 from dataclasses import dataclass
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 
-from sampleflux import (
+from recordstream import (
     EncodedItem,
     Image,
     Label,
@@ -18,7 +18,7 @@ from sampleflux import (
     register_io,
     register_item,
 )
-from sampleflux.io import PLAIN_TYPE
+from recordstream.io import PLAIN_TYPE
 
 
 @register_item

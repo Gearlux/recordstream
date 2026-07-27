@@ -2,8 +2,8 @@
 
 from typing import Any, Dict
 
-from sampleflux import Image, Label, Mask, Regions, Transform
-from sampleflux.dispatch import dispatch, get_kernel, register_kernel, registered_kernels
+from recordstream import Image, Label, Mask, Regions, Transform
+from recordstream.dispatch import dispatch, get_kernel, register_kernel, registered_kernels
 from tests._fixtures import FixtureFlip
 
 

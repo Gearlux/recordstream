@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from sampleflux import Image, Label, Record, Regions
-from sampleflux.ops.structure import CopyField, DropField, RenameField, SelectFields
+from recordstream import Image, Label, Record, Regions
+from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
 
 
 def _record() -> Record:

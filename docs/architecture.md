@@ -1,6 +1,6 @@
-# SampleFlux architecture
+# RecordStream architecture
 
-The *why* behind sampleflux's module boundaries and mechanisms. The user-facing documentation
+The *why* behind recordstream's module boundaries and mechanisms. The user-facing documentation
 ([README](../README.md), the per-topic `docs/*.md`) shows **how to use** each surface; this
 document records **why the surface is shaped the way it is** — so a reader who asks "why does this
 module exist?" finds the answer here instead of reverse-engineering it from git history.
@@ -17,15 +17,15 @@ Maintenance rules:
 
 | Layer | Modules | What it is | Where the *why* lives |
 |---|---|---|---|
-| Data model | `items.py`, `io.py` | A sample is a plain `dict` of typed values; one codec serializes any value | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
+| Data model | `items.py`, `io.py` | A record is a plain `dict` of typed values; one codec serializes any value | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Native ops | `transform.py`, `dispatch.py`, `ops/*` | Type-dispatched `Transform`s (kernels, `field=`) + structural/compose/context ops | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Library interop | `core._apply_op`, `register_op_family` | External libraries run as-is via the op-family dispatch — no adapters | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
-| Engines | `core.py` (`Flux`/`JointFlux`), `flow.py` (`FlowGraph`) | One op-application chokepoint, four routes; a named-step graph engine with pinned lowering parity | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17), [§5](#5-the-engines-own-callable-wrappers-live-in-corepy-2026-07-20) |
-| Graph wiring | `context.py`, `ops/context.py` | Fan-out/fan-in/cross-branch values on the plain sequential engine | [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-samplefluxcontext-2026-07-17) |
-| Batching | `collate.py` | Grouping is the engine's; stacking is a pluggable registry | [§2](#2-batching-is-two-stage-collation-is-a-pluggable-registry-samplefluxcollate-2026-07-17) |
+| Engines | `core.py` (`Stream`/`JointStream`), `flow.py` (`FlowGraph`) | One op-application chokepoint, four routes; a named-step graph engine with pinned lowering parity | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-recordstreamcontext-2026-07-17), [§5](#5-the-engines-own-callable-wrappers-live-in-corepy-2026-07-20) |
+| Graph wiring | `context.py`, `ops/context.py` | Fan-out/fan-in/cross-branch values on the plain sequential engine | [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-recordstreamcontext-2026-07-17) |
+| Batching | `collate.py` | Grouping is the engine's; stacking is a pluggable registry | [§2](#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17) |
 | Storage & query | `storage/*` | The `typedrecord-v1` key-group layout over the codec; metadata scans without array loads | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) (contracts) + [storage.md](storage.md) |
-| Introspection & serialization | `discovery.py` | Callable↔string identity + registration-free module scans | [§4](#4-callablestring-serialization--passive-introspection-samplefluxdiscovery-2026-07-20) |
-| Runnables & workflows | `runnable.py`, `workflow.py`, `processing.py`, `cli.py` | `run()` objects, entry-point markers, combinators, the one `sampleflux run` runner | no record yet — [runnable.md](runnable.md), [workflow.md](workflow.md) |
+| Introspection & serialization | `discovery.py` | Callable↔string identity + registration-free module scans | [§4](#4-callablestring-serialization--passive-introspection-recordstreamdiscovery-2026-07-20) |
+| Runnables & workflows | `runnable.py`, `workflow.py`, `processing.py`, `cli.py` | `run()` objects, entry-point markers, combinators, the one `recordstream run` runner | no record yet — [runnable.md](runnable.md), [workflow.md](workflow.md) |
 
 ---
 
@@ -33,9 +33,9 @@ Maintenance rules:
 
 ### Context
 
-The rejected alternative was a bespoke sample container: typed items (that part was right)
-wrapped in a `Sample` class with per-key role tags, plus an adapter registry that wrapped every
-external library transform in an adapter object before it could touch a sample (two adapter
+The rejected alternative was a bespoke record container: typed items (that part was right)
+wrapped in a `Record` class with per-key role tags, plus an adapter registry that wrapped every
+external library transform in an adapter object before it could touch a record (two adapter
 classes, a coercion registry, and ~170 generated per-transform wrapper ops — all maintenance
 surface). The container was the friction point: role tags duplicated what key names already say
 (`"mask"` *is* the mask), and dict-native libraries — torchvision `transforms.v2` walks dicts,
@@ -47,7 +47,7 @@ families), "where does augmentation come from?" had three answers.
 
 Collapse to ONE carrier and ONE op engine:
 
-- **A sample is a plain `dict`** — `sampleflux.items.Record = Dict[str, Any]` — of **typed
+- **A record is a plain `dict`** — `recordstream.items.Record = Dict[str, Any]` — of **typed
   values** (`Image`/`Mask`/`Regions`/`Label`, base `NDArrayItem`; open registry `register_item`;
   uniform payload accessors `item_data`/`with_data`). No container class, no roles, no
   `primary()`: **key names carry meaning** (`"image"`, `"mask"`, `"bboxes"`, `"class"`), and a
@@ -55,16 +55,16 @@ Collapse to ONE carrier and ONE op engine:
   `Label.classes`) or more dict keys (`"samplerate": 30.72e6`). Items are deliberately NOT
   confluid-`@configurable`: an ndarray subclass builds through `__new__`, which fights the
   `__init__` validation wrap — they live in their own registry.
-- **Native ops are type-dispatched `Transform`s** (`sampleflux/transform.py`):
+- **Native ops are type-dispatched `Transform`s** (`recordstream/transform.py`):
   `get_params(record)` draws shared parameters ONCE per record, per-type kernels
-  (`@MyOp.kernel(ItemType)`, MRO-aware registry in `sampleflux/dispatch.py`) apply to every
+  (`@MyOp.kernel(ItemType)`, MRO-aware registry in `recordstream/dispatch.py`) apply to every
   handled value, `field=` pins one key. The second sanctioned shape — type-CHANGING ops
   (`Threshold`: array→`Mask`, `ConvertToImage`: array→`Image`, `ConnectedComponents`:
   `Mask`→`Regions`, the target ops) — overrides `__call__`, resolves its source by an explicit
   `field=` or the first value of the natural type, and raises a `ValueError` naming the record's
   keys on every miss.
 - **External libraries run AS-IS through the engine's op-family dispatch**
-  (`sampleflux.core._apply_op`): an albumentations op receives exactly its own kwarg vocabulary
+  (`recordstream.core._apply_op`): an albumentations op receives exactly its own kwarg vocabulary
   (`image`/`mask`/`masks`/`bboxes`/`keypoints`/`labels` keys present in the record; one call =
   one joint draw; array outputs re-wrapped in the incoming `NDArrayItem` type so `Image`/`Mask`
   survive); a torchvision-v2 op is called on the dict as-is; everything else is `op(record)` with
@@ -74,7 +74,7 @@ Collapse to ONE carrier and ONE op engine:
   detection is by MRO module name — no eager imports, no adapters, no generated wrappers.
   Box-carrying augmentation is the library's own `A.Compose(..., bbox_params=...)`; seeding is
   the libraries' own mechanisms.
-- **`Pipeline(transforms=[...])`** (`sampleflux/transform.py`) is THE sequential composer; every
+- **`Pipeline(transforms=[...])`** (`recordstream/transform.py`) is THE sequential composer; every
   composing op routes inner ops through `_apply_op`, so bare library transforms nest anywhere a
   native op does.
 - **Tensors are plain values.** `ToTensor` writes a LIVE CHW-float `torch.Tensor` under its key —
@@ -83,7 +83,7 @@ Collapse to ONE carrier and ONE op engine:
   a tensor (`NDArrayItem.__new__` runs `np.asarray`); a typed tensor ITEM base is a tracked
   follow-up (root `TASKS.md`).
 - **Storage is the record key-group layout** (`typedrecord-v1`): everything serializes through
-  the `sampleflux/io.py` codec; plain values ride the `"plain"` tag; NO backward compatibility
+  the `recordstream/io.py` codec; plain values ride the `"plain"` tag; NO backward compatibility
   with the pre-record layout (an old/untagged store raises via
   `storage/base.py::require_record_format` — an explicit decision: re-generate, never accrete
   legacy readers).
@@ -111,13 +111,13 @@ Collapse to ONE carrier and ONE op engine:
 
 ### Example
 
-One `Flux` ops list mixing both worlds, no wrappers:
+One `Stream` ops list mixing both worlds, no wrappers:
 
 ```python
 import albumentations as A
-from sampleflux import Flux, Image, as_transform
+from recordstream import Stream, Image, as_transform
 
-flux = Flux(source=records, ops=[
+stream = Stream(source=records, ops=[
     A.Compose([A.HorizontalFlip(p=0.5)],
               bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"])),
     A.GaussNoise(p=1.0),                                 # bare library op — as-is
@@ -131,7 +131,7 @@ The same shape in YAML:
 ops:
   - !class:albumentations.HorizontalFlip
     p: 0.5
-  - !class:sampleflux.ops.numpy.Threshold
+  - !class:recordstream.ops.numpy.Threshold
     low_level: 0.5
 ```
 
@@ -151,13 +151,13 @@ ops:
 
 ---
 
-## 2. Batching is two-stage; collation is a pluggable registry (`sampleflux.collate`, 2026-07-17)
+## 2. Batching is two-stage; collation is a pluggable registry (`recordstream.collate`, 2026-07-17)
 
 ### Context
 
 Turning N pipeline items into one batched carrier has two distinct halves:
 
-1. **Grouping** — the engine yields groups of N items (`Flux.batch` / `FlowGraph.batch` yield
+1. **Grouping** — the engine yields groups of N items (`Stream.batch` / `FlowGraph.batch` yield
    `list`s, and a torch `DataLoader` hands its `collate_fn` a list).
 2. **Stacking** — a *collate function* turns one group into one batched carrier.
 
@@ -167,10 +167,10 @@ and divergent batched-metadata conventions emerged between them.
 
 ### Decision
 
-`sampleflux/collate.py` is a **pluggable registry of collate functions keyed by representation**:
+`recordstream/collate.py` is a **pluggable registry of collate functions keyed by representation**:
 `register_collate(key)` / `get_collate(key)` / `collate(items, key=None)`, where an omitted key
 uses the default **`"record"`** collate (`collate_records`) — N plain record dicts into ONE
-batched record: per key, typed values encode through the `sampleflux/io.py` codec, payloads stack
+batched record: per key, typed values encode through the `recordstream/io.py` codec, payloads stack
 (torch → stacked tensor, numpy → stacked array, else a list), each declared item attr becomes a
 LIST of per-record values (decoded back into one batched item of the same type), and a
 `"plain"`-tagged value batches as the plain list. Batches must be key-homogeneous — a mismatch
@@ -188,7 +188,7 @@ directly remains the normal path.
 
 ### Consequences
 
-- The engine stays task-agnostic: sampleflux stacks by key + item type, never
+- The engine stays task-agnostic: recordstream stacks by key + item type, never
   classification/detection/….
 - Item metadata batches deterministically: per-record attrs become lists on the ONE batched item
   (`batch["image"].layout == ["HWC", "HWC", ...]`), plain values become plain lists — there is
@@ -204,15 +204,15 @@ directly remains the normal path.
 ```python
 from torch.utils.data import DataLoader
 
-from sampleflux import Flux, collate, collate_records, get_collate, register_collate
+from recordstream import Stream, collate, collate_records, get_collate, register_collate
 
-flux = Flux(source=my_source, ops=[...])
+stream = Stream(source=my_source, ops=[...])
 
-batch = collate([flux[0], flux[1]])                  # the "record" default
+batch = collate([stream[0], stream[1]])                  # the "record" default
 batch["image"].shape                                 # stacked payloads, one batched Image
 batch["image"].layout                                # per-record attrs -> a list
 
-loader = DataLoader(flux, batch_size=8, collate_fn=collate_records)
+loader = DataLoader(stream, batch_size=8, collate_fn=collate_records)
 
 
 # A task alias registers additively (runs when the defining module is imported).
@@ -221,7 +221,7 @@ def yolo_collate(items):
     ...  # stack to the task's own batch layout
 
 
-loader = DataLoader(flux, batch_size=8, collate_fn=get_collate("yolo"))
+loader = DataLoader(stream, batch_size=8, collate_fn=get_collate("yolo"))
 ```
 
 ### What you may change (and where it's documented)
@@ -231,18 +231,18 @@ loader = DataLoader(flux, batch_size=8, collate_fn=get_collate("yolo"))
   [kinds.md](kinds.md); the detection walkthrough: [record-model.md](record-model.md).
 - **Changing the default collate's semantics** (how `"record"` stacks, the attrs-become-lists
   convention) is an architectural change: every batch consumer depends on it. Update this record
-  and the sampleflux `AGENTS.md` metadata mandate together.
+  and the recordstream `AGENTS.md` metadata mandate together.
 
 ---
 
-## 3. The per-record Context is an ambient wiring plane (`sampleflux.context`, 2026-07-17)
+## 3. The per-record Context is an ambient wiring plane (`recordstream.context`, 2026-07-17)
 
 ### Context
 
 Graph-shaped pipelines — fan-out, fan-in, cross-branch values — need somewhere to hold a value
 between the op that produces it and the op that consumes it. The obvious candidate, extra keys on
 the record itself, was rejected: the record is the carrier that **persists** — it flows into
-sinks, crosses process boundaries, and is the sample's serialized identity — while wiring data is
+sinks, crosses process boundaries, and is the record's serialized identity — while wiring data is
 transient scaffolding that should be gone by the end of a well-formed graph. Three constraints
 shaped the mechanism: ops keep the plain `__call__(record)` signature (no threading a context
 parameter through every op), the executor stays a bare `for op in ops` loop (graphs run on the
@@ -250,10 +250,10 @@ parameter through every op), the executor stays a bare `for op in ops` loop (gra
 
 ### Decision
 
-`sampleflux/context.py` is a **per-record named-cell store activated ambiently**: the engine
+`recordstream/context.py` is a **per-record named-cell store activated ambiently**: the engine
 creates one fresh `Context` per source item and activates it around the op loop via a
 `contextvars.ContextVar`; the six wiring ops (`Save`/`Use`/`Drop`/`Apply`/`Capture`/`MergeFields`
-in `sampleflux.ops.context`) reach it inside `__call__` through `require(op_name)` — no signature
+in `recordstream.ops.context`) reach it inside `__call__` through `require(op_name)` — no signature
 change anywhere. Deliberate semantics: cells are stored **by reference** and copy-on-read is the
 *reading* op's decision (`Use` deep-copies unless `drop` frees the cell = move); a missing cell
 on read or delete **raises loudly** with the live-cell list (a liveness bug must never pass
@@ -284,11 +284,11 @@ directly, held to the context-op semantics by the pinned flow⇄ops execution-pa
 ### Example
 
 ```python
-from sampleflux import Flux
-from sampleflux.ops.context import MergeFields, Save
+from recordstream import Stream
+from recordstream.ops.context import MergeFields, Save
 
 # Fan-out/fan-in on the PLAIN sequential engine: snapshot → mutate the stream → merge back.
-flux = Flux(
+stream = Stream(
     source=my_source,
     ops=[
         Save(name="clean"),                                             # snapshot into a cell
@@ -298,7 +298,7 @@ flux = Flux(
 )
 
 # The same op list outside an engine needs the Context an engine would have created:
-from sampleflux.context import Context, activate, require
+from recordstream.context import Context, activate, require
 
 with activate(Context()):
     for op in ops:
@@ -318,12 +318,12 @@ with activate(Context()):
   the record itself, not in a cell.
 - **Changing cell semantics** (by-reference storage, loud missing-cell errors, the `Parallel`
   boundary rule, `copy()` shallowness) is an architectural change: the flow⇄ops parity suite and
-  the pinned context invariants define the contract. Update this record and the sampleflux
+  the pinned context invariants define the contract. Update this record and the recordstream
   `AGENTS.md` context mandate together.
 
 ---
 
-## 4. Callable↔string serialization + passive introspection (`sampleflux.discovery`, 2026-07-20)
+## 4. Callable↔string serialization + passive introspection (`recordstream.discovery`, 2026-07-20)
 
 ### Context
 
@@ -339,7 +339,7 @@ callable out of a plain `.py` script or `__main__`, or walk a module to introspe
 
 ### Decision
 
-`sampleflux/discovery.py` is one small stdlib-only module with **two halves**:
+`recordstream/discovery.py` is one small stdlib-only module with **two halves**:
 
 - **Serialization** — `get_callable_path(fn)` → an importable `"module:qualname"` string
   (resolving `__main__` to the script filename so the path survives process boundaries) and
@@ -377,13 +377,13 @@ name/category*.
 ```python
 import numpy as np
 
-from sampleflux.discovery import get_callable_path, resolve_callable, scan_module
+from recordstream.discovery import get_callable_path, resolve_callable, scan_module
 
 path = get_callable_path(np.sqrt)     # "numpy:sqrt" — YAML/pickle-safe identity
 fn = resolve_callable(path)           # back to the live callable
 fn is resolve_callable(fn)            # an already-callable argument passes through
 
-schemas = scan_module("sampleflux.ops.numpy")   # one JSON schema per op defined there
+schemas = scan_module("recordstream.ops.numpy")   # one JSON schema per op defined there
 ```
 
 ### What you may change (and where it's documented)
@@ -400,20 +400,20 @@ schemas = scan_module("sampleflux.ops.numpy")   # one JSON schema per op defined
 
 ### Context
 
-Three classes sit in `core.py` next to the `Flux` engine that look, at first glance, like they
-belong elsewhere: `FilterOp` and `WrappedOp` (op-shaped, so why not `ops/`?) and `JointFlux`
+Three classes sit in `core.py` next to the `Stream` engine that look, at first glance, like they
+belong elsewhere: `FilterOp` and `WrappedOp` (op-shaped, so why not `ops/`?) and `JointStream`
 (a second engine in the engine module).
 
 ### Decision
 
 They stay in `core.py` because of **who constructs them and which way imports flow**. All three
-are the construction targets of `Flux`'s own fluent API — `.filter(pred)` appends a `FilterOp`,
-`.map(fn)` appends a `WrappedOp`, `Flux.joint([...])` wraps a `JointFlux` — so the engine itself
+are the construction targets of `Stream`'s own fluent API — `.filter(pred)` appends a `FilterOp`,
+`.map(fn)` appends a `WrappedOp`, `Stream.joint([...])` wraps a `JointStream` — so the engine itself
 instantiates them. And `core.py` is the *bottom* of the op-facing layer: every composing op in
 `ops/` imports `core._apply_op` (the op-family dispatch chokepoint); moving `FilterOp`/`WrappedOp`
-into `ops/` would make `core` import from `ops` and close an import cycle. `JointFlux` is
-`Flux`'s iteration-only fan-in sibling (`category="engine"`), 20 lines that exist to be
-`Flux.joint`'s return value — a module of its own would be structure for structure's sake
+into `ops/` would make `core` import from `ops` and close an import cycle. `JointStream` is
+`Stream`'s iteration-only fan-in sibling (`category="engine"`), 20 lines that exist to be
+`Stream.joint`'s return value — a module of its own would be structure for structure's sake
 (`FlowGraph` earns its separate module by size and its own document grammar).
 
 `FilterOp`/`WrappedOp` carry **no discovery category** on purpose: they wrap a *raw Python
@@ -426,19 +426,19 @@ off visual canvases.
 - `ops/` stays a pure consumer of `core` — the layering is one-directional.
 - `WrappedOp` is a package-root export (the public "lift a plain function" surface, and its
   stored-string `f` is the reference use of the discovery serialization half); `FilterOp` is not
-  root-exported (normally reached via `Flux.filter`; importable as `sampleflux.core.FilterOp`).
-- `JointFlux` is YAML-addressable (`!class:sampleflux.core.JointFlux()`) and canvas-composable as
+  root-exported (normally reached via `Stream.filter`; importable as `recordstream.core.FilterOp`).
+- `JointStream` is YAML-addressable (`!class:recordstream.core.JointStream()`) and canvas-composable as
   an engine node; its indexable counterpart for raw sources is `ConcatSource`.
 
 ### Example
 
 ```python
-flux = (
-    Flux(source=src)
+stream = (
+    Stream(source=src)
     .map(np.sqrt, key="image")                      # appends WrappedOp(f="numpy:sqrt", key="image")
     .filter(lambda r: float(r["image"].max()) > 0)  # appends FilterOp(p=...)
 )
-both = Flux.joint([flux_a, flux_b])                 # Flux(source=JointFlux([flux_a, flux_b]))
+both = Stream.joint([stream_a, stream_b])                 # Stream(source=JointStream([stream_a, stream_b]))
 ```
 
 ### What you may change (and where it's documented)

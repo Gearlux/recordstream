@@ -2,11 +2,11 @@
 
 Demonstrates the modality-neutral core of the engine:
 
-1. a sample is a PLAIN ``dict`` of TYPED values, each owning its metadata — an ``Image``
+1. a record is a PLAIN ``dict`` of TYPED values, each owning its metadata — an ``Image``
    carries its layout, a ``Label`` its classes; scalar side values are just more keys;
 2. the HEADLINE — ONE pipeline mixing a BARE albumentations transform (invoked natively by
    the engine's op-family dispatch: it receives exactly its own ``image``/``mask``/``bboxes``
-   keys, one call = one joint draw) with native ops. sampleflux ships NO augmentation of its
+   keys, one call = one joint draw) with native ops. recordstream ships NO augmentation of its
    own and NO adapter classes — the libraries run as-is;
 3. cross-key consistency — ONE ``A.Compose`` draw moves image, mask and bboxes together,
    the Label untouched;
@@ -23,7 +23,7 @@ import numpy as np
 import torch
 from torchvision.transforms import v2
 
-from sampleflux import Image, Label, Mask, Pipeline, Record, Transform, as_transform
+from recordstream import Image, Label, Mask, Pipeline, Record, Transform, as_transform
 
 
 def make_record(rng: np.random.Generator) -> Record:

@@ -1,10 +1,10 @@
-"""Tests for the `sampleflux run` CLI dispatch (sampleflux.cli.run)."""
+"""Tests for the `recordstream run` CLI dispatch (recordstream.cli.run)."""
 
 from typing import List
 
 from confluid import Class
 
-from sampleflux.cli import run
+from recordstream.cli import run
 
 
 def test_run_calls_runnable_run() -> None:
