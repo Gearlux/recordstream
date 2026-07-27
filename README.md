@@ -64,6 +64,34 @@ ops:
     low_level: 0.5
 ```
 
+### Toggling a branch from the CLI (`Enable`)
+
+Wrap any stretch of an ops list in `Enable` to switch the whole chain on or off from one flag.
+The toggle is the declared `enabled` parameter; `name` identifies the wrapper so several of them
+toggle independently:
+
+```yaml
+ops:
+  - !class:recordstream.ops.numpy.Threshold {low_level: 0.5}
+  - !class:recordstream.ops.enable.Enable
+    name: visualize          # ← names THIS wrapper; scopes its CLI flag
+    enabled: false           # ← off by default; the chain below is skipped
+    ops:
+      - !class:recordstream.ops.image.ConvertToImage {}
+      - !class:recordstream.ops.debug.PrintRecordOp {}
+```
+
+```bash
+recordstream run pipeline.yaml --visualize.enabled true   # this wrapper only
+recordstream run pipeline.yaml --visualize.enabled+       # polarity shorthand → True
+recordstream run pipeline.yaml --enabled false            # broadcast: every Enable off
+```
+
+Inner ops are not materialized until the wrapper first fires, so gating an expensive chain with
+`enabled: false` costs nothing at startup. In Python the same wrapper is one call —
+`Enable(ops=[...], name="visualize", enabled=False)` — which is what lets a visual editor or a
+generated tool schema set the toggle too (see [docs/architecture.md](docs/architecture.md#6-every-knob-is-a-declared-parameter--the-enable-toggle-2026-07-27)).
+
 ## 📚 Documentation
 
 | Page | Covers |

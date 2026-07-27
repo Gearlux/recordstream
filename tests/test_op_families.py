@@ -8,7 +8,7 @@ op, ``field=`` targeting, and the ``WrappedOp``/``FilterOp`` raw-callable routes
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 import albumentations as A
 import numpy as np
@@ -298,7 +298,7 @@ def invoke_fakelib_override(record: Record, op: FakeLibScale) -> Record:
 
 
 @pytest.fixture()
-def family_registry():
+def family_registry() -> Iterator[None]:
     """Snapshot/restore the global registry so registrations never leak between tests."""
     from recordstream import core
 
@@ -313,7 +313,7 @@ class TestOpFamilyRegistry:
 
         assert registered_op_families()[:2] == ("albumentations", "torchvision_v2")
 
-    def test_registered_family_dispatches_via_invoker(self, family_registry) -> None:
+    def test_registered_family_dispatches_via_invoker(self, family_registry: None) -> None:
         from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
@@ -321,14 +321,14 @@ class TestOpFamilyRegistry:
         assert out is not None and out["gain_db"] == -9.0  # -3.0 * 3 — via the invoker, op never called
         assert isinstance(out["image"], Image)  # rest of the record untouched
 
-    def test_registered_family_runs_in_stream_ops_list(self, family_registry) -> None:
+    def test_registered_family_runs_in_stream_ops_list(self, family_registry: None) -> None:
         from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
         out = list(Stream(source=[_base_record()], ops=[FakeLibScale(factor=2.0), lambda r: {**r, "tag": 1}]))
         assert out[0]["gain_db"] == -6.0 and out[0]["tag"] == 1  # mixes with native ops in ONE list
 
-    def test_last_registered_family_wins_overlap(self, family_registry) -> None:
+    def test_last_registered_family_wins_overlap(self, family_registry: None) -> None:
         from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
@@ -336,7 +336,7 @@ class TestOpFamilyRegistry:
         out = _apply_op(_base_record(), FakeLibScale())
         assert out is not None and out["gain_db"] == -999.0
 
-    def test_reregistering_name_replaces_in_place(self, family_registry) -> None:
+    def test_reregistering_name_replaces_in_place(self, family_registry: None) -> None:
         from recordstream import register_op_family, registered_op_families
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)
@@ -346,11 +346,11 @@ class TestOpFamilyRegistry:
         out = _apply_op(_base_record(), FakeLibScale())
         assert out is not None and out["gain_db"] == -999.0
 
-    def test_unmatched_op_falls_back_to_native_call(self, family_registry) -> None:
+    def test_unmatched_op_falls_back_to_native_call(self, family_registry: None) -> None:
         out = _apply_op(_base_record(), lambda r: {**r, "native": True})
         assert out is not None and out["native"] is True
 
-    def test_spawn_parallel_ships_family_to_workers(self, family_registry) -> None:
+    def test_spawn_parallel_ships_family_to_workers(self, family_registry: None) -> None:
         from recordstream import register_op_family
 
         register_op_family("fakelib", is_fakelib, invoke_fakelib)

@@ -1,12 +1,12 @@
-"""``Enable`` — toggle one or more ops on/off via a single named CLI flag.
+"""``Enable`` — toggle one or more ops on/off from a single declared flag.
 
 A compose-group op (alongside ``Pipeline`` / ``Parallel``): wrap an inner op-list
-so the whole chain can be switched on or off from one boolean attribute whose
-name becomes the CLI flag. Modality-neutral — it threads any record
-through any ops — so it lives in core recordstream, not a domain package.
+so the whole chain can be switched on or off from ONE boolean, ``enabled``.
+Modality-neutral — it threads any record through any ops — so it lives in core
+recordstream, not a domain package.
 """
 
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional
 
 from confluid import configurable
 from loggair import get_logger
@@ -18,124 +18,114 @@ logger = get_logger(__name__)
 
 @configurable(category="op", group="compose")
 class Enable:
-    """Wrap one or more ops so they can be toggled on/off via a single named CLI flag.
+    """Wrap one or more ops so the whole chain can be switched on or off.
 
     ``ops`` is a list; even a single-op guard uses ``ops: [op]``. The wrapper
     threads each record through every op in sequence — same semantics as
     listing them inline in ``Stream.ops`` — so a whole visualization chain
     shares one toggle instead of needing a wrapper per op.
 
-    The toggle flag is supplied in YAML as an *extra* kwarg whose name becomes
-    the CLI hook — Confluid's post-construction setattr promotes it to an
-    instance attribute, and Liquify's ``--<key> <value>`` overrides match
-    Fluid kwargs by name (see
-    :func:`liquifai.core._merge_overrides_into_fluids`).
+    The toggle is ``enabled``: a DECLARED constructor parameter exposed as a
+    settable property. Being declared is what makes it reachable from every
+    front-end — a YAML key, a CLI override, a Python kwarg, a generated
+    tool/form schema, a canvas widget — through the same introspection every
+    other ``@configurable`` parameter uses. There is no dynamic toggle-attribute
+    naming: an unrecognised boolean key on this class is an error, not a flag.
+
+    Several wrappers in one pipeline are told apart by ``name``, which scopes
+    the CLI flag to that instance (``--<name>.enabled``); a bare ``--enabled``
+    still broadcasts to every wrapper at once.
 
     YAML:
 
     .. code-block:: yaml
 
         - !class:recordstream.ops.enable.Enable
-          visualize: false        # ← any boolean attribute name works; this name IS the CLI flag
+          name: visualize             # ← names THIS instance; scopes its CLI flag
+          enabled: false
           ops:
             - !class:recordstream.ops.image.ConvertToImage {}
-            - !class:waivefront.visualizers.SaveImage
-              output_dir: ./segments_png
+            - !class:recordstream.ops.debug.PrintRecordOp {}
 
     CLI:
 
     .. code-block:: bash
 
-        recordstream run pipeline.yaml --visualize true
-        recordstream run pipeline.yaml --visualize+        # polarity shorthand → True
-        recordstream run pipeline.yaml --visualize-        # polarity shorthand → False
+        # Targeted — only the wrapper named `visualize` flips.
+        recordstream run pipeline.yaml --visualize.enabled true
+        recordstream run pipeline.yaml --visualize.enabled+   # polarity shorthand → True
+        recordstream run pipeline.yaml --visualize.enabled-   # polarity shorthand → False
+
+        # Broadcast — every Enable in the config flips.
+        recordstream run pipeline.yaml --enabled false
+
+    Python:
+
+    .. code-block:: python
+
+        op = Enable(ops=[convert, save], name="visualize", enabled=False)
+        op.enabled = True     # plain attribute write (validated: must be a bool)
 
     Inner ops stay deferred (not materialized) until the wrapper actually
     fires for the first time, so guarding expensive-to-construct ops with
-    ``Enable(..., visualize=False)`` costs nothing at startup.
-
-    Disambiguating multiple wrappers
-    --------------------------------
-    When two or more ``Enable`` instances live in the same pipeline, give
-    each a ``name:`` in YAML and use the GENERIC toggle name ``enable`` —
-    the name scopes the flag, so a semantic attribute name per wrapper is
-    unnecessary. ``name`` becomes the preferred identifier in Confluid's
-    hierarchy (``--help``) and Liquify's override matcher, so you can
-    toggle them independently:
-
-    .. code-block:: yaml
-
-        - !class:recordstream.ops.enable.Enable
-          name: overlay                 # dotted-override key
-          enable: false                 # generic toggle — the name scopes it
-          ops: [render-with-overlays, save-to ./debug_png]
-        - !class:recordstream.ops.enable.Enable
-          name: labelstudio
-          enable: false
-          ops: [render-clean, save-to ./ls_png]
-
-    CLI:
-
-    .. code-block:: bash
-
-        # Targeted — only the overlay chain fires.
-        recordstream run pipeline.yaml --overlay.enable true
-        recordstream run pipeline.yaml --overlay.enable+     # polarity shorthand → True
-
-        # Broadcast — every Fluid with an `enable` kwarg flips.
-        recordstream run pipeline.yaml --enable true
-
-    ``name`` is a plain string on the instance; Confluid's post-construction
-    paradigm setattr's it automatically from YAML with no ctor change.
+    ``enabled: false`` costs nothing at startup.
 
     Constraints:
       * ``ops`` is required and must be a non-empty list — validated **lazily**
         on first call (zero-arg construction stays valid per the recordstream
         "Lazy Initialization & Zero-Arg Construction" convention).
-      * Exactly one boolean attribute (other than ``ops`` / ``name`` and
-        dunders) may be set on the wrapper — that's the toggle.
-        ``RuntimeError`` is raised on first call if zero or multiple are
-        present.
-      * RESERVED names: the toggle may be ANY boolean attribute name EXCEPT the
-        class's own members — ``ops``, ``enabled``, ``flag_name`` (read-only
-        introspection properties; a YAML kwarg with one of those names raises
-        ``AttributeError`` at configure time). Use ``enable`` as the generic
-        toggle name; ``enabled`` (the property) then READS whatever toggle is set.
+      * ``enabled`` must be a ``bool``; a non-bool raises ``TypeError`` at set time.
+      * Any OTHER boolean attribute set on the wrapper raises ``ValueError`` on
+        first call. That is the migration guard for the retired dynamic-toggle
+        form (``visualize: false`` as a bare kwarg), which would otherwise be
+        accepted silently by the post-construction paradigm and never read.
 
     Args:
         ops: Non-empty list of ops (native or bare library transforms) gated by the toggle.
+        enabled: Whether the wrapped ops fire. Settable post-construction, from YAML,
+            and from the CLI (``--enabled`` / ``--<name>.enabled``).
+        name: Identifier for THIS instance — scopes its CLI flag to ``--<name>.enabled``
+            and labels it in ``--help``. Empty (the default) leaves it unnamed, reachable
+            only by the broadcast form.
     """
 
-    def __init__(self, ops: Optional[List] = None) -> None:
-        # Lazy / zero-arg: store config only; the non-empty requirement is enforced lazily in __call__.
+    def __init__(self, ops: Optional[List] = None, enabled: bool = True, name: str = "") -> None:
+        # Lazy / zero-arg: store config only; `ops` non-emptiness and stray-toggle
+        # rejection are enforced lazily on first call.
         self.ops: List = list(ops) if ops else []
-
-    def _toggle(self) -> Tuple[str, bool]:
-        candidates = [
-            (k, v)
-            for k, v in vars(self).items()
-            if k != "ops" and not k.startswith("_") and not k.startswith("__confluid_") and isinstance(v, bool)
-        ]
-        if len(candidates) != 1:
-            raise RuntimeError(
-                "Enable requires exactly one boolean toggle attribute (the CLI flag name); "
-                f"found {len(candidates)}: {[k for k, _ in candidates]}"
-            )
-        return candidates[0]
+        self.name = name
+        self.enabled = enabled
+        self._checked = False
 
     @property
     def enabled(self) -> bool:
-        _, value = self._toggle()
-        return value
+        """Whether the wrapped ops fire for each record (the one toggle)."""
+        return self._enabled
 
-    @property
-    def flag_name(self) -> str:
-        name, _ = self._toggle()
-        return name
+    @enabled.setter
+    def enabled(self, value: Any) -> None:
+        # A settable property — not a plain attribute — so `confluid.accepts_key`
+        # reports it settable and the CLI/YAML override paths admit `enabled`.
+        if not isinstance(value, bool):
+            raise TypeError(f"Enable.enabled must be a bool; got {type(value).__name__} ({value!r}).")
+        self._enabled = value
 
-    def __call__(self, record: Record) -> Optional[Record]:
+    def _check(self) -> None:
+        """Lazy one-time validation, run on the first record."""
         if not self.ops:
             raise ValueError("Enable requires a non-empty 'ops' list.")
+        stray = [key for key, value in vars(self).items() if isinstance(value, bool) and not key.startswith("_")]
+        if stray:
+            raise ValueError(
+                f"Enable: unexpected boolean attribute(s) {stray} — the toggle is 'enabled'. "
+                f"Dynamic toggle names are retired: write `name: {stray[0]}` + `enabled: <bool>` "
+                f"and toggle it with `--{stray[0]}.enabled true`."
+            )
+
+    def __call__(self, record: Record) -> Optional[Record]:
+        if not self._checked:
+            self._check()
+            self._checked = True
         if not self.enabled:
             return record
         from confluid import flow

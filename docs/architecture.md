@@ -448,3 +448,88 @@ both = Stream.joint([stream_a, stream_b])                 # Stream(source=JointS
   a category and group.
 - **Do not add a discovery category to `FilterOp`/`WrappedOp`** — surfacing a raw-callable
   parameter on a canvas is a dead widget; the taxonomy is pinned in `tests/test_categories.py`.
+
+## 6. Every knob is a DECLARED parameter — the `Enable` toggle (2026-07-27)
+
+### Context
+
+`Enable` gates an inner ops list behind one boolean. Its original design leaned on Confluid's
+post-construction paradigm: **any** boolean attribute set on the instance was the toggle, and that
+attribute's NAME became the CLI flag — `visualize: false` in YAML produced `--visualize`, and a
+`name:` was only needed to disambiguate two wrappers. Nothing about the toggle was declared; it
+existed purely as a runtime attribute Confluid setattr'd from an unrecognised YAML key.
+
+That works for exactly one front-end — hand-written YAML — because only the YAML loader has a
+channel for undeclared keys. Every other caller reads the *signature*:
+
+- `to_pydantic(Enable).model_fields` returned `['ops']`, so a schema/form/canvas generator built a
+  node with no toggle at all — the wrapper rendered as a pass-through and then raised at runtime.
+- `Enable(ops=[...], visualize=True)` raised `ValidationError: Extra inputs are not permitted`
+  (the generated config model forbids extras), so neither Python nor a generated tool call could
+  construct a toggled wrapper — the only spelling was construct-then-setattr.
+- `confluid.accepts_key(Enable, "visualize")` was `False`, so liquifai *silently dropped* the bare
+  broadcast the docstring advertised (`--visualize true`). Only `--<name>.<toggle>` landed, and
+  only via the addressed branch's "the key is already in the YAML kwargs" escape hatch.
+
+A knob that only YAML can reach is a knob three of the four front-ends cannot offer.
+
+### Decision
+
+The toggle is a **declared, defaulted constructor parameter** — `enabled: bool = True` — exposed as
+a **settable property**, and instance identity is the **declared `name`**, which scopes the flag to
+`--<name>.enabled`. Dynamic toggle naming is retired.
+
+A property rather than a plain attribute for two reasons: `confluid.accepts_key` admits "public
+settable class attributes", so the property keeps `enabled` overridable independently of the
+signature; and it gives ONE funnel to reject a non-bool, so a quoted YAML `enabled: "true"` fails
+at its `file:line` instead of being silently truthy.
+
+The retired form is not silently ignored: a stray public boolean attribute (what `visualize: false`
+now lands as) raises on first record with the replacement spelling in the message.
+
+### Consequences
+
+- One declaration serves every front-end: YAML key, `--enabled` / `--<name>.enabled` override,
+  Python kwarg, generated tool/form schema, canvas widget. No front-end-specific glue.
+- The generalisable rule: **if a front-end must set it, declare it.** A value that only ever
+  arrives via post-construction setattr is reachable from YAML alone.
+- Breaking change: `visualize: false` (and any other dynamic toggle name) must become
+  `name: visualize` + `enabled: false`; the CLI flag becomes `--visualize.enabled`.
+- `flag_name` is gone — with a fixed toggle name there is nothing to introspect.
+- Strictness is deliberate: `enabled` accepts only `bool`. Every CLI form already delivers a real
+  bool (`--enabled true`, `--enabled=false`, `--enabled+`, `enabled=true`), so the rejection only
+  catches genuinely ambiguous config.
+
+### Example
+
+```yaml
+- !class:recordstream.ops.enable.Enable
+  name: visualize
+  enabled: false
+  ops: [ !class:recordstream.ops.image.ConvertToImage {} ]
+```
+
+```bash
+recordstream run pipeline.yaml --visualize.enabled true   # addressed: this wrapper
+recordstream run pipeline.yaml --enabled false            # broadcast: every wrapper
+```
+
+```python
+op = Enable(ops=[convert], name="visualize", enabled=False)   # one call — no setattr step
+op.enabled = True                                             # property setter; non-bool raises
+
+to_pydantic(Enable).model_fields           # {'ops', 'enabled', 'name'} — the schema surface
+accepts_broadcast(Enable, "enabled")       # True — the bare --enabled form now lands
+```
+
+### What you may change (and where it's documented)
+
+- **Adding a knob to any op**: declare it in `__init__` with a default and an `Args:` line. Reach
+  for post-construction setattr only for values a *config layer* injects, never for a user-facing
+  switch. Usage lives in the project README (`Toggling a branch from the CLI`).
+- **Distinguishing instances**: use `name:` — Confluid reads it for hierarchy labelling and
+  liquifai for `--<name>.<key>` addressing. Do not invent a per-class flag vocabulary; that was
+  the retired design.
+- **More than one switch in a chain**: use several `Enable` wrappers with distinct names rather
+  than teaching one wrapper several toggles — each name is independently addressable, and the
+  broadcast form still flips them all.

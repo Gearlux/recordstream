@@ -18,6 +18,7 @@ Standalone, zero-arg, exit 0 (CI runs every ``examples/*.py``).
 
 import tempfile
 from pathlib import Path
+from typing import List, Tuple, Union
 
 import numpy as np
 
@@ -26,6 +27,11 @@ from recordstream.storage.directory import DirectorySink, DirectorySource
 from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
 from recordstream.storage.query import MetadataFilterSource
 from recordstream.storage.zarr import ZarrGroupSink, ZarrGroupSource
+
+#: The three backends are independent classes (no shared sink/source base beyond ``Storage``),
+#: so the pair list is spelled as a union to keep ``write``/``flush``/iteration typed.
+AnySink = Union[HDF5Sink, ZarrGroupSink, DirectorySink]
+AnySource = Union[HDF5Source, ZarrGroupSource, DirectorySource]
 
 
 def make_records(n: int = 4) -> list:
@@ -55,7 +61,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        pairs = [
+        pairs: List[Tuple[AnySink, AnySource]] = [
             (HDF5Sink(path=work / "store.h5"), HDF5Source(path=work / "store.h5")),
             (ZarrGroupSink(path=work / "store.zarr"), ZarrGroupSource(path=work / "store.zarr")),
             (DirectorySink(path=work / "store_dir"), DirectorySource(path=work / "store_dir")),

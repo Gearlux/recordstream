@@ -11,6 +11,7 @@ from recordstream.storage.base import (
     PLAIN_VALUE,
     TYPED_FORMAT,
     DataSink,
+    DataSource,
     Storage,
     require_record_format,
     restore_attrs,
@@ -109,7 +110,7 @@ class DirectorySink(Storage, DataSink):
 
 
 @confluid.configurable
-class DirectorySource(Storage):
+class DirectorySource(Storage, DataSource):
     """Read records written by :class:`DirectorySink` (one ``fields.json`` + ``fields.npz`` per record).
 
     The matching source of the sink's record layout (one directory per record, sorted by the

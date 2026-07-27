@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Iterator, Protocol, Tuple, runtime_checkable
+from typing import Any, Dict, Iterator, Protocol, Self, Tuple, runtime_checkable
 
 import numpy as np
 import torch
@@ -139,13 +139,15 @@ def _untag_json(value: Any) -> Any:
 class Storage:
     """Base class for storage backends providing context manager support."""
 
-    def open(self) -> "Storage":
+    def open(self) -> Self:
         return self
 
     def close(self) -> None:
         pass  # pragma: no cover
 
-    def __enter__(self) -> "Storage":
+    def __enter__(self) -> Self:
+        # `Self`, not `Storage`: `with HDF5Sink(...) as sink` must keep the concrete
+        # backend type so `sink.write(...)` type-checks at the call site.
         return self.open()
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:

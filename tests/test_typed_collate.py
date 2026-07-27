@@ -1,6 +1,7 @@
 """The record collate — batched record convention (golden shapes consumers rely on)."""
 
 from dataclasses import dataclass
+from typing import Any, Dict, List, Sequence
 
 import numpy as np
 import pytest
@@ -85,7 +86,7 @@ class TestRecordCollate:
 # The collate REGISTRY: a task collate opts out of the generic folding rules
 # (the docs/record-model.md detection example — variable-N boxes cannot stack).
 # --------------------------------------------------------------------------- #
-def _ragged_detection_records():
+def _ragged_detection_records() -> List[Record]:
     return [
         {
             "image": Image(np.zeros((4, 4, 3), dtype=np.float32)),
@@ -114,7 +115,7 @@ def test_registered_task_collate_produces_its_own_batch_contract() -> None:
     from recordstream import collate, get_collate, register_collate
 
     @register_collate("_test_detection")
-    def detection_collate(items):
+    def detection_collate(items: Sequence[Record]) -> Dict[str, Any]:
         images = torch.stack([torch.as_tensor(np.asarray(r["image"])).permute(2, 0, 1) for r in items])
         targets = [
             {
