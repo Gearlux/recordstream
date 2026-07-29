@@ -153,7 +153,7 @@ class TestEncodeDecodeTarget:
             EncodeTarget(mapping=_MAP, field="image")({"image": Image(_hwc_uint8())})
 
     def test_encode_no_label_field_raises(self) -> None:
-        with pytest.raises(ValueError, match="no Label field"):
+        with pytest.raises(ValueError, match="no Label/MultiLabel field"):
             EncodeTarget(mapping=_MAP)({"image": Image(_hwc_uint8())})
 
 

@@ -19,7 +19,7 @@ from typing import Any, Dict, Literal, Optional
 import numpy as np
 from confluid import configurable
 
-from recordstream.items import Label, Mask, Record, Regions, item_data
+from recordstream.items import Label, Mask, MultiLabel, Record, Regions, item_data
 from recordstream.transform import Transform
 
 #: COCO / HuggingFace bounding-box layouts (all in absolute pixels). Closed set so a typo
@@ -153,9 +153,9 @@ class EncodeTarget(Transform):
         output: Key the encoded ``Label`` is written to; blank (default) replaces the source field in place.
     """
 
-    handles = (Label,)
-    consumes = (Label,)
-    produces = (Label,)
+    handles = (Label, MultiLabel)
+    consumes = (Label, MultiLabel)
+    produces = (Label, MultiLabel)
 
     def __init__(
         self,
@@ -174,25 +174,34 @@ class EncodeTarget(Transform):
         self.output = str(output)
 
     def _find_label(self, record: Record) -> str:
-        """Resolve the KEY of the ``Label`` field to encode (``self.field`` or the first ``Label``)."""
+        """Resolve the KEY of the label field to encode (``self.field`` or the first label item).
+
+        Matches a :class:`~recordstream.Label` OR a :class:`~recordstream.MultiLabel` — both are
+        label items, and a multi-label target must be encodeable through the same op.
+        """
         if self.field:
             if self.field not in record:
                 raise ValueError(f"EncodeTarget: field {self.field!r} not in record (keys: {list(record)})")
             item = record[self.field]
-            if not isinstance(item, Label):
-                raise TypeError(f"EncodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label")
+            if not isinstance(item, (Label, MultiLabel)):
+                raise TypeError(
+                    f"EncodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label or MultiLabel"
+                )
             return self.field
-        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
+        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, (Label, MultiLabel))):
             return key
-        raise ValueError(f"EncodeTarget: no Label field in record (keys: {list(record)})")
+        raise ValueError(f"EncodeTarget: no Label/MultiLabel field in record (keys: {list(record)})")
 
     def __call__(self, record: Record) -> Record:
         if not self.mapping:
             raise ValueError("EncodeTarget: mapping must contain at least one entry.")
         key = self._find_label(record)
         label = record[key]
-        encoded = _lookup(label.value, self.mapping, self.ignore_unknown, self.default, "EncodeTarget")
         out_key = self.output or key
+        if isinstance(label, MultiLabel):
+            values = [_lookup(v, self.mapping, self.ignore_unknown, self.default, "EncodeTarget") for v in label.values]
+            return {**record, out_key: MultiLabel(values, classes=label.classes)}
+        encoded = _lookup(label.value, self.mapping, self.ignore_unknown, self.default, "EncodeTarget")
         return {**record, out_key: Label(encoded, classes=label.classes)}
 
 
@@ -214,9 +223,9 @@ class DecodeTarget(Transform):
         output: Key the decoded ``Label`` is written to; blank (default) replaces the source field in place.
     """
 
-    handles = (Label,)
-    consumes = (Label,)
-    produces = (Label,)
+    handles = (Label, MultiLabel)
+    consumes = (Label, MultiLabel)
+    produces = (Label, MultiLabel)
 
     def __init__(
         self,
@@ -235,25 +244,34 @@ class DecodeTarget(Transform):
         self.output = str(output)
 
     def _find_label(self, record: Record) -> str:
-        """Resolve the KEY of the ``Label`` field to decode (``self.field`` or the first ``Label``)."""
+        """Resolve the KEY of the label field to decode (``self.field`` or the first label item).
+
+        Matches a :class:`~recordstream.Label` OR a :class:`~recordstream.MultiLabel` — both are
+        label items, and a multi-label target must be decodeable through the same op.
+        """
         if self.field:
             if self.field not in record:
                 raise ValueError(f"DecodeTarget: field {self.field!r} not in record (keys: {list(record)})")
             item = record[self.field]
-            if not isinstance(item, Label):
-                raise TypeError(f"DecodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label")
+            if not isinstance(item, (Label, MultiLabel)):
+                raise TypeError(
+                    f"DecodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label or MultiLabel"
+                )
             return self.field
-        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, Label)):
+        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, (Label, MultiLabel))):
             return key
-        raise ValueError(f"DecodeTarget: no Label field in record (keys: {list(record)})")
+        raise ValueError(f"DecodeTarget: no Label/MultiLabel field in record (keys: {list(record)})")
 
     def __call__(self, record: Record) -> Record:
         if not self.mapping:
             raise ValueError("DecodeTarget: mapping must contain at least one entry.")
         key = self._find_label(record)
         label = record[key]
-        decoded = _lookup(label.value, self.mapping, self.ignore_unknown, self.default, "DecodeTarget")
         out_key = self.output or key
+        if isinstance(label, MultiLabel):
+            values = [_lookup(v, self.mapping, self.ignore_unknown, self.default, "DecodeTarget") for v in label.values]
+            return {**record, out_key: MultiLabel(values, classes=label.classes)}
+        decoded = _lookup(label.value, self.mapping, self.ignore_unknown, self.default, "DecodeTarget")
         return {**record, out_key: Label(decoded, classes=label.classes)}
 
 

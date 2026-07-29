@@ -17,7 +17,6 @@ dependencies = [
     "orjson",
     "fsspec",
     "cloudpathlib",
-    "scikit-learn",  # LabelMap.fit() uses sklearn.preprocessing.LabelEncoder (lazy-imported)
     # liquifai powers the generic `recordstream run <config.yaml>` CLI (recordstream.cli) that
     # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
     # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.

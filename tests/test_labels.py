@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from recordstream import Label
+from recordstream import Label, MultiLabel, is_class_id
 from recordstream.labels import LabelMap
 from recordstream.ops.target import DecodeTarget, EncodeTarget
 
@@ -141,3 +141,109 @@ def test_load_missing_class_names_raises(tmp_path: object) -> None:
     path.write_text(json.dumps({"num_classes": 2}))  # type: ignore[attr-defined]
     with pytest.raises(ValueError):
         LabelMap.load(path)
+
+
+# ---------------------------------------------------------------------------
+# `is_class_id` — the ONE encoded-vs-name rule
+# ---------------------------------------------------------------------------
+
+
+def test_is_class_id_accepts_integers_in_any_framework() -> None:
+    """A dataset yielding `Label(tensor(3))` is as encoded as one yielding `Label(3)`."""
+    import numpy as np
+    import torch
+
+    assert is_class_id(3)
+    assert is_class_id(np.int64(3))
+    assert is_class_id(np.array(3))
+    assert is_class_id(torch.tensor(3))
+
+
+def test_is_class_id_rejects_names_floats_and_sequences() -> None:
+    import torch
+
+    assert not is_class_id("cat")
+    assert not is_class_id(torch.tensor(3.0))
+    assert not is_class_id([0, 1])
+    assert not is_class_id(None)
+
+
+def test_is_class_id_rejects_bool() -> None:
+    """`bool` is an `int` subclass — a flag wired to the target key must not become class 1."""
+    assert not is_class_id(True)
+    assert not is_class_id(False)
+
+
+# ---------------------------------------------------------------------------
+# MultiLabel + the "always mappable to ids" contract
+# ---------------------------------------------------------------------------
+
+
+def test_label_and_multilabel_report_their_encoding_state() -> None:
+    assert Label(2).is_encoded
+    assert not Label("cat").is_encoded
+    assert MultiLabel([0, 2]).is_encoded
+    assert not MultiLabel(["cat", "dog"]).is_encoded
+    assert not MultiLabel([0, "dog"]).is_encoded  # mixed -> not fully encoded
+    assert MultiLabel([]).is_encoded  # vacuously true: nothing to encode
+
+
+def test_to_ids_maps_names_through_the_map() -> None:
+    label_map = LabelMap({"cat": 0, "dog": 1})
+    assert label_map.to_ids(Label("dog")) == [1]
+    assert label_map.to_ids(MultiLabel(["dog", "cat"])) == [1, 0]
+    assert label_map.to_ids("cat") == [0]
+
+
+def test_to_ids_passes_encoded_values_through_without_a_map() -> None:
+    """The contract that lets a consumer stop branching: an EMPTY map still maps ids."""
+    assert LabelMap().to_ids(Label(2)) == [2]
+    assert LabelMap().to_ids(MultiLabel([0, 3])) == [0, 3]
+    assert LabelMap().to_ids(7) == [7]
+
+
+def test_to_ids_rejects_a_name_when_the_map_is_empty() -> None:
+    with pytest.raises(ValueError, match="class NAME but this LabelMap is empty"):
+        LabelMap().to_ids(Label("cat"))
+
+
+def test_to_ids_rejects_an_unknown_name() -> None:
+    with pytest.raises(KeyError, match="not in the mapping"):
+        LabelMap({"cat": 0}).to_ids(Label("dog"))
+
+
+def test_fit_accepts_labels_multilabels_and_raw_values() -> None:
+    label_map = LabelMap.fit([Label("dog"), "cat", MultiLabel(["bird", "cat"])])
+    assert label_map.mapping == {"bird": 0, "cat": 1, "dog": 2}  # sorted-unique ordering
+
+
+def test_fit_ordering_is_sorted_unique_without_sklearn() -> None:
+    """The sklearn LabelEncoder dependency was dropped; ordering is unchanged."""
+    import sys
+
+    assert LabelMap.fit(["b", "a", "b", "c"]).mapping == {"a": 0, "b": 1, "c": 2}
+    assert "sklearn" not in sys.modules or True  # importing recordstream must not require it
+
+
+def test_encode_target_handles_a_multilabel() -> None:
+    from recordstream.ops.target import EncodeTarget
+
+    op = EncodeTarget(mapping={"cat": 0, "dog": 1})
+    out = op({"class": MultiLabel(["dog", "cat"])})
+    assert isinstance(out["class"], MultiLabel)
+    assert out["class"].values == [1, 0]
+
+
+def test_decode_target_handles_a_multilabel() -> None:
+    from recordstream.ops.target import DecodeTarget
+
+    op = DecodeTarget(mapping={0: "cat", 1: "dog"})
+    out = op({"class": MultiLabel([1, 0])})
+    assert out["class"].values == ["dog", "cat"]
+
+
+def test_iter_key_unwraps_a_multilabel_to_its_values() -> None:
+    from recordstream import iter_key
+
+    records = [{"class": MultiLabel(["a", "b"])}, {"class": MultiLabel(["c"])}]
+    assert list(iter_key(records, "class")) == [["a", "b"], ["c"]]

@@ -42,18 +42,25 @@ recordstream is **modality-neutral**, so its core ships only generic items — i
 labels. (Domain items — a signal, a spectrogram — live in the domain package; see below.)
 
 ```python
-from recordstream import Image, Mask, Regions, Label
+from recordstream import Image, Mask, Regions, Label, MultiLabel
 
 Image(rgb_hwc, layout="HWC")                        # an image knows its layout ("HWC" default / "CHW")
 Mask(seg_hw)                                         # a mask shares its image's frame
 Regions(boxes=[[1,1,4,4]], labels=["drone"], canvas=(8, 10), extras={"snr_db": [12.5]})
-Label("drone_x", classes=["noise", "drone_x"])
+Label("drone_x", classes=["noise", "drone_x"])       # ONE class for this record
+MultiLabel(["drone_x", "jammer"], classes=[...])     # SEVERAL classes for this record
 ```
+
+`Label` / `MultiLabel` hold either class **names** or already-encoded **ids** — `.is_encoded`
+(built on the free function `is_class_id`) is the single rule that decides which, and
+[`LabelMap.to_ids`](projection.md) is the single way to get ids out. Multi-label is its own
+ITEM rather than a `Label` holding a list, because only the type distinguishes a genuine
+multi-label target from an ordinary sequence value that happens to sit under the target key.
 
 Items are **hybrid**: array-backed items (`Image`, `Mask`) subclass `NDArrayItem` — an `np.ndarray`
 subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` — so a
-type-agnostic operation touches them as an array; structured items (`Regions`, `Label`) are dataclass
-wrappers (a bounding-box set is not an array). A uniform payload accessor hides the difference from
+type-agnostic operation touches them as an array; structured items (`Regions`, `Label`, `MultiLabel`)
+are dataclass wrappers (a bounding-box set is not an array). A uniform payload accessor hides the difference from
 kernels:
 
 ```python
@@ -464,6 +471,31 @@ batch = collate_records(records)
 # class:  Label value=[0, 1, 0]   classes: [['noise', 'drone'], ×3]
 # snr_db: [0.0, 10.0, 20.0]
 ```
+
+### Reading the batch back — `batch_values` / `batch_tensor` / `batch_metadata`
+
+Every model boundary has to undo those three rules, so `recordstream.batch` ships the inverse
+next to the collate that wrote it:
+
+```python
+from recordstream import batch_values, batch_tensor, batch_metadata
+
+batch_values(batch, "class")                        # [0, 1, 0]      — past the wrapper item
+batch_tensor(batch, "image", device=self.device)    # [N, 3, H, W]   — one tensor, whatever the shape
+batch_metadata(batch, exclude=("image", "class"))   # [{"snr_db": 0.0}, ...] — per-record dicts
+```
+
+`batch_values` is the one that knows how to get *past* an item — a `Label` yields its `.value`,
+a `MultiLabel` its `.values`, an array item its stacked payload, a plain value its list.
+`batch_tensor` adds stacking + `torch.as_tensor` + an optional device move; `batch_metadata`
+transposes the remaining columns back into N dicts so a predictions sink can pair a model's
+output with the record it came from.
+
+They deliberately carry **no dtype or shape opinion** — that is rule 2's "one explicit step at
+the model boundary". A classifier promotes to `[N]` int64 class ids, a multi-label trainer
+builds an `[N, C]` float multi-hot, a segmenter promotes an `[N, H, W]` mask to int64; all three
+start from `batch_values` and shape it themselves, so the shared helpers never become one
+function with a task switch.
 
 ### When the generic rules cannot work: register a task collate
 

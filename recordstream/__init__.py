@@ -10,6 +10,7 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 """
 
 # --- shared infrastructure -----------------------------------------------------------------
+from recordstream.batch import batch_metadata, batch_tensor, batch_values
 from recordstream.collate import collate, collate_records, get_collate, register_collate, registered_collates
 from recordstream.context import Context
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp, register_op_family, registered_op_families
@@ -30,10 +31,12 @@ from recordstream.items import (
     Image,
     Label,
     Mask,
+    MultiLabel,
     NDArrayItem,
     Record,
     Regions,
     get_item_type,
+    is_class_id,
     is_item,
     item_data,
     item_type_names,
@@ -64,6 +67,8 @@ __all__ = [
     "Mask",
     "Regions",
     "Label",
+    "MultiLabel",
+    "is_class_id",
     "register_item",
     "item_types",
     "item_type_names",
@@ -97,6 +102,9 @@ __all__ = [
     "from_ops",
     "to_ops",
     "collate",
+    "batch_metadata",
+    "batch_tensor",
+    "batch_values",
     "collate_records",
     "get_collate",
     "register_collate",

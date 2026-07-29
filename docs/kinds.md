@@ -63,6 +63,21 @@ loader = DataLoader(stream, collate_fn=get_collate("yolo"))
 
 The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17).
 
+### Reading a batch back (`recordstream.batch`)
+
+The inverse of `collate_records`, shipped alongside it so a model boundary never re-derives the convention:
+
+```python
+from recordstream import batch_values, batch_tensor, batch_metadata
+
+batch_values(batch, "class")                        # past the wrapper item: a Label -> its .value list
+batch_tensor(batch, "image", device=model.device)   # ONE tensor, stacked + moved
+batch_metadata(batch, exclude=("image", "class"))   # the remaining columns transposed into N dicts
+```
+
+They carry no dtype or shape opinion on purpose — an int64 class-id promotion, a float multi-hot, an `[N, H, W]` mask are all TASK shaping and stay at the caller's model boundary.
+
+
 ## 1→N expanding ops (iterable-only pipelines)
 
 An op may return **several** carriers — a windowing op splitting one capture into N windows marks itself with `EXPANDS = True` and returns an iterable of records:

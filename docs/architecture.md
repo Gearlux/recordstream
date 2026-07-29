@@ -224,6 +224,39 @@ def yolo_collate(items):
 loader = DataLoader(stream, batch_size=8, collate_fn=get_collate("yolo"))
 ```
 
+### Addendum: the READ-BACK lives here too (`recordstream.batch`, 2026-07-29)
+
+**Context.** Every model boundary has to undo the three rules above: get past a wrapper item,
+turn a per-record list into one tensor, transpose the leftover columns into per-record dicts for
+a predictions sink. That is not task knowledge — it is the collate's own convention read
+backwards. Two consumer packages had independently written it: one for classification, one for
+segmentation, with two near-identical private `_batch_metadata` implementations and two separate
+test files pinning them. A third consumer would have written a third.
+
+**Decision.** `recordstream.batch` ships the inverse beside the collate — `batch_values`,
+`batch_tensor`, `batch_metadata` — and it carries **no dtype or shape opinion**. Rule 2 above
+says turning class names into an `[N]` int64 tensor is "the model boundary's one explicit step,
+not a generic-engine guess"; that still holds. What moved is *reading*, not *shaping*.
+
+**Consequences.** The three shapes a consumer actually wants — a classifier's `[N]` int64 ids, a
+multi-label trainer's `[N, C]` float multi-hot, a segmenter's `[N, H, W]` int64 mask — all start
+from `batch_values` and are shaped by a small task-specific function the consumer keeps. Folding
+those three into one shared helper would produce a function whose body is a task switch, which
+is the thing the collate registry exists to avoid.
+
+**Example.**
+
+```python
+from recordstream import batch_tensor, batch_values, batch_metadata
+
+x = batch_tensor(batch, "image", device=self.device)      # generic: one [N, 3, H, W] tensor
+meta = batch_metadata(batch, exclude=("image", "class"))  # generic: N per-record dicts
+
+# task-specific, stays in the consumer:
+ids = torch.as_tensor(batch_values(batch, "class"))       # a classifier's [N] class ids
+mask = batch_tensor(batch, "target").long()               # a segmenter's [N, H, W] int64 mask
+```
+
 ### What you may change (and where it's documented)
 
 - **Plugging in your own batch layout** is the supported extension point — decorate a function
@@ -232,6 +265,9 @@ loader = DataLoader(stream, batch_size=8, collate_fn=get_collate("yolo"))
 - **Changing the default collate's semantics** (how `"record"` stacks, the attrs-become-lists
   convention) is an architectural change: every batch consumer depends on it. Update this record
   and the recordstream `AGENTS.md` metadata mandate together.
+- **Adding a reader** to `recordstream.batch` is fine when it is the collate read backwards.
+  Adding one that shapes for a task (promotes a dtype, builds a multi-hot) is not — that belongs
+  to the consumer, or the helper becomes a task switch.
 
 ---
 

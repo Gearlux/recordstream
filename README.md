@@ -6,7 +6,7 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordS
 
 ## 🚀 Key Features
 
--   **A record is a plain dict:** the [record model](docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Regions`, `Label`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
+-   **A record is a plain dict:** the [record model](docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Regions`, `Label`, `MultiLabel`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
 -   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
 -   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
 -   **Graph pipelines, serial engine:** readable [`flow:` documents](docs/graph.md) with named steps, fan-out/fan-in and per-record `bind:` parameters — executed natively by `FlowGraph` or lowered (bidirectionally, with pinned execution parity) to a flat context-ops list on the plain sequential `Stream` engine.
@@ -97,7 +97,7 @@ generated tool schema set the toggle too (see [docs/architecture.md](docs/archit
 | Page | Covers |
 |---|---|
 | [docs/record-model.md](docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
-| [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`), 1→N expanding ops |
+| [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), 1→N expanding ops |
 | [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, the six Context ops on the serial engine, bidirectional flow⇄ops conversion, `Stream.from_ops_yaml` |
 | [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing |
 | [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |

@@ -57,6 +57,8 @@ __all__ = [
     "Mask",
     "Regions",
     "Label",
+    "MultiLabel",
+    "is_class_id",
     "register_item",
     "item_types",
     "item_type_names",
@@ -187,10 +189,46 @@ class Regions:
     extras: Dict[str, Any] = field(default_factory=dict)
 
 
+def is_class_id(value: Any) -> bool:
+    """True when ``value`` is an ENCODED class id (an integer), not a class name.
+
+    The ONE rule for "is this label already encoded?" — so consumers dispatch on
+    it instead of re-deriving a type check each time (a trainer used to sniff
+    ``isinstance(target, str)`` itself).
+
+    Recognises an integer in ANY framework: a Python ``int``, a numpy integer,
+    and a **0-dimensional integer array or tensor** — a dataset that yields
+    ``Label(torch.tensor(3))`` is as encoded as one yielding ``Label(3)``, and
+    treating the tensor as a class NAME would send it through a LabelMap and
+    key the mapping on ``"tensor(3)"``.
+
+    ``bool`` is deliberately excluded: it is an ``int`` subclass, so a boolean
+    flag mistakenly wired to the target key would silently become class id 1 and
+    train without complaint.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, np.integer)):
+        return True
+    # 0-d array / tensor (numpy, torch, …) — unwrap via the array-scalar protocol
+    # rather than importing a framework, so this stays modality- and engine-neutral.
+    unwrap = getattr(value, "item", None)
+    if callable(unwrap) and getattr(value, "ndim", None) == 0:
+        try:
+            return is_class_id(unwrap())
+        except Exception:  # pragma: no cover - defensive: exotic 0-d payload
+            return False
+    return False
+
+
 @register_item
 @dataclass
 class Label:
-    """A classification label plus its class vocabulary.
+    """A single classification label plus its class vocabulary.
+
+    The label is either a class NAME (needs a
+    :class:`~recordstream.labels.LabelMap` to encode) or an already-encoded
+    class ID — :attr:`is_encoded` is the one place that distinction is decided.
 
     Attributes:
         value: The label (a class id or name).
@@ -199,6 +237,39 @@ class Label:
 
     value: Any = None
     classes: Optional[List[Any]] = None
+
+    @property
+    def is_encoded(self) -> bool:
+        """True when :attr:`value` is already a class id rather than a name."""
+        return is_class_id(self.value)
+
+
+@register_item
+@dataclass
+class MultiLabel:
+    """Several classification labels for one record, plus their class vocabulary.
+
+    The multi-label counterpart of :class:`Label` — a record belonging to more
+    than one class. Giving it a TYPE is what lets consumers dispatch on the
+    item instead of sniffing ``isinstance(value, (list, tuple, set))``, which
+    cannot distinguish a genuine multi-label target from an ordinary sequence
+    value that happens to sit under the target key.
+
+    Like :class:`Label`, its values are always mappable to class ids through a
+    :class:`~recordstream.labels.LabelMap`.
+
+    Attributes:
+        values: The labels (class ids or names). Order is not significant.
+        classes: Optional ordered class vocabulary these labels index into.
+    """
+
+    values: List[Any] = field(default_factory=list)
+    classes: Optional[List[Any]] = None
+
+    @property
+    def is_encoded(self) -> bool:
+        """True when every value is already a class id (vacuously true when empty)."""
+        return all(is_class_id(v) for v in self.values)
 
 
 # ---------------------------------------------------------------------------

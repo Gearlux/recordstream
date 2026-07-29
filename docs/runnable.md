@@ -14,6 +14,34 @@ runnable: !class:mypkg.Classifier
 python -m recordstream.cli run config.yaml     # builds `runnable:`, calls .run()
 ```
 
+### Top-level keys reach the runnable
+
+The runnable is built **against the whole document**, so a *flat* config works: a top-level
+key broadcasts into the same-named constructor parameter, with no nesting and no `!ref:`.
+
+```yaml
+runnable: !class:mypkg.Classifier
+  model: !lazy:mypkg.Backbone { name: resnet18 }
+
+train_set: !class:recordstream.sources.HuggingFaceSource { path: mnist, split: train }
+max_epochs: 3          # -> Classifier(max_epochs=3)
+batch_size: 32         # -> Classifier(batch_size=32)
+```
+
+If you write your own runner CLI, build the bound node with
+`recordstream.cli.materialize_runnable(node)` rather than a bare `flow()`. A bare flow builds
+the node in isolation, so every top-level key above is dropped — and dropped *silently*:
+`train_set` becomes `None` and `max_epochs` quietly falls back to its default, leaving a run
+that looks configured and is not.
+
+```python
+from recordstream.cli import materialize_runnable
+
+@app.script_command(flow_mode="manual")      # "auto" is the bare flow this replaces
+def run(runnable: Any) -> None:
+    materialize_runnable(runnable).run()
+```
+
 ## The problem entry points solve
 
 A merged train+eval class exposes SEVERAL capabilities from one class, dispatched off its

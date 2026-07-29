@@ -16,17 +16,39 @@ So fitting happens once, then the mapping is pinned/persisted — it does NOT co
 
 Zero-arg constructible (``LabelMap()`` succeeds with an empty mapping) and side-effect-free in
 ``__init__`` per the workspace "Lazy Initialization & Zero-Arg Construction" convention; the
-non-empty requirement is validated lazily in the properties, not in the constructor. scikit-learn
-is imported lazily inside :meth:`fit` so importing recordstream never pulls it in.
+non-empty requirement is validated lazily in the properties, not in the constructor.
+
+A label is ALWAYS mappable to ids: :meth:`LabelMap.to_ids` accepts a ``Label`` / ``MultiLabel``
+item, a bare name or id, or a sequence of those, and passes already-encoded values through — so a
+consumer never branches on "are these names or ids?".
 """
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
 
 from confluid import configurable
 
+from recordstream.items import Label, MultiLabel, is_class_id
 from recordstream.ops.target import DecodeTarget, EncodeTarget
+
+
+def _iter_label_values(target: Any) -> Iterator[Any]:
+    """Yield the individual label values of ``target``, whatever shape it takes.
+
+    A :class:`~recordstream.MultiLabel` yields each of its values, a
+    :class:`~recordstream.Label` its single value, a bare sequence its elements, and anything
+    else itself. One walker so :meth:`LabelMap.fit` and :meth:`LabelMap.to_ids` agree on what
+    "the labels of this target" means.
+    """
+    if isinstance(target, MultiLabel):
+        yield from target.values
+    elif isinstance(target, Label):
+        yield target.value
+    elif isinstance(target, (list, tuple, set)):
+        yield from target
+    elif target is not None:
+        yield target
 
 
 @configurable
@@ -83,23 +105,29 @@ class LabelMap:
 
     @classmethod
     def fit(cls, targets: Iterable[Any]) -> "LabelMap":
-        """Fit a deterministic name→id map from a stream of raw targets via sklearn ``LabelEncoder``.
+        """Fit a deterministic name→id map from a stream of raw targets.
 
-        Ordering is scikit-learn's sorted-unique ordering, so the same set of labels always yields
-        the same mapping — train and (a refit on the same labels at) eval agree. In practice eval
-        should :meth:`load` the pinned training map rather than refit on a subset.
+        Ordering is sorted-unique, so the same set of labels always yields the same mapping —
+        train and (a refit on the same labels at) eval agree. In practice eval should :meth:`load`
+        the pinned training map rather than refit on a subset.
+
+        A :class:`~recordstream.MultiLabel` (or any sequence) target contributes EVERY one of its
+        labels, so a multi-label dataset fits from the same call as a single-label one.
+
+        (This used to delegate to scikit-learn's ``LabelEncoder``, whose ``classes_`` is exactly
+        ``sorted(set(...))`` — the dependency bought nothing but made a data package require an ML
+        library, so it was dropped. Ordering is unchanged.)
 
         Args:
-            targets: Iterable of raw labels (strings, or anything ``str``-coercible). Must be non-empty.
+            targets: Iterable of raw labels — names, ids, ``Label``/``MultiLabel`` items, or
+                sequences of any of those. Must yield at least one label.
         """
-        from sklearn.preprocessing import LabelEncoder
-
-        labels = [str(t) for t in targets]
+        labels: List[str] = []
+        for target in targets:
+            labels.extend(str(v) for v in _iter_label_values(target))
         if not labels:
             raise ValueError("LabelMap.fit: no targets to fit on (empty stream).")
-        encoder = LabelEncoder()
-        encoder.fit(labels)
-        return cls(mapping={str(name): int(idx) for idx, name in enumerate(encoder.classes_)})
+        return cls(mapping={name: idx for idx, name in enumerate(sorted(set(labels)))})
 
     @classmethod
     def from_label_names(cls, names: Sequence[str]) -> "LabelMap":
@@ -111,6 +139,41 @@ class LabelMap:
         if not names:
             raise ValueError("LabelMap.from_label_names: `names` is empty.")
         return cls(mapping={str(name): int(i) for i, name in enumerate(names)})
+
+    def to_ids(self, target: Any) -> List[int]:
+        """Class ids for ``target`` — the "a label is ALWAYS mappable to ints" contract.
+
+        Accepts every shape a target takes: a :class:`~recordstream.Label` or
+        :class:`~recordstream.MultiLabel` item, a bare name/id, or a sequence of those. Values
+        that are ALREADY encoded (:func:`~recordstream.items.is_class_id`) pass through, so this
+        works on an integer-target dataset even when the map is EMPTY — which is what lets a
+        consumer stop branching on "are these names or ids?" entirely.
+
+        Raises:
+            ValueError: A class NAME arrived but this map is empty (nothing to encode with).
+            KeyError: A name is not in the mapping.
+
+        Example::
+
+            LabelMap({"cat": 0, "dog": 1}).to_ids(Label("dog"))     # [1]
+            LabelMap().to_ids(Label(2))                             # [2] — no map needed
+            LabelMap({"a": 0, "b": 1}).to_ids(MultiLabel(["a", "b"]))  # [0, 1]
+        """
+        ids: List[int] = []
+        for value in _iter_label_values(target):
+            if is_class_id(value):
+                ids.append(int(value))
+                continue
+            if not self.mapping:
+                raise ValueError(
+                    f"LabelMap.to_ids: {value!r} is a class NAME but this LabelMap is empty — "
+                    "fit or load a mapping first (LabelMap.fit(targets) / LabelMap.load(path))."
+                )
+            name = str(value)
+            if name not in self.mapping:
+                raise KeyError(f"LabelMap.to_ids: {name!r} is not in the mapping (classes: {list(self.mapping)[:8]})")
+            ids.append(self.mapping[name])
+        return ids
 
     def save(self, path: Union[str, Path]) -> None:
         """Persist as ``{"class_names": [...], "num_classes": N}`` — marainer's ``class_names.json`` format.

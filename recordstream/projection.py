@@ -23,7 +23,7 @@ Design notes
 
 from typing import Any, Collection, Iterator, Protocol, runtime_checkable
 
-from recordstream.items import Label, Record, is_item, item_data
+from recordstream.items import Label, MultiLabel, Record, is_item, item_data
 
 
 @runtime_checkable
@@ -56,13 +56,16 @@ def project(source: Any, keys: Collection[str]) -> Iterator[Record]:
 def iter_key(source: Any, key: str) -> Iterator[Any]:
     """Lazily yield each record's ``key`` VALUE (skipping other-key construction when supported).
 
-    A :class:`~recordstream.items.Label` unwraps to its ``.value`` (the class id / name); any
+    A :class:`~recordstream.items.Label` unwraps to its ``.value`` (the class id / name), a
+    :class:`~recordstream.items.MultiLabel` to its ``.values`` list; any
     other registered item unwraps to its payload via :func:`~recordstream.items.item_data`; a
     plain value passes through verbatim. A record without ``key`` yields ``None``.
     """
     for record in project(source, (key,)):
         value = record.get(key)
-        if isinstance(value, Label):
+        if isinstance(value, MultiLabel):
+            yield value.values
+        elif isinstance(value, Label):
             yield value.value
         elif is_item(value):
             yield item_data(value)
