@@ -19,7 +19,7 @@ labels = list(iter_key(my_source, "class"))   # lazy; a Label unwraps to .value,
 n = num_classes(my_source, key="class")       # max(class_id) + 1 — always walks
 ```
 
-Sources that don't implement `SupportsProjection` still work via a correct full-iteration fallback (just without the skip-decode speedup); `Stream.project(keys)` is the engine's implementation — it runs the op chain, then keeps only the requested keys. `num_classes` is a free function, not a `Stream` method: integer class-id semantics are classification-specific, so the task-agnostic engine doesn't advertise it.
+A **deferred** source — a `!class:` marker straight out of a config — is materialized first, so a caller never has to know which entry point flows and which doesn't (flowing a live object is a no-op). Sources that don't implement `SupportsProjection` still work via a correct full-iteration fallback (just without the skip-decode speedup); `Stream.project(keys)` is the engine's implementation — it runs the op chain, then keeps only the requested keys. `num_classes` is a free function, not a `Stream` method: integer class-id semantics are classification-specific, so the task-agnostic engine doesn't advertise it.
 
 ## `LabelMap` — fittable name↔id encoding
 

@@ -44,7 +44,15 @@ def project(source: Any, keys: Collection[str]) -> Iterator[Record]:
     Uses the source's own ``project`` when it implements :class:`SupportsProjection` (the
     efficient path that skips building unrequested values); otherwise falls back to a full
     iteration that keeps only the requested keys. Lazy: a generator.
+
+    A DEFERRED source (a ``!class:`` marker straight out of a config) is materialized first,
+    so a caller never has to remember which entry point flows and which does not —
+    :meth:`~recordstream.LabelMap.encode` already did, and every consumer of this one was
+    writing ``flow(source)`` at the call site to compensate. Flowing a live object is a no-op.
     """
+    from confluid import flow
+
+    source = flow(source)
     want = frozenset(keys)
     if isinstance(source, SupportsProjection):
         yield from source.project(want)

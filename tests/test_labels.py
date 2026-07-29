@@ -1,6 +1,7 @@
 """Tests for :class:`recordstream.labels.LabelMap` — the fittable name↔id label map."""
 
 import json
+from typing import Any
 
 import numpy as np
 import pytest
@@ -439,3 +440,45 @@ def test_a_stream_rejects_non_string_names_at_construction() -> None:
 
     with pytest.raises(Exception, match="valid string"):
         Stream(source=[], class_names=[1, 2])
+
+
+# --------------------------------------------------------------------------- #
+# A deferred source materializes itself
+# --------------------------------------------------------------------------- #
+# `LabelMap.encode` already flowed its source; `project` / `iter_key` did not — so every
+# consumer wrote `flow(source)` at the call site to compensate, and had to know which
+# entry point needed it. Flowing a live object is a no-op, so this costs nothing.
+
+
+def _deferred(records: list) -> Any:
+    """A `!class:` marker as a config hands one over — unbuilt."""
+    from confluid import Class
+
+    from recordstream import Stream
+
+    return Class(Stream, source=records)
+
+
+def test_project_materializes_a_deferred_source() -> None:
+    from recordstream import project
+
+    assert list(project(_deferred([{"class": Label(0), "extra": 1}]), ("class",))) == [{"class": Label(0)}]
+
+
+def test_iter_key_materializes_a_deferred_source() -> None:
+    from recordstream import iter_key
+
+    assert list(iter_key(_deferred([{"class": Label(i)} for i in range(3)]), "class")) == [0, 1, 2]
+
+
+def test_num_classes_materializes_a_deferred_source() -> None:
+    from recordstream import num_classes
+
+    assert num_classes(_deferred([{"class": Label(i)} for i in range(4)])) == 4
+
+
+def test_a_live_source_is_unaffected() -> None:
+    """Flowing a built object is a no-op — the common path must not change."""
+    from recordstream import iter_key
+
+    assert list(iter_key([{"class": Label(i)} for i in range(3)], "class")) == [0, 1, 2]
