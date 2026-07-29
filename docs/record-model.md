@@ -478,24 +478,31 @@ Every model boundary has to undo those three rules, so `recordstream.batch` ship
 next to the collate that wrote it:
 
 ```python
-from recordstream import batch_values, batch_tensor, batch_metadata
+from recordstream import batch_values, batch_tensor, batch_metadata, multi_hot
 
-batch_values(batch, "class")                        # [0, 1, 0]      — past the wrapper item
-batch_tensor(batch, "image", device=self.device)    # [N, 3, H, W]   — one tensor, whatever the shape
-batch_metadata(batch, exclude=("image", "class"))   # [{"snr_db": 0.0}, ...] — per-record dicts
+batch_values(batch, "class")                             # [0, 1, 0]  — past the wrapper item
+batch_tensor(batch, "image", device=dev)                 # [N, 3, H, W] torch tensor
+batch_tensor(batch, "class", dev, dtype=torch.int64)     # [N] class ids
+multi_hot(batch, "class", num_classes=3)                 # [N, 3] numpy multi-hot
+batch_metadata(batch, exclude=("image", "class"))        # [{"snr_db": 0.0}, ...]
 ```
 
 `batch_values` is the one that knows how to get *past* an item — a `Label` yields its `.value`,
 a `MultiLabel` its `.values`, an array item its stacked payload, a plain value its list.
-`batch_tensor` adds stacking + `torch.as_tensor` + an optional device move; `batch_metadata`
-transposes the remaining columns back into N dicts so a predictions sink can pair a model's
-output with the record it came from.
+`multi_hot` renders a `MultiLabel` column as an `[N, C]` matrix. `batch_metadata` transposes
+the remaining columns back into N dicts so a predictions sink can pair a model's output with
+the record it came from.
 
-They deliberately carry **no dtype or shape opinion** — that is rule 2's "one explicit step at
-the model boundary". A classifier promotes to `[N]` int64 class ids, a multi-label trainer
-builds an `[N, C]` float multi-hot, a segmenter promotes an `[N, H, W]` mask to int64; all three
-start from `batch_values` and shape it themselves, so the shared helpers never become one
-function with a task switch.
+**Only `batch_tensor` is torch.** The others return plain values or numpy, so a non-torch
+backend uses the same code and converts in one line (`torch.as_tensor(m)`, which shares memory,
+or the TensorFlow/JAX equivalent). A torch-typed `multi_hot` would have forced a second
+implementation for the next backend.
+
+`dtype` is a **parameter, not an opinion** — the same knob as `device`. recordstream never
+decides the contract; the caller names the one its loss requires. That matters: a dataset
+yielding int32 label tensors is legal, and `CrossEntropyLoss` refuses it with *"expected scalar
+type Long but found Int"*, so a classifier passes `dtype=torch.int64` and a segmenter does the
+same for its pixel-class mask. What stays task-side is only *which* call to make.
 
 ### When the generic rules cannot work: register a task collate
 

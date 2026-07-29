@@ -10,7 +10,7 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 """
 
 # --- shared infrastructure -----------------------------------------------------------------
-from recordstream.batch import batch_metadata, batch_tensor, batch_values
+from recordstream.batch import batch_metadata, batch_tensor, batch_values, multi_hot
 from recordstream.collate import collate, collate_records, get_collate, register_collate, registered_collates
 from recordstream.context import Context
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp, register_op_family, registered_op_families
@@ -105,6 +105,7 @@ __all__ = [
     "batch_metadata",
     "batch_tensor",
     "batch_values",
+    "multi_hot",
     "collate_records",
     "get_collate",
     "register_collate",

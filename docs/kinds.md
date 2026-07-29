@@ -68,14 +68,16 @@ The string keys primarily target the MCP tool surface (JSON-serializable, enumer
 The inverse of `collate_records`, shipped alongside it so a model boundary never re-derives the convention:
 
 ```python
-from recordstream import batch_values, batch_tensor, batch_metadata
+from recordstream import batch_values, batch_tensor, batch_metadata, multi_hot
 
-batch_values(batch, "class")                        # past the wrapper item: a Label -> its .value list
-batch_tensor(batch, "image", device=model.device)   # ONE tensor, stacked + moved
-batch_metadata(batch, exclude=("image", "class"))   # the remaining columns transposed into N dicts
+batch_values(batch, "class")                             # past the wrapper item: a Label -> its .value list
+batch_tensor(batch, "image", device=model.device)        # ONE torch tensor, stacked + moved
+batch_tensor(batch, "class", dev, dtype=torch.int64)     # ...with the dtype your loss requires
+multi_hot(batch, "class", num_classes)                   # a MultiLabel column as an [N, C] numpy matrix
+batch_metadata(batch, exclude=("image", "class"))        # the remaining columns transposed into N dicts
 ```
 
-They carry no dtype or shape opinion on purpose — an int64 class-id promotion, a float multi-hot, an `[N, H, W]` mask are all TASK shaping and stay at the caller's model boundary.
+Only `batch_tensor` is torch; the rest return plain values or numpy, so a non-torch backend reuses them and converts in one line. `dtype` is a parameter, not an opinion — the same knob as `device`. What stays task-side is only WHICH call a trainer makes.
 
 
 ## 1→N expanding ops (iterable-only pipelines)
