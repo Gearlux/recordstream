@@ -6,9 +6,10 @@ mixins a runnable inherits so a GUI executor (one that runs the object as a grap
 node) can cooperate with it WITHOUT this package importing the GUI framework:
 
 * :class:`TorchRunner` — marks a runnable whose ``run()`` needs autograd (it
-  performs gradient-based optimization). A GUI executor that evaluates nodes under
-  ``torch.inference_mode()`` reads the duck-typed ``__torch_runner__`` flag and
-  re-enables autograd for the duration of ``run()``.
+  performs gradient-based optimization). The class is named for the framework it
+  concerns; the flag it sets says what it MEANS — a GUI executor that evaluates nodes
+  under ``torch.inference_mode()`` reads the duck-typed ``__needs_autograd__`` flag
+  and re-enables autograd for the duration of ``run()``.
 * :class:`ProgressReporting` — gives a runnable a framework-free progress callback.
   The executor injects a ``(value, total, desc) -> None`` sink via
   :meth:`~ProgressReporting.set_progress_callback`; the runnable drains it from its
@@ -60,14 +61,20 @@ class TorchRunner:
     inference mode every tensor created — model parameters, forward activations, the
     loss — is an inference tensor with no autograd graph, so ``loss.backward()`` dies
     with *"element 0 of tensors does not require grad and does not have a grad_fn"*.
-    The executor reads the duck-typed ``__torch_runner__`` flag (no hard import on the
+    The executor reads the duck-typed ``__needs_autograd__`` flag (no hard import on the
     GUI side) and re-enables normal autograd for the duration of ``run()``.
+
+    Note the deliberate split between the two names: the CLASS is named for the framework
+    whose execution mode is at stake (autograd is a torch concept, and a non-torch backend
+    would not inherit this mixin at all), while the FLAG is named for what it decides —
+    "this run needs autograd". A runnable that only sometimes trains overrides the flag as
+    a property (``return self.task == "fit"``), which reads correctly only under that name.
 
     Inference-only runnables (a pure evaluator, a dataset processor) deliberately do
     NOT inherit this — they run as-is under the executor's inference mode.
     """
 
-    __torch_runner__: bool = True
+    __needs_autograd__: bool = True
 
 
 class ProgressReporting:

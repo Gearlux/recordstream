@@ -5,13 +5,15 @@ from typing import List
 from recordstream.runnable import ProgressReporting, TorchRunner
 
 
-def test_torch_runner_flag() -> None:
-    assert TorchRunner.__torch_runner__ is True
+def test_torch_runner_sets_the_needs_autograd_flag() -> None:
+    # The class is named for the framework; the FLAG is named for what it decides — a GUI
+    # executor reads `__needs_autograd__` (duck-typed) to re-enable autograd around run().
+    assert TorchRunner.__needs_autograd__ is True
 
     class Trainer(TorchRunner):
         pass
 
-    assert Trainer().__torch_runner__ is True  # inherited by subclasses
+    assert Trainer().__needs_autograd__ is True  # inherited by subclasses
 
 
 def test_progress_reporting_noop_without_callback() -> None:

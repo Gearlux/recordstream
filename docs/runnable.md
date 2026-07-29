@@ -138,11 +138,14 @@ walk over every discovered class tells a visual editor which classes to offer in
 
 Orthogonal to entry points, a runnable may inherit two stateless mixins:
 
-- **`TorchRunner`** — declares "my `run()` needs autograd" (`__torch_runner__ = True`,
+- **`TorchRunner`** — declares "my `run()` needs autograd" (`__needs_autograd__ = True`,
   duck-typed). A GUI executor that evaluates nodes under `torch.inference_mode()` re-enables
   autograd for the duration of `run()`. Inference-only runnables deliberately do NOT inherit
   it. A merged class can even make it dynamic — a property returning `self.task == "fit"`,
-  so the same class trains under autograd and predicts under inference mode.
+  so the same class trains under autograd and predicts under inference mode. The class and
+  the flag are named for different things on purpose: the *class* for the framework whose
+  execution mode is at stake (autograd is a torch concept), the *flag* for what it decides —
+  which is what makes the dynamic property above read correctly.
 - **`ProgressReporting`** — a framework-free progress sink: the executor injects
   `(value, total, desc) -> None` via `set_progress_callback()`, the runnable drains it via
   `self._report_progress(step, total, "epoch 3")` from its loop. With no sink injected

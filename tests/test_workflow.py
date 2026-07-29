@@ -193,11 +193,11 @@ def test_predicate_zero_arg_construct_and_call(cls: Any) -> None:
 # StreamStudio canvas integration — TorchRunner + ProgressReporting forwarding
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("cls", [Sequence, Conditional, Switch])
-def test_combinators_declare_torch_runner(cls: Any) -> None:
-    # A combinator may wrap a trainer, so it declares __torch_runner__ — StreamStudio's executor
+def test_combinators_declare_needs_autograd(cls: Any) -> None:
+    # A combinator may wrap a trainer, so it declares __needs_autograd__ — StreamStudio's executor
     # re-enables autograd for the whole run (otherwise the inner loss.backward() dies under
     # ComfyUI's inference_mode).
-    assert cls().__torch_runner__ is True
+    assert cls().__needs_autograd__ is True
 
 
 def test_progress_callback_forwarded_to_running_branch() -> None:

@@ -139,11 +139,11 @@ def test_run_entrypoint_dispatches_to_a_subclass_override() -> None:
 
 
 def test_run_entrypoint_never_fires_a_property_getter() -> None:
-    """The merged runnables carry a dynamic ``__torch_runner__`` property; lookup must not touch it."""
+    """The merged runnables carry a dynamic ``__needs_autograd__`` property; lookup must not touch it."""
 
     class _WithProperty(_Dispatching):
         @property
-        def __torch_runner__(self) -> bool:
+        def __needs_autograd__(self) -> bool:
             raise AssertionError("property getter fired during dispatch")
 
     runnable = _WithProperty(task="test")

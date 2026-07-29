@@ -43,7 +43,7 @@ member arrives as a deferred ``Fluid`` stub and is materialised on demand).
 
 The combinators inherit :class:`~recordstream.runnable.TorchRunner` and
 :class:`~recordstream.runnable.ProgressReporting` so a workflow runs correctly on a
-GUI canvas: a combinator may wrap a *trainer*, so it declares ``__torch_runner__``
+GUI canvas: a combinator may wrap a *trainer*, so it declares ``__needs_autograd__``
 (the executor re-enables autograd for the whole run — otherwise an inner
 ``loss.backward()`` dies under the executor's inference mode; restoring autograd is
 harmless for an inner evaluator), and it FORWARDS the executor-injected progress

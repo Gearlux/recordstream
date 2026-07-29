@@ -601,7 +601,7 @@ runnable's `run()` is then `run_entrypoint(self, self.task)` — the decorators 
 mapping exists.
 
 The lookup reads markers off raw function objects via `vars()` (as `runnable_entrypoints` already
-did), so a dynamic `__torch_runner__` property never fires during dispatch.
+did), so a dynamic `__needs_autograd__` property never fires during dispatch.
 
 ### Consequences
 
@@ -653,3 +653,75 @@ ValueError: Unknown task 'export'; expected one of ['fit', 'test'].
 - **A different dispatch policy** (aliases, a default task, a per-role default): build it on top of
   `runnable_entrypoints` rather than beside it — the invariant to preserve is that the markers stay
   the only place the mapping is written down.
+
+## 8. The autograd marker is named for the framework; its FLAG for what it decides (2026-07-29)
+
+### Context
+
+`TorchRunner` exists so a GUI executor — which evaluates graph nodes under
+`torch.inference_mode()` for cheap, grad-free runs — can tell "this run does gradient descent"
+from "this run is inference-only" and re-enable autograd around the former. The mixin set a flag
+named after ITSELF, `__torch_runner__`, and that name answers a question nobody asks at the one
+place it is read:
+
+```python
+torch_runner = bool(getattr(runnable, "__torch_runner__", False))   # "is this a torch runner?"
+```
+
+Every runnable in this workspace is a torch runnable, so read literally the flag is always true —
+yet it is deliberately false for an evaluator, and the merged train+eval runnables override it as
+a per-task property whose body (`return self.task == "fit"`) contradicts its own name: predicting
+with a torch model does not stop the object from being "a torch runner". The name described the
+declaring class instead of the decision the reader makes with it.
+
+### Decision
+
+Keep the CLASS name (`TorchRunner` — autograd is a torch concept, and a non-torch backend would
+not inherit this mixin at all), rename the FLAG to **`__needs_autograd__`**. The two names then
+answer different questions on purpose: which framework's execution mode is at stake, and whether
+this particular run needs gradients.
+
+No compatibility alias. The flag is a duck-typed contract with exactly one reader, so the rename
+lands in both packages at once — consistent with the workspace's no-back-compat precedent.
+
+### Consequences
+
+- The dynamic per-task override reads as what it means, which is where the old name hurt most.
+- **The read fails OPEN** (`getattr(runnable, "__needs_autograd__", False)`): a reader left on the
+  old name sees `False` for every runnable and silently executes training under `inference_mode`
+  until `loss.backward()` raises *"element 0 of tensors does not require grad"*. That is why the
+  rename is all-or-nothing across the reader and the declarer — never a partial rollout.
+- An external duck-typed implementer (an object that sets the flag without inheriting the mixin)
+  must be updated by hand; there is no import to break and therefore no compile-time signal.
+
+### Example
+
+```python
+class TorchRunner:
+    __needs_autograd__: bool = True          # inherited by trainers and workflow combinators
+
+
+class Classifier(TorchRunner, L.LightningModule):
+    @property
+    def __needs_autograd__(self) -> bool:    # type: ignore[override]
+        """Only ``fit`` needs autograd; evaluate / test / predict are inference-only."""
+        return self.task == "fit"
+```
+
+```python
+# the executor side (one reader, no import of this package)
+if getattr(runnable, "__needs_autograd__", False):
+    with torch.inference_mode(False), torch.enable_grad():
+        runnable.run()
+else:
+    runnable.run()
+```
+
+### What you may change (and where it's documented)
+
+- **A runnable that never trains**: do not inherit `TorchRunner` at all — the absent flag is the
+  statement. Usage lives in `docs/runnable.md`.
+- **A runnable that sometimes trains**: override `__needs_autograd__` as a property, as above.
+- **Another execution-mode marker** (a "needs a GPU", "must run single-process" flag): follow the
+  same rule — name the class for the concern, the flag for the decision the executor makes, and
+  remember that a duck-typed read of a missing flag is silent.
