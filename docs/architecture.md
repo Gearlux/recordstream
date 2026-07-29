@@ -25,7 +25,8 @@ Maintenance rules:
 | Batching | `collate.py` | Grouping is the engine's; stacking is a pluggable registry | [§2](#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17) |
 | Storage & query | `storage/*` | The `typedrecord-v1` key-group layout over the codec; metadata scans without array loads | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) (contracts) + [storage.md](storage.md) |
 | Introspection & serialization | `discovery.py` | Callable↔string identity + registration-free module scans | [§4](#4-callablestring-serialization--passive-introspection-recordstreamdiscovery-2026-07-20) |
-| Runnables & workflows | `runnable.py`, `workflow.py`, `processing.py`, `cli.py` | `run()` objects, entry-point markers, combinators, the one `recordstream run` runner | no record yet — [runnable.md](runnable.md), [workflow.md](workflow.md) |
+| Runnables & workflows | `runnable.py`, `workflow.py`, `processing.py`, `cli.py` | `run()` objects, entry-point markers, combinators, the one `recordstream run` runner | [§7](#7-the-entrypoint-markers-are-the-dispatch-table-run_entrypoint-2026-07-29) + [runnable.md](runnable.md), [workflow.md](workflow.md) |
+| Model boundary | `outputs.py`, `predictions.py`, `core.ensure_record_dataset`, `labels.class_counts` | Dataset normalization in, prediction contracts + sinks out, class-balance statistics | [§8](#8-the-model-boundary-belongs-to-the-package-that-reads-it-2026-07-29) + [predictions.md](predictions.md) |
 
 ---
 
@@ -725,3 +726,90 @@ else:
 - **Another execution-mode marker** (a "needs a GPU", "must run single-process" flag): follow the
   same rule — name the class for the concern, the flag for the decision the executor makes, and
   remember that a duck-typed read of a missing flag is silent.
+
+## 8. The model boundary belongs to the package that reads it (2026-07-29)
+
+### Context
+
+Four surfaces used to live in the workspace's experiment-**tracking** library: a dataset
+normalizer (`ensure_record_dataset`), the prediction-output contracts (`ClassificationOutput` &
+co) with their torch builders, a predictions sink (`PredictionsSink` +
+`ClassificationPredictionsSink`), and class-imbalance weighting (`apply_class_weights` and its
+inverse-frequency arithmetic).
+
+None of them tracked anything. The normalizer's whole body was "already a `Stream`? else wrap in
+one". The sink's own module docstring justified its placement circularly — it lived there
+*because the contract and the output type lived there* — while its body was record plumbing plus a
+numpy `argsort`, threading its result through recordstream ops. And the sink advertised itself as
+modality-neutral while building its diagnostics from `pack_id` / `iq_file` /
+`window_start_sample`: signal-domain keys, in a class a tabular classifier was supposed to reuse.
+
+The pattern underneath: each of these describes a boundary whose only READER is elsewhere, and a
+contract that outlives its reader accumulates justifications instead of users.
+
+### Decision
+
+A package owns a contract when it owns the reader. So:
+
+- `ensure_record_dataset` / `RecordSource` land beside `Stream` — the only type they know.
+- `recordstream.outputs` holds the contracts *and* their torch builders, because
+  `recordstream.predictions` — the sink that reads `probs` by name — is right next to it.
+- `recordstream.predictions` holds the sink and the `PredictionsSink` protocol.
+- `class_counts` / `inverse_frequency_weights` land beside `LabelMap`, because how often each
+  class occurs is a statistic over the labels.
+
+The line is drawn at the *framework convention*, not at "does this import torch" (this package
+already hard-depends on torch — a `Stream` IS a `torch.utils.data.Dataset`). What did NOT move:
+whether a loss accepts a `weight` argument and how to inject it. That is `torch.nn`'s constructor
+convention — Keras takes `class_weight` on `fit()` — so it lives in the consuming runnable as an
+overridable method, and this package never learns what a loss is.
+
+### Consequences
+
+- The weights come back as **numpy**, matching `recordstream.batch` (only `batch_tensor` is
+  torch). A torch caller writes `torch.as_tensor(w)`; a Keras backend feeds the same array to
+  `fit(class_weight=…)`. One statistic, no framework baked in.
+- `inverse_frequency_weights` absorbed the `LabelMap.to_ids` flattening consumers used to write by
+  hand, so a multi-label target counts for every class it names with no call-site branch.
+- The engine's own rules bit immediately and usefully: the package-wide zero-arg-construction
+  sweep failed on the imported sink (`ops` was a required constructor argument), so the check
+  moved to `write()` where it belongs. Stricter host, better tenant.
+- Two sink protocols now coexist (`DataSink.write(record)` vs
+  `PredictionsSink.write(prediction, metadata)`). That is deliberate — a model emits a batch while
+  the sink contract is per-record, so the halves arrive separately — and load-bearing downstream,
+  where a visual editor's node palette keys off the distinction. Collapsing them is filed in
+  `TASKS.md` rather than left to drift.
+- No back-compat aliases: a stale import from the old location fails loudly.
+
+### Example
+
+```python
+# a trainer, walking its targets exactly once and reusing that pass three ways
+targets = self._walk_targets(self.train_set)          # ONE pass
+self.label_map = LabelMap.fit(targets)                # (1) the encoding
+num_classes = self.label_map.num_classes              # (2) the head size
+weights = inverse_frequency_weights(targets, num_classes, self.label_map)   # (3) the balance
+
+if weights is not None:
+    self.apply_class_weights(weights)                 # framework hook — torch: loss.weight = ...
+```
+
+```python
+# the boundary on the way out
+def predict_step(self, batch, batch_idx):
+    out = classification_output(self(x))              # recordstream.outputs
+    self.predictions_sink.write(out, metadata)        # recordstream.predictions
+    return out
+```
+
+### What you may change (and where it's documented)
+
+- **A new prediction contract**: add it to `recordstream.outputs`, generic in the array type, and
+  give it a builder only if the payload is DERIVED (logits → probs). A payload the model hands you
+  directly (boxes) gets no builder. Usage lives in `docs/predictions.md`.
+- **Another task's predictions sink**: implement `PredictionsSink` beside the classification one,
+  or in the domain package when it needs domain geometry (a detector's back-projection to
+  time/frequency does).
+- **A different balancing policy** (effective-number, sqrt-inverse): add it beside
+  `inverse_frequency_weights` in `recordstream.labels` as another statistic returning numpy. Do
+  NOT add the injection here — that stays a per-backend method on the runnable.

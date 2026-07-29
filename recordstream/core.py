@@ -690,3 +690,38 @@ class Stream(torch.utils.data.Dataset[Record]):
         want = set(keys)
         for record in self:
             yield {k: v for k, v in record.items() if k in want}
+
+
+#: What a wired dataset slot may hold — the contract :func:`ensure_record_dataset` enforces,
+#: named ONCE here rather than restated by every consumer: a map-style ``Dataset`` (which a
+#: :class:`Stream` is), or any iterable of records (a recordstream source, a plain list of
+#: record dicts). Consumers annotate their slots ``Optional[Lazy[RecordSource]]`` — ``Lazy``
+#: because they flow the slot themselves at run time.
+RecordSource = Union[torch.utils.data.Dataset[Any], Iterable[Record]]
+
+
+def ensure_record_dataset(source: RecordSource) -> torch.utils.data.Dataset[Any]:
+    """Normalize any wired source into a map-style ``Dataset`` that yields record dicts.
+
+    A wired ``train_set`` / ``val_set`` / ``test_set`` may be a :class:`Stream`, another torch
+    ``Dataset``, a recordstream source (``HuggingFaceSource``), or a plain list — and its items
+    may be record dicts or raw rows. A ``Stream`` already coerces every item to a record, so:
+
+    * a ``Stream`` is returned as-is (already a ``Dataset`` of records; this preserves a
+      subclass's own wrap, e.g. a label-encoding Stream with its ``label_names``), and
+    * anything else is wrapped in a ``Stream``, which makes it both a map-style ``Dataset``
+      AND a record-yielding one.
+
+    Calling this once up front lets the rest of a training pipeline (target detection, label
+    fitting/encoding, collate, metrics) assume record items — no per-call "is this a record?"
+    checks. It lives beside :class:`Stream` because that is the only type it knows: the whole
+    body is "already a Stream? else wrap in one".
+    """
+    if isinstance(source, Stream):
+        return source
+    # `cast`: a map-style `Dataset` iterates through Python's legacy `__getitem__` protocol,
+    # which mypy does not model — so it is not `Iterable` statically even though `Stream`
+    # consumes it correctly at runtime (`Stream.source` accepts "any iterable or indexable
+    # dataset"). Widening that annotation with a Protocol breaks `to_pydantic` for every
+    # Stream, so the exception is documented here instead. See TASKS.md.
+    return Stream(source=cast(Iterable[Any], source))

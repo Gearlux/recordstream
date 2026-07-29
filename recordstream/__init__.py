@@ -13,7 +13,16 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 from recordstream.batch import batch_metadata, batch_tensor, batch_values, multi_hot
 from recordstream.collate import collate, collate_records, get_collate, register_collate, registered_collates
 from recordstream.context import Context
-from recordstream.core import FilterOp, JointStream, Stream, WrappedOp, register_op_family, registered_op_families
+from recordstream.core import (
+    FilterOp,
+    JointStream,
+    RecordSource,
+    Stream,
+    WrappedOp,
+    ensure_record_dataset,
+    register_op_family,
+    registered_op_families,
+)
 
 # --- the record data model + transforms + item codec ----------------------------------------
 from recordstream.dispatch import dispatch, register_kernel, registered_kernels
@@ -44,7 +53,16 @@ from recordstream.items import (
     register_item,
     with_data,
 )
-from recordstream.labels import LabelMap
+from recordstream.labels import LabelMap, class_counts, inverse_frequency_weights
+from recordstream.outputs import (
+    ClassificationOutput,
+    DetectionOutput,
+    DetectionPredictions,
+    SegmentationOutput,
+    classification_output,
+    segmentation_output,
+)
+from recordstream.predictions import ClassificationPredictionsSink, PredictionsSink
 from recordstream.processing import DatasetProcessor
 from recordstream.projection import SupportsProjection, iter_key, num_classes, project
 from recordstream.runnable import (
@@ -95,6 +113,8 @@ __all__ = [
     "Context",
     "Stream",
     "JointStream",
+    "RecordSource",
+    "ensure_record_dataset",
     "FilterOp",
     "WrappedOp",
     "register_op_family",
@@ -112,6 +132,17 @@ __all__ = [
     "register_collate",
     "registered_collates",
     "LabelMap",
+    "class_counts",
+    "inverse_frequency_weights",
+    # ---- prediction contracts + sinks ----
+    "ClassificationOutput",
+    "DetectionOutput",
+    "DetectionPredictions",
+    "SegmentationOutput",
+    "classification_output",
+    "segmentation_output",
+    "PredictionsSink",
+    "ClassificationPredictionsSink",
     # ---- sources ----
     "HuggingFaceSource",
     "DatasetSplit",

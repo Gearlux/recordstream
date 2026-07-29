@@ -70,3 +70,35 @@ lm.to_ids("dog")                     # [2]      a bare value works too
 Because encoded ids pass through untouched, `LabelMap().to_ids(...)` (an *empty* map) is a valid
 way to normalize an already-encoded dataset to id lists — useful for counting classes or
 class-frequency statistics without fitting anything.
+
+## Class-balance weights (`class_counts` / `inverse_frequency_weights`)
+
+Training on a skewed label distribution biases a model toward the majority class. The remedy is
+per-class weights, and *deriving* them is a statistic over the labels — so it lives here, beside
+the `LabelMap` that normalizes the targets:
+
+```python
+from recordstream import LabelMap, inverse_frequency_weights, iter_key
+
+targets = list(iter_key(train_source, "class"))     # walk ONCE — see the note below
+weights = inverse_frequency_weights(targets, num_classes=3, label_map=lm)
+# array([0.667, 2.0, 1.0], dtype=float32)   rare classes weigh more
+```
+
+`w[c] = total / (num_classes * count[c])`, so a class at exactly the mean frequency gets `1.0`. A
+class observed **zero** times gets `0.0` (never infinity), an id outside `[0, num_classes)` is
+ignored rather than raising, and the whole call returns `None` when nothing was counted — so "no
+weights" stays distinguishable from "all-zero weights". `class_counts(...)` exposes the raw
+histogram if you want it.
+
+Three things the signature is deliberate about:
+
+- **It takes already-walked targets, not a source.** A trainer typically walks the target stream
+  once and reuses that single pass to fit the `LabelMap`, derive `num_classes`, *and* weigh the
+  classes. A convenience that walked internally would quietly double the passes over the dataset.
+- **Every target shape works**, because `LabelMap.to_ids` normalizes it: a `Label`, a `MultiLabel`
+  (counting for every class it names), a bare id with no map at all, a name with a fitted map.
+- **It returns numpy**, like everything in `recordstream.batch` except `batch_tensor`. What a
+  framework does with the vector is its own convention — `torch.nn` takes a `weight` tensor in the
+  loss constructor, Keras takes `class_weight` on `fit()` — so that last step belongs to the
+  consuming trainer, not here.

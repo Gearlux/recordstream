@@ -2,10 +2,11 @@
 
 import json
 
+import numpy as np
 import pytest
 
 from recordstream import Label, MultiLabel, is_class_id
-from recordstream.labels import LabelMap
+from recordstream.labels import LabelMap, class_counts, inverse_frequency_weights
 from recordstream.ops.target import DecodeTarget, EncodeTarget
 
 # ---------------------------------------------------------------------------
@@ -299,3 +300,71 @@ def test_encode_flows_a_deferred_source() -> None:
     deferred = ConfluidClass(Stream, source=records)
 
     assert list(iter_key(LabelMap(mapping={"cat": 0}).encode(deferred), "class")) == [0]
+
+
+# ---------------------------------------------------------------------------
+# class_counts / inverse_frequency_weights — the label STATISTIC behind balancing
+# ---------------------------------------------------------------------------
+
+
+def test_class_counts_accepts_every_target_shape() -> None:
+    """Label / MultiLabel / bare id all normalize through LabelMap.to_ids."""
+    lm = LabelMap(mapping={"cat": 0, "dog": 1})
+    assert list(class_counts([Label("cat"), Label("dog"), Label("cat")], 2, lm)) == [2.0, 1.0]
+    # A multi-label target counts for EVERY class it names.
+    assert list(class_counts([MultiLabel(["cat", "dog"]), MultiLabel(["dog"])], 2, lm)) == [1.0, 2.0]
+    # Integer targets need no map at all — `to_ids` passes encoded ids through.
+    assert list(class_counts([0, 1, 1], 2)) == [1.0, 2.0]
+
+
+def test_class_counts_skips_none_targets() -> None:
+    assert list(class_counts([Label(0), None, Label(0)], 2)) == [2.0, 0.0]
+
+
+def test_uniform_distribution_weights_every_class_equally() -> None:
+    weights = inverse_frequency_weights([0, 1, 2, 0, 1, 2], num_classes=3)
+    assert weights is not None
+    assert np.allclose(weights, np.ones(3))
+
+
+def test_rare_classes_weigh_more_than_common_ones() -> None:
+    weights = inverse_frequency_weights([0, 0, 0, 1], num_classes=2)
+    assert weights is not None
+    # w = total / (num_classes * count): 4/(2*3) and 4/(2*1)
+    assert np.allclose(weights, np.array([2 / 3, 2.0]))
+    assert weights[1] > weights[0]
+
+
+def test_an_unobserved_class_gets_zero_not_infinity() -> None:
+    weights = inverse_frequency_weights([0, 0], num_classes=3)
+    assert weights is not None
+    assert weights[1] == 0.0 and weights[2] == 0.0
+    assert np.isfinite(weights).all()
+
+
+def test_out_of_range_ids_are_ignored_rather_than_raising() -> None:
+    """A stray label must not abort a training run."""
+    weights = inverse_frequency_weights([0, 1, 99, -1], num_classes=2)
+    assert weights is not None
+    assert np.allclose(weights, np.ones(2))
+
+
+def test_no_observations_returns_none() -> None:
+    """`None` distinguishes "no weights" from "all-zero weights"."""
+    assert inverse_frequency_weights([], num_classes=3) is None
+    assert inverse_frequency_weights([7, 8], num_classes=3) is None
+
+
+def test_weights_are_numpy_float32_not_a_tensor() -> None:
+    """Only `batch_tensor` is torch in this package — a framework converts in one line."""
+    weights = inverse_frequency_weights([0, 1], num_classes=2)
+    assert weights is not None
+    assert isinstance(weights, np.ndarray) and weights.dtype == np.float32
+
+
+def test_weights_encode_class_NAMES_through_the_map() -> None:
+    """The flattening a consumer used to do by hand lives here now."""
+    lm = LabelMap(mapping={"cat": 0, "dog": 1})
+    weights = inverse_frequency_weights([Label("cat")] * 3 + [Label("dog")], 2, lm)
+    assert weights is not None
+    assert np.allclose(weights, np.array([2 / 3, 2.0]))

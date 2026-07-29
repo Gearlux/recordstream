@@ -27,6 +27,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
 
+import numpy as np
 from confluid import configurable
 
 from recordstream.items import Label, MultiLabel, is_class_id
@@ -241,4 +242,84 @@ class LabelMap:
         return cls.from_label_names([str(n) for n in names])
 
 
-__all__ = ["LabelMap"]
+def class_counts(targets: Iterable[Any], num_classes: int, label_map: Optional[LabelMap] = None) -> np.ndarray:
+    """How often each class id occurs in ``targets`` — the label statistic behind class balancing.
+
+    Every target shape is accepted, because :meth:`LabelMap.to_ids` normalizes them: a
+    :class:`~recordstream.Label` or :class:`~recordstream.MultiLabel` item, a bare name/id, or a
+    sequence. A multi-label target counts for EVERY class it names. ``None`` targets are skipped.
+
+    Args:
+        targets: Already-walked target values (see the note on walking below).
+        num_classes: Width of the returned vector. Ids outside ``[0, num_classes)`` are IGNORED
+            rather than raising — a stray label must not abort a training run.
+        label_map: Map for class-NAME targets. Omit for integer targets: an empty
+            :class:`LabelMap` passes already-encoded ids through, which is the ``to_ids`` contract.
+
+    Returns:
+        A ``float64`` vector of length ``num_classes``.
+
+    Note:
+        This takes ALREADY-WALKED targets, not a source, on purpose. A caller typically walks the
+        target stream once (``iter_key(source, key)``) and reuses that single pass for several
+        answers — fitting a :class:`LabelMap`, deriving the class count, and weighting — and a
+        convenience that walked internally would silently double the passes over the dataset.
+
+    Example::
+
+        class_counts([Label("cat"), Label("dog"), Label("cat")], 2, LabelMap({"cat": 0, "dog": 1}))
+        # array([2., 1.])
+    """
+    mapper = label_map if label_map is not None else LabelMap()
+    counts = np.zeros(int(num_classes), dtype=np.float64)
+    for target in targets:
+        if target is None:
+            continue
+        for class_id in mapper.to_ids(target):
+            if 0 <= class_id < num_classes:
+                counts[class_id] += 1.0
+    return counts
+
+
+def inverse_frequency_weights(
+    targets: Iterable[Any], num_classes: int, label_map: Optional[LabelMap] = None
+) -> Optional[np.ndarray]:
+    """Per-class weights inversely proportional to observed frequency.
+
+    ``w[c] = total / (num_classes * count[c])`` — a class at exactly the mean frequency gets
+    ``1.0``, rarer classes more, commoner classes less. Training on a skewed label distribution
+    biases a model toward the majority class; feeding these weights to a loss (or a framework's
+    ``class_weight`` knob) is the standard remedy.
+
+    This is a statistic OVER THE DATA, which is why it lives here rather than beside a loss: what
+    a consuming framework then does with the vector — ``torch.nn``'s ``weight=`` constructor
+    argument, Keras's ``class_weight`` on ``fit()`` — is that framework's convention, and the
+    numbers are the same either way. Hence the **numpy** return (the same rule as
+    :mod:`recordstream.batch`: only ``batch_tensor`` is torch); a torch caller writes
+    ``torch.as_tensor(weights)``.
+
+    Args:
+        targets: Already-walked target values (see :func:`class_counts` on why not a source).
+        num_classes: Width of the returned vector.
+        label_map: Map for class-NAME targets; omit for integer targets.
+
+    Returns:
+        A ``float32`` vector of length ``num_classes``, or ``None`` when nothing was counted (an
+        empty or fully out-of-range target set) — so a caller can tell "no weights" from
+        "all-zero weights". A class observed **zero** times gets weight ``0.0``, not infinity.
+
+    Example::
+
+        inverse_frequency_weights([Label(0), Label(0), Label(0), Label(1)], num_classes=2)
+        # array([0.6667, 2.0], dtype=float32)
+    """
+    counts = class_counts(targets, num_classes, label_map)
+    total = float(counts.sum())
+    if total <= 0:
+        return None
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = np.where(counts > 0, total / (num_classes * counts), 0.0)
+    return weights.astype(np.float32)
+
+
+__all__ = ["LabelMap", "class_counts", "inverse_frequency_weights"]
