@@ -33,7 +33,9 @@ lm.num_classes        # 3
 lm.label_names        # ["bird", "cat", "dog"]  (id -> name)
 lm.save("class_names.json")                     # {"class_names": [...], "num_classes": N}
 
-encoded = Stream(source=train_source, ops=[lm.encode_op()])   # "class" Labels now carry int ids
+encoded = lm.encode(train_source)             # a Stream whose "class" Labels carry int ids
+# (the long form, when you need to pin the field or tolerate unknowns:
+#  Stream(source=train_source, ops=[lm.encode_op(ignore_unknown=True)]))
 
 # Later, at eval time — reload the SAME ordering instead of refitting:
 lm2 = LabelMap.load("class_names.json")

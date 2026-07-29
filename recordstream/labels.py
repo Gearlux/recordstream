@@ -25,12 +25,15 @@ consumer never branches on "are these names or ids?".
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Iterator, List, Optional, Sequence, Union
 
 from confluid import configurable
 
 from recordstream.items import Label, MultiLabel, is_class_id
 from recordstream.ops.target import DecodeTarget, EncodeTarget
+
+if TYPE_CHECKING:  # Stream imports labels indirectly — keep this annotation-only
+    from recordstream.core import Stream
 
 
 def _iter_label_values(target: Any) -> Iterator[Any]:
@@ -98,6 +101,43 @@ class LabelMap:
     def encode_op(self, ignore_unknown: bool = False, default: Any = 0) -> EncodeTarget:
         """Return an :class:`~recordstream.ops.target.EncodeTarget` transform that maps name → id via this map."""
         return EncodeTarget(mapping=dict(self._require()), ignore_unknown=ignore_unknown, default=default)
+
+    def encode(self, source: Any) -> "Stream":
+        """Wrap ``source`` in a :class:`~recordstream.Stream` that applies this map's encode op.
+
+        The one-call form of the two-step idiom every consumer of a name-labelled dataset
+        writes — ``Stream(source=source, ops=[label_map.encode_op()])``. It lives here because
+        it is a :class:`LabelMap` operation over a source, not knowledge about any particular
+        task: a classifier, a detector and a tagger all need the identical wrap.
+
+        Args:
+            source: Any source/stream the engine accepts. A deferred ``!class:`` marker is
+                flowed first, so a config-wired source works without the caller flowing it.
+
+        Returns:
+            A :class:`~recordstream.Stream` yielding the same records with their labels mapped
+            to integer ids. Which key is encoded follows :class:`EncodeTarget`'s own rule (its
+            blank ``field`` picks the first :class:`~recordstream.Label`); pass a configured
+            ``encode_op()`` into a ``Stream`` yourself when you need to pin a different key or
+            tolerate unknowns.
+
+        Raises:
+            KeyError: lazily, while iterating, when a label is not in the mapping. That
+            includes an ALREADY-ENCODED id — unlike :meth:`to_ids`, which passes ids through,
+            the op is a straight lookup, so double-encoding fails loudly instead of silently
+            remapping. Wrap a source only when its labels are names (ask
+            :func:`~recordstream.is_class_id`), or build the op with ``ignore_unknown=True``.
+
+        Example::
+
+            label_map = LabelMap.fit(iter_key(train_source, "class"))
+            train_set = label_map.encode(train_source)
+        """
+        from confluid import flow
+
+        from recordstream.core import Stream
+
+        return Stream(source=flow(source), ops=[self.encode_op()])
 
     def decode_op(self, ignore_unknown: bool = False, default: Any = None) -> DecodeTarget:
         """Return a :class:`~recordstream.ops.target.DecodeTarget` transform that maps id → name via this map."""

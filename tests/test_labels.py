@@ -247,3 +247,55 @@ def test_iter_key_unwraps_a_multilabel_to_its_values() -> None:
 
     records = [{"class": MultiLabel(["a", "b"])}, {"class": MultiLabel(["c"])}]
     assert list(iter_key(records, "class")) == [["a", "b"], ["c"]]
+
+
+# --------------------------------------------------------------------------- #
+# LabelMap.encode — the fit -> encode idiom in one call
+# --------------------------------------------------------------------------- #
+
+
+def test_encode_wraps_a_source_into_an_encoding_stream() -> None:
+    """The two-step idiom every consumer of a name-labelled dataset used to write itself."""
+    from recordstream import Stream, iter_key
+
+    records = [{"image": i, "class": Label(n)} for i, n in enumerate(["dog", "cat", "bird", "cat"])]
+    label_map = LabelMap.fit(iter_key(records, "class"))
+
+    encoded = label_map.encode(records)
+
+    assert isinstance(encoded, Stream)
+    assert list(iter_key(encoded, "class")) == [2, 1, 0, 1]
+
+
+def test_encode_leaves_the_source_untouched() -> None:
+    """A Stream is a view — encoding must not mutate the records it reads."""
+    records = [{"class": Label("cat")}]
+    LabelMap(mapping={"cat": 0}).encode(records)
+
+    assert records[0]["class"].value == "cat"
+
+
+def test_encode_refuses_an_already_encoded_id() -> None:
+    """Unlike `to_ids`, the OP is a straight lookup — double-encoding fails loudly.
+
+    Silently remapping an id would corrupt the labels of anyone who wrapped a source twice,
+    so the caller asks `is_class_id` first (which is what the consuming trainers do).
+    """
+    from recordstream import iter_key
+
+    encoded = LabelMap(mapping={"cat": 0}).encode([{"class": Label(1)}])
+
+    with pytest.raises(KeyError, match="not in mapping"):
+        list(iter_key(encoded, "class"))
+
+
+def test_encode_flows_a_deferred_source() -> None:
+    """A config-wired `!class:` source works without the caller flowing it first."""
+    from confluid import Class as ConfluidClass
+
+    from recordstream import Stream, iter_key
+
+    records = [{"class": Label("cat")}]
+    deferred = ConfluidClass(Stream, source=records)
+
+    assert list(iter_key(LabelMap(mapping={"cat": 0}).encode(deferred), "class")) == [0]
