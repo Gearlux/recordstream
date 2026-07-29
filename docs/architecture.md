@@ -569,3 +569,87 @@ accepts_broadcast(Enable, "enabled")       # True — the bare --enabled form no
 - **More than one switch in a chain**: use several `Enable` wrappers with distinct names rather
   than teaching one wrapper several toggles — each name is independently addressable, and the
   broadcast form still flips them all.
+
+## 7. The `@entrypoint` markers ARE the dispatch table (`run_entrypoint`, 2026-07-29)
+
+### Context
+
+A merged train+eval runnable exposes several capabilities from ONE class and selects between them
+with a single `task` knob. Two readers need to know the task→capability mapping: the runnable's own
+`run()`, which must call the right method, and a discovery consumer (a config generator, a visual
+editor), which must know that one class both trains and evaluates and which `task` value means
+"evaluate". The `@entrypoint(task, role, primary)` marker was introduced for the second reader only;
+`run()` carried its own copy:
+
+```python
+dispatch = {"fit": self.fit, "evaluate": self.evaluate, "test": self.test, "predict": self.predict}
+```
+
+So every merged runnable stated the same mapping twice — once in the decorators, once in the dict —
+and three consumer packages carried that same five-line block verbatim. The two copies drift in a
+direction that bites: a config generator pins `task:` from `entrypoint_tasks` (the markers), so a
+capability added to the markers and forgotten in the dict yields a *generated* config that dies at
+dispatch with "unknown task" while discovery advertises it as supported. Nothing could catch that —
+the dict is not derived from anything, so no test can compare it to a source of truth.
+
+### Decision
+
+The markers are the ONE table, and `run_entrypoint(runnable, task)` is their runtime half: it builds
+`{declared task: method name}` from `runnable_entrypoints(type(runnable))`, calls the match, and
+raises `ValueError` on an unknown task listing the declared ones in declaration order. A merged
+runnable's `run()` is then `run_entrypoint(self, self.task)` — the decorators are the only place the
+mapping exists.
+
+The lookup reads markers off raw function objects via `vars()` (as `runnable_entrypoints` already
+did), so a dynamic `__torch_runner__` property never fires during dispatch.
+
+### Consequences
+
+- Adding a capability is ONE edit: decorate a method. Discovery and dispatch cannot disagree,
+  because they read the same annotations.
+- The error message doubles as the class's capability list, in declaration order rather than the
+  sorted order a set would give.
+- What is lost: the dict form let a type checker verify `self.fit` exists; `getattr(self, name)()`
+  is `Any`. Cheap here — the methods are decorated in the same file, and a wrong name would have to
+  survive its own `@entrypoint` line.
+- Cost is one MRO walk per `run()` — once per training run.
+- The markers are now load-bearing at RUNTIME, not just for discovery: dropping an `@entrypoint`
+  breaks the run, where before it only emptied a picker. That is the intended direction (a silent
+  discovery gap becomes a loud dispatch failure), but it means the decorators are no longer
+  optional metadata for a class that dispatches this way.
+
+### Example
+
+```python
+from recordstream import TorchRunner, entrypoint, run_entrypoint
+
+class Classifier(TorchRunner):
+    def __init__(self, task: str = "fit") -> None:
+        self.task = task
+
+    def run(self) -> None:
+        run_entrypoint(self, self.task)          # no second copy of the mapping
+
+    @entrypoint("fit", role="trainer", primary=True)
+    def fit(self) -> None: ...
+
+    @entrypoint("test", role="evaluator", primary=True)
+    def test(self) -> None: ...
+```
+
+```python
+>>> Classifier(task="test").run()          # calls Classifier.test()
+>>> Classifier(task="export").run()
+ValueError: Unknown task 'export'; expected one of ['fit', 'test'].
+```
+
+### What you may change (and where it's documented)
+
+- **Adding a capability**: decorate the method with `@entrypoint("<task>", role=..., primary=...)`
+  and extend the runnable's own `task` Literal. Nothing else — usage lives in `docs/runnable.md`.
+- **A capability that is NOT config-selectable**: leave it undecorated and call it directly; the
+  marker means "reachable through `task:`", so decorating a helper would advertise it to config
+  generators as a runnable capability.
+- **A different dispatch policy** (aliases, a default task, a per-role default): build it on top of
+  `runnable_entrypoints` rather than beside it — the invariant to preserve is that the markers stay
+  the only place the mapping is written down.

@@ -53,7 +53,7 @@ declares exactly that, per method.
 ## A straightforward example
 
 ```python
-from recordstream import ProgressReporting, TorchRunner, entrypoint
+from recordstream import ProgressReporting, TorchRunner, entrypoint, run_entrypoint
 
 class Classifier(TorchRunner, ProgressReporting):
     """One class, four capabilities — run() dispatches off the ``task`` knob."""
@@ -62,8 +62,7 @@ class Classifier(TorchRunner, ProgressReporting):
         self.task = task
 
     def run(self) -> None:
-        {"fit": self.fit, "evaluate": self.evaluate,
-         "test": self.test, "predict": self.predict}[self.task]()
+        run_entrypoint(self, self.task)      # the markers below ARE the dispatch table
 
     @entrypoint("fit", role="trainer", primary=True)
     def fit(self) -> None: ...                      # gradient training
@@ -106,6 +105,26 @@ Real output for the class above (these are executed facts, not sketches):
 
 `runnable_entrypoints` walks the MRO (an inherited entry point is found; a subclass override
 wins) and reads the marker off the raw function object, so property getters never fire.
+
+## Dispatching: `run_entrypoint`
+
+`run()` above dispatches *through* the markers rather than restating them:
+
+```python
+>>> Classifier(task="test").run()      # calls Classifier.test()
+>>> Classifier(task="export").run()
+ValueError: Unknown task 'export'; expected one of ['fit', 'evaluate', 'test', 'predict'].
+```
+
+The declared tasks are listed in **declaration order**, so the error reads as the class's
+capability list. The return value of the entry-point method is passed through.
+
+Write the `run()` body this way rather than as a hand-written `{task: method}` dict. The dict
+states the same mapping a second time, and the copies drift in one direction that bites: a
+config generator pins `task:` from `entrypoint_tasks` — the markers — so a capability added to
+the markers and forgotten in the dict produces a *generated* config that dies at dispatch with
+"unknown task" while discovery advertises it as supported. With `run_entrypoint` there is one
+table, and adding a fifth `@entrypoint` method is all that adding a fifth capability takes.
 
 ## How a consumer uses this
 

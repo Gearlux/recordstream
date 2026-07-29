@@ -28,11 +28,13 @@ capabilities from one class — the merged train+eval classes drive ``fit`` /
 method with the ``task`` value it runs and a ``role`` label (``"trainer"`` /
 ``"evaluator"`` / ``"predictor"``). A discovery consumer (a config generator, a visual
 editor) reads these via :func:`runnable_entrypoints` to learn that one class both
-trains and evaluates, instead of assuming a separate class per role. Straightforward
-worked example (the class + the exact introspector outputs): ``docs/runnable.md``.
+trains and evaluates, instead of assuming a separate class per role — and the runnable's
+own ``run()`` dispatches through :func:`run_entrypoint`, so the markers ARE the dispatch
+table rather than a description of one kept in sync by hand. Straightforward worked
+example (the class + the exact introspector outputs): ``docs/runnable.md``.
 """
 
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from loggair import get_logger
 
@@ -112,8 +114,7 @@ def entrypoint(task: str, role: str = "runnable", primary: bool = False) -> Call
 
         class Classifier(TorchRunner, ProgressReporting):
             def run(self) -> None:
-                {"fit": self.fit, "evaluate": self.evaluate,
-                 "test": self.test, "predict": self.predict}[self.task]()
+                run_entrypoint(self, self.task)   # the markers below ARE the dispatch table
 
             @entrypoint("fit", role="trainer", primary=True)
             def fit(self) -> None: ...
@@ -172,11 +173,40 @@ def entrypoint_tasks(cls: type, role: str) -> List[str]:
     return [str(meta["task"]) for _, meta in matches]
 
 
+def run_entrypoint(runnable: object, task: str) -> Any:
+    """Call ``runnable``'s :func:`entrypoint` method whose declared task is ``task``.
+
+    This is the RUNTIME half of the marker: a merged train+eval class's ``run()`` is
+    ``run_entrypoint(self, self.task)``, so the ``@entrypoint`` decorators ARE the dispatch
+    table instead of merely describing one. A hand-written ``{task: method}`` dict states the
+    same mapping a second time, and the two drift silently in one direction that matters — a
+    config generator pins ``task:`` from :func:`entrypoint_tasks` (the markers), so a
+    capability added to the markers but forgotten in the dict yields a generated config that
+    fails at dispatch with "unknown task" while discovery advertises it as supported.
+
+    Unknown tasks raise :class:`ValueError` listing the declared ones in DECLARATION order
+    (``runnable_entrypoints`` preserves it), which reads as the class's capability list.
+
+    Args:
+        runnable: The instance to dispatch on (its ``type()`` carries the markers).
+        task: The ``task`` value to run, matched against each entry point's declared task.
+
+    Returns:
+        Whatever the entry-point method returns (``None`` for the merged runnables).
+    """
+    by_task = {str(meta["task"]): name for name, meta in runnable_entrypoints(type(runnable)).items()}
+    name = by_task.get(task)
+    if name is None:
+        raise ValueError(f"Unknown task {task!r}; expected one of {list(by_task)}.")
+    return getattr(runnable, name)()
+
+
 __all__ = [
     "ProgressCallback",
     "ProgressReporting",
     "TorchRunner",
     "entrypoint",
     "entrypoint_tasks",
+    "run_entrypoint",
     "runnable_entrypoints",
 ]

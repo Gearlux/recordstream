@@ -104,7 +104,7 @@ generated tool schema set the toggle too (see [docs/architecture.md](docs/archit
 | [docs/projection.md](docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), `num_classes`, the fittable `LabelMap` |
 | [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), array introspection helpers |
 | [docs/configure.md](docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
-| [docs/runnable.md](docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers with a worked example, `TorchRunner` / `ProgressReporting` |
+| [docs/runnable.md](docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
 | [docs/workflow.md](docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
 | [docs/augmentation.md](docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
 | [docs/architecture.md](docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |

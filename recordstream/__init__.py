@@ -53,6 +53,7 @@ from recordstream.runnable import (
     TorchRunner,
     entrypoint,
     entrypoint_tasks,
+    run_entrypoint,
     runnable_entrypoints,
 )
 from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource, SplitName
@@ -128,6 +129,7 @@ __all__ = [
     "ProgressCallback",
     "entrypoint",
     "entrypoint_tasks",
+    "run_entrypoint",
     "runnable_entrypoints",
     "DatasetProcessor",
     "Sequence",
