@@ -39,7 +39,10 @@ result after its last reader, and :func:`to_ops` computes the same liveness into
 ``drop`` flags on the emitted context ops.
 """
 
+import concurrent.futures
 import inspect
+import multiprocessing
+from copy import deepcopy
 from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 import torch.utils.data
@@ -48,7 +51,7 @@ from confluid import resolve as _confluid_resolve
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
-from recordstream.core import _apply_op
+from recordstream.core import OpInvoker, OpMatcher, _apply_op, _extra_op_families, _sync_op_families
 from recordstream.items import Record
 from recordstream.ops.context import _MISSING, Apply, Capture, Drop, MergeFields, Save, Use, _read_output
 
@@ -243,6 +246,116 @@ def _result_readers(steps: Sequence[FlowStep], outputs: str) -> Dict[str, List[T
 # ---------------------------------------------------------------------------
 # The FlowGraph engine
 # ---------------------------------------------------------------------------
+
+
+def run_steps(
+    seed: Any,
+    steps: Sequence[FlowStep],
+    outputs: str,
+    readers: Optional[Dict[str, List[Tuple[int, str]]]] = None,
+) -> Optional[Record]:
+    """Run ONE record through the parsed steps; ``None`` = filtered (an op returned None).
+
+    The engine's per-record kernel, module-level so a spawn worker can pickle a reference to
+    it. ``readers`` is the slot-granular reader accounting from :func:`_result_readers`; it
+    depends only on ``(steps, outputs)``, so a caller running many records MUST compute it
+    once and pass it in — recomputing per record is an O(steps²) tax on every record (it was
+    measured at 3.4 µs/record on a 23-step pipeline, roughly half the graph engine's total
+    overhead over a flat op list).
+    """
+    if readers is None:
+        readers = _result_readers(steps, outputs)
+    env: Dict[str, Any] = {}
+    remaining = {name: len(idx) for name, idx in readers.items()}
+
+    def read_result(name: str, *, copy: bool) -> Any:
+        value = env[name]
+        remaining[name] -= 1
+        if remaining[name] <= 0:
+            del env[name]
+        elif copy:
+            value = deepcopy(value)
+        return value
+
+    prev: Optional[str] = None
+    for step in steps:
+        # 1. the input record (implicit stream reads move; explicit fan-out reads copy)
+        if step.from_ is not None:
+            record = read_result(step.from_, copy=True)
+        elif prev is not None:
+            record = read_result(prev, copy=False)
+        else:
+            record = seed
+
+        # 2. fan-in: UNION the merge_from steps' entries (slot order, last wins)
+        if step.merge_from:
+            if not isinstance(record, dict):
+                raise TypeError(
+                    f"flow step {step.name!r}: merge_from is the record fan-in but the carrier is "
+                    f"{type(record).__name__} — expected a record dict."
+                )
+            merged = dict(record)
+            for ref in step.merge_from:
+                value = read_result(ref, copy=True)
+                if not isinstance(value, dict):
+                    raise TypeError(
+                        f"flow step {step.name!r}: merge_from step {ref!r} holds "
+                        f"{type(value).__name__}, expected a record"
+                    )
+                merged.update(value)
+            record = merged
+
+        # 3. per-record parameter binds
+        if step.op is not None:
+            op = step.op
+            if getattr(op, "EXPANDS", False):
+                raise NotImplementedError(
+                    f"flow step {step.name!r}: {type(op).__name__!r} is a 1→N expanding op — "
+                    "FlowGraph steps are strictly 1→1 (a named-step env has one result per step). "
+                    "Run expanding pipelines through the Stream engine (iterable-only)."
+                )
+            for param, ref in step.bind.items():
+                parsed = _split_bind_ref(ref)
+                if parsed.attr is not None:
+                    producer = next(s for s in steps if s.name == parsed.step)
+                    value = _read_output(producer.op, parsed.attr)
+                    if value is _MISSING:
+                        raise AttributeError(
+                            f"flow step {step.name!r}: bind {param}={ref!r} — "
+                            f"step {parsed.step!r} op has no @output attribute {parsed.attr!r}"
+                        )
+                else:
+                    value = read_result(parsed.step, copy=False)
+                    if isinstance(value, dict) and parsed.key:
+                        # "step[key]" = the named entry; bare "step" = the whole record.
+                        value = value[parsed.key]
+                setattr(op, param, value)
+            result = _apply_op(record, op)
+            if result is None:
+                return None
+            record = result
+
+        env[step.name] = record
+        prev = step.name
+
+    return cast(Optional[Record], env.get(outputs)) if outputs in env else None
+
+
+def _graph_worker_task(
+    seed: Any,
+    steps: Sequence[FlowStep],
+    outputs: str,
+    families: Optional[List[Tuple[str, OpMatcher, OpInvoker]]] = None,
+) -> Optional[Record]:
+    """Spawn-worker entry point: re-register third-party op families, then run one record.
+
+    Module-level for pickling (the same constraint :func:`recordstream.core._worker_task_multi`
+    obeys). ``readers`` is deliberately NOT passed across the boundary — it is cheap to derive
+    once per worker call relative to the process hop, and shipping it would add a second
+    pickled structure that must stay in sync with ``steps``.
+    """
+    _sync_op_families(families)
+    return run_steps(seed, steps, outputs)
 
 
 @configurable(category="engine")

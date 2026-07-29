@@ -707,7 +707,7 @@ class Stream(torch.utils.data.Dataset[Record]):
 RecordSource = Union[torch.utils.data.Dataset[Any], Iterable[Record]]
 
 
-def ensure_record_dataset(source: RecordSource) -> torch.utils.data.Dataset[Any]:
+def ensure_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]]) -> torch.utils.data.Dataset[Any]:
     """Normalize any wired source into a map-style ``Dataset`` that yields record dicts.
 
     A wired ``train_set`` / ``val_set`` / ``test_set`` may be a :class:`Stream`, another torch
@@ -723,7 +723,20 @@ def ensure_record_dataset(source: RecordSource) -> torch.utils.data.Dataset[Any]
     fitting/encoding, collate, metrics) assume record items — no per-call "is this a record?"
     checks. It lives beside :class:`Stream` because that is the only type it knows: the whole
     body is "already a Stream? else wrap in one".
+
+    The parameter admits a ``Fluid`` and ``None`` because both genuinely occur at the call
+    sites: a config hands over a deferred marker, and an optional split may be unwired (which
+    yields an empty stream, so a caller needs no guard).
+
+    A DEFERRED source (a ``!class:`` marker straight out of a config) is materialized first,
+    matching :func:`~recordstream.project` and :meth:`~recordstream.LabelMap.encode`. Without
+    it, wrapping a marker produced a ``Stream`` whose source was still a Fluid — which fails
+    later, at first iteration, with an error about the Stream rather than about the config that
+    caused it. Flowing a live object is a no-op.
     """
+    from confluid import flow
+
+    source = flow(source)
     if isinstance(source, Stream):
         return source
     # `cast`: a map-style `Dataset` iterates through Python's legacy `__getitem__` protocol,
