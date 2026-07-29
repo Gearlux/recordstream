@@ -16,7 +16,7 @@ dataset = ensure_record_dataset(self.train_set)   # -> a map-style Dataset of re
 ```
 
 A `Stream` comes back **as-is** — identity matters, because a label-encoding Stream carries its
-`label_names` and re-wrapping would lose it. Anything else is wrapped in a `Stream`, which makes it
+`class_names` and re-wrapping would lose it. Anything else is wrapped in a `Stream`, which makes it
 both map-style and record-yielding.
 
 `RecordSource` is the contract it enforces (`Dataset | Iterable[Record]`), named once so a consumer
@@ -71,7 +71,7 @@ resolve the class id to a label, build a top-k list, and thread a record through
 
 ```yaml
 predictions_sink: !class:recordstream.predictions.ClassificationPredictionsSink
-  label_names: !ref:class_id_to_label      # {0: "bird", 1: "cat", ...}
+  class_names: !ref:class_id_to_label      # {0: "bird", 1: "cat", ...}
   top_k: 5
   confidence_threshold: 0.0                 # skip predictions below this top-1 probability
   ops:

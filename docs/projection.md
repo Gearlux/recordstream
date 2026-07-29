@@ -30,7 +30,7 @@ from recordstream import LabelMap, Stream, iter_key
 
 lm = LabelMap.fit(iter_key(train_source, "class"))   # {"bird": 0, "cat": 1, "dog": 2}
 lm.num_classes        # 3
-lm.label_names        # ["bird", "cat", "dog"]  (id -> name)
+lm.class_names        # ["bird", "cat", "dog"]  (id -> name)
 lm.save("class_names.json")                     # {"class_names": [...], "num_classes": N}
 
 encoded = lm.encode(train_source)             # a Stream whose "class" Labels carry int ids
@@ -53,7 +53,7 @@ one class:
 from recordstream import LabelMap, MultiLabel
 
 lm = LabelMap.fit([MultiLabel(["cat", "dog"]), MultiLabel(["bird"])])
-lm.label_names        # ["bird", "cat", "dog"]
+lm.class_names        # ["bird", "cat", "dog"]
 ```
 
 `to_ids(target)` is the one accessor a consumer needs — it always returns a **list of int class

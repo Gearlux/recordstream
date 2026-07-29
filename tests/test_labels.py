@@ -25,7 +25,7 @@ def test_empty_map_properties_raise() -> None:
     with pytest.raises(ValueError):
         _ = lm.num_classes
     with pytest.raises(ValueError):
-        _ = lm.label_names
+        _ = lm.class_names
     with pytest.raises(ValueError):
         _ = lm.inverse
 
@@ -34,7 +34,7 @@ def test_explicit_mapping_coerces_types() -> None:
     lm = LabelMap(mapping={"cat": 0, "dog": 1})
     assert lm.mapping == {"cat": 0, "dog": 1}
     assert lm.num_classes == 2
-    assert lm.label_names == ["cat", "dog"]
+    assert lm.class_names == ["cat", "dog"]
     assert lm.inverse == {0: "cat", 1: "dog"}
 
 
@@ -46,14 +46,14 @@ def test_explicit_mapping_coerces_types() -> None:
 def test_fit_uses_sorted_ordering() -> None:
     lm = LabelMap.fit(["dog", "cat", "dog", "bird", "cat"])
     # sklearn LabelEncoder sorts classes lexicographically.
-    assert lm.label_names == ["bird", "cat", "dog"]
+    assert lm.class_names == ["bird", "cat", "dog"]
     assert lm.mapping == {"bird": 0, "cat": 1, "dog": 2}
     assert lm.num_classes == 3
 
 
 def test_fit_coerces_non_strings() -> None:
     lm = LabelMap.fit([1, 2, 1, 3])
-    assert lm.label_names == ["1", "2", "3"]
+    assert lm.class_names == ["1", "2", "3"]
 
 
 def test_fit_empty_raises() -> None:
@@ -62,20 +62,20 @@ def test_fit_empty_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# from_label_names — inverse of label_names
+# from_class_names — inverse of class_names
 # ---------------------------------------------------------------------------
 
 
 def test_from_label_names_round_trip() -> None:
     names = ["bird", "cat", "dog"]
-    lm = LabelMap.from_label_names(names)
-    assert lm.label_names == names
+    lm = LabelMap.from_class_names(names)
+    assert lm.class_names == names
     assert lm.mapping == {"bird": 0, "cat": 1, "dog": 2}
 
 
 def test_from_label_names_empty_raises() -> None:
     with pytest.raises(ValueError):
-        LabelMap.from_label_names([])
+        LabelMap.from_class_names([])
 
 
 # ---------------------------------------------------------------------------
@@ -117,11 +117,11 @@ def test_save_load_round_trip(tmp_path: object) -> None:
     lm.save(path)
     restored = LabelMap.load(path)
     assert restored.mapping == lm.mapping
-    assert restored.label_names == lm.label_names
+    assert restored.class_names == lm.class_names
 
 
 def test_save_writes_class_names_payload(tmp_path: object) -> None:
-    lm = LabelMap.from_label_names(["a", "b", "c"])
+    lm = LabelMap.from_class_names(["a", "b", "c"])
     path = tmp_path / "class_names.json"  # type: ignore[operator]
     lm.save(path)
     data = json.loads(path.read_text())  # type: ignore[attr-defined]
@@ -368,3 +368,74 @@ def test_weights_encode_class_NAMES_through_the_map() -> None:
     weights = inverse_frequency_weights([Label("cat")] * 3 + [Label("dog")], 2, lm)
     assert weights is not None
     assert np.allclose(weights, np.array([2 / 3, 2.0]))
+
+
+# --------------------------------------------------------------------------- #
+# The vocabulary rides the encoded data
+# --------------------------------------------------------------------------- #
+# A consumer that needs to name a predicted class id, or persist the mapping beside a
+# checkpoint, should not have to be handed a separate LabelMap and keep it in sync with
+# the dataset. Before this, one consumer monkey-patched the attribute on and read it
+# back with a getattr — an undeclared convention nothing could see.
+
+
+def test_encode_carries_the_vocabulary_onto_the_stream() -> None:
+    from recordstream import iter_key
+
+    records = [{"class": Label(n)} for n in ["dog", "cat", "bird"]]
+    label_map = LabelMap.fit(iter_key(records, "class"))
+
+    assert label_map.encode(records).class_names == ["bird", "cat", "dog"]
+
+
+def test_a_plain_stream_carries_no_vocabulary() -> None:
+    from recordstream import Stream
+
+    assert Stream(source=[{"class": Label(0)}]).class_names is None
+
+
+def test_class_names_reads_the_first_source_that_has_one() -> None:
+    """A vocabulary is a property of the RUN, so the caller passes every split."""
+    from recordstream import Stream, class_names, iter_key
+
+    records = [{"class": Label(n)} for n in ["dog", "cat"]]
+    encoded = LabelMap.fit(iter_key(records, "class")).encode(records)
+    plain = Stream(source=records)
+
+    assert class_names(plain, encoded) == ["cat", "dog"]
+
+
+def test_class_names_skips_none_so_call_sites_need_no_guards() -> None:
+    from recordstream import class_names, iter_key
+
+    records = [{"class": Label("cat")}]
+    encoded = LabelMap.fit(iter_key(records, "class")).encode(records)
+
+    assert class_names(None, None, encoded) == ["cat"]
+
+
+def test_class_names_is_none_when_nothing_carries_one() -> None:
+    """An unencoded run is not an error — it has integer labels and no vocabulary."""
+    from recordstream import class_names
+
+    assert class_names(None, [{"class": Label(0)}]) is None
+
+
+def test_class_names_coerces_a_foreign_sources_names_to_str() -> None:
+    """A Stream validates its own `List[str]`; a foreign dataset attribute is not so lucky."""
+    from recordstream import class_names
+
+    class _ForeignDataset:
+        class_names = [1, 2]  # e.g. integer category ids from another library
+
+    assert class_names(_ForeignDataset()) == ["1", "2"]
+
+
+def test_a_stream_rejects_non_string_names_at_construction() -> None:
+    """The declared `List[str]` is enforced — the slot is config, not a free-for-all."""
+    import pytest
+
+    from recordstream import Stream
+
+    with pytest.raises(Exception, match="valid string"):
+        Stream(source=[], class_names=[1, 2])

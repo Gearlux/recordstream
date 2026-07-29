@@ -60,14 +60,14 @@ class LabelMap:
     """Bidirectional class-name ↔ integer-id map (the fittable companion to ``EncodeTarget``).
 
     Holds an explicit name→id ``mapping`` (pinned in config), or one fitted from a target stream
-    via :meth:`fit`. Exposes :attr:`num_classes` / :attr:`label_names`, builds the
+    via :meth:`fit`. Exposes :attr:`num_classes` / :attr:`class_names`, builds the
     :class:`~recordstream.ops.target.EncodeTarget` / :class:`~recordstream.ops.target.DecodeTarget`
     that apply it, and round-trips to disk in marainer's ``class_names.json`` format.
 
     Args:
         mapping: Explicit name→id lookup, e.g. ``{"cat": 0, "dog": 1}``. ``None`` (default) builds an
             empty map — valid to construct (zero-arg convention), but the properties raise until it
-            is populated (by passing a mapping, or via :meth:`fit` / :meth:`from_label_names`).
+            is populated (by passing a mapping, or via :meth:`fit` / :meth:`from_class_names`).
     """
 
     def __init__(self, mapping: Optional[Dict[str, int]] = None) -> None:
@@ -79,7 +79,7 @@ class LabelMap:
         if not self.mapping:
             raise ValueError(
                 "LabelMap is empty — pass a `mapping`, or build one via LabelMap.fit(targets) / "
-                "LabelMap.from_label_names(names) / LabelMap.load(path) before use."
+                "LabelMap.from_class_names(names) / LabelMap.load(path) before use."
             )
         return self.mapping
 
@@ -89,7 +89,7 @@ class LabelMap:
         return max(self._require().values()) + 1
 
     @property
-    def label_names(self) -> List[str]:
+    def class_names(self) -> List[str]:
         """``id → name`` list (index == class id). Ids without a name fall back to ``str(id)``."""
         inverse = self.inverse
         return [inverse.get(i, str(i)) for i in range(self.num_classes)]
@@ -117,8 +117,10 @@ class LabelMap:
 
         Returns:
             A :class:`~recordstream.Stream` yielding the same records with their labels mapped
-            to integer ids. Which key is encoded follows :class:`EncodeTarget`'s own rule (its
-            blank ``field`` picks the first :class:`~recordstream.Label`); pass a configured
+            to integer ids, and carrying this map's ``class_names`` so the vocabulary travels
+            with the encoded data (read it back with :func:`~recordstream.class_names`).
+            Which key is encoded follows :class:`EncodeTarget`'s own rule (its blank
+            ``field`` picks the first :class:`~recordstream.Label`); pass a configured
             ``encode_op()`` into a ``Stream`` yourself when you need to pin a different key or
             tolerate unknowns.
 
@@ -138,7 +140,7 @@ class LabelMap:
 
         from recordstream.core import Stream
 
-        return Stream(source=flow(source), ops=[self.encode_op()])
+        return Stream(source=flow(source), ops=[self.encode_op()], class_names=self.class_names)
 
     def decode_op(self, ignore_unknown: bool = False, default: Any = None) -> DecodeTarget:
         """Return a :class:`~recordstream.ops.target.DecodeTarget` transform that maps id → name via this map."""
@@ -171,14 +173,14 @@ class LabelMap:
         return cls(mapping={name: idx for idx, name in enumerate(sorted(set(labels)))})
 
     @classmethod
-    def from_label_names(cls, names: Sequence[str]) -> "LabelMap":
-        """Build a map from an ordered ``id → name`` list (the inverse of :attr:`label_names`).
+    def from_class_names(cls, names: Sequence[str]) -> "LabelMap":
+        """Build a map from an ordered ``id → name`` list (the inverse of :attr:`class_names`).
 
         Args:
             names: Ordered class names; the list index becomes the class id. Must be non-empty.
         """
         if not names:
-            raise ValueError("LabelMap.from_label_names: `names` is empty.")
+            raise ValueError("LabelMap.from_class_names: `names` is empty.")
         return cls(mapping={str(name): int(i) for i, name in enumerate(names)})
 
     def to_ids(self, target: Any) -> List[int]:
@@ -224,7 +226,7 @@ class LabelMap:
         """
         out = Path(path).expanduser()
         out.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"class_names": self.label_names, "num_classes": self.num_classes}
+        payload = {"class_names": self.class_names, "num_classes": self.num_classes}
         out.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
     @classmethod
@@ -239,7 +241,7 @@ class LabelMap:
         names = data.get("class_names")
         if not names:
             raise ValueError(f"LabelMap.load: {path} has no non-empty 'class_names' list.")
-        return cls.from_label_names([str(n) for n in names])
+        return cls.from_class_names([str(n) for n in names])
 
 
 def class_counts(targets: Iterable[Any], num_classes: int, label_map: Optional[LabelMap] = None) -> np.ndarray:

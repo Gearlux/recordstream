@@ -48,7 +48,7 @@ def test_top1_path_writes_predicted_columns() -> None:
     op = _CapturingOp()
     sink = ClassificationPredictionsSink(
         ops=[op],
-        label_names={0: "DJI MINI3", 1: "DJI AVATA2", 2: "Other"},
+        class_names={0: "DJI MINI3", 1: "DJI AVATA2", 2: "Other"},
         top_k=1,
     )
     sink.write(_make_prediction([0.1, 0.7, 0.2], class_idx=1), _make_metadata())
@@ -66,7 +66,7 @@ def test_top_k_path_returns_descending_probabilities() -> None:
     op = _CapturingOp()
     sink = ClassificationPredictionsSink(
         ops=[op],
-        label_names={0: "a", 1: "b", 2: "c", 3: "d"},
+        class_names={0: "a", 1: "b", 2: "c", 3: "d"},
         top_k=3,
     )
     sink.write(_make_prediction([0.1, 0.4, 0.45, 0.05], class_idx=2), _make_metadata())
@@ -94,7 +94,7 @@ def test_label_names_string_keys_work() -> None:
     op = _CapturingOp()
     sink = ClassificationPredictionsSink(
         ops=[op],
-        label_names={"0": "a", "1": "b"},  # str keys
+        class_names={"0": "a", "1": "b"},  # str keys
         top_k=1,
     )
     sink.write(_make_prediction([0.2, 0.8], class_idx=1), _make_metadata())
@@ -105,7 +105,7 @@ def test_label_names_missing_key_falls_back_to_str_class_id() -> None:
     op = _CapturingOp()
     sink = ClassificationPredictionsSink(
         ops=[op],
-        label_names={0: "zero"},  # only class 0 mapped
+        class_names={0: "zero"},  # only class 0 mapped
         top_k=1,
     )
     sink.write(_make_prediction([0.1, 0.9], class_idx=1), _make_metadata())

@@ -39,15 +39,15 @@ def _records(n: int = 2) -> List[Record]:
 
 
 def test_a_stream_is_returned_as_is() -> None:
-    """Identity matters: a subclass's own wrap (e.g. its ``label_names``) must survive."""
+    """Identity matters: a subclass's own wrap (e.g. its ``class_names``) must survive."""
     stream = Stream(source=_records())
     assert ensure_record_dataset(stream) is stream
 
 
 def test_a_stream_subclass_keeps_its_attributes() -> None:
     stream = Stream(source=_records())
-    stream.label_names = ["a", "b"]  # type: ignore[attr-defined]
-    assert ensure_record_dataset(stream).label_names == ["a", "b"]  # type: ignore[attr-defined]
+    stream.class_names = ["a", "b"]  # type: ignore[attr-defined]
+    assert ensure_record_dataset(stream).class_names == ["a", "b"]  # type: ignore[attr-defined]
 
 
 def test_a_plain_list_becomes_a_map_style_record_dataset() -> None:

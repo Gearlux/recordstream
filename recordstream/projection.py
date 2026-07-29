@@ -21,7 +21,7 @@ Design notes
   make every ``Stream`` look classification-capable to duck-typed consumers.
 """
 
-from typing import Any, Collection, Iterator, Protocol, runtime_checkable
+from typing import Any, Collection, Iterator, List, Optional, Protocol, runtime_checkable
 
 from recordstream.items import Label, MultiLabel, Record, is_item, item_data
 
@@ -99,6 +99,41 @@ def _to_int(value: Any) -> int:
             return int(result)
         raise TypeError(f"target {value!r} did not yield an integer class id (got {result!r})")
     raise TypeError(f"target {value!r} of type {type(value).__name__} is not a scalar class id")
+
+
+def class_names(*sources: Any) -> Optional[List[str]]:
+    """The class vocabulary carried by the first of ``sources`` that has one.
+
+    The naming counterpart of :func:`num_classes`: that one WALKS a source to count classes,
+    this one READS the vocabulary a source already carries — set by
+    :meth:`~recordstream.LabelMap.encode` when it wrapped the source, so the names travel with
+    the encoded data rather than in a LabelMap the consumer has to keep alongside it.
+
+    Takes several sources because a vocabulary is a property of the RUN, not of whichever
+    split happens to carry it: a config may encode only the train set, or hand the eval path a
+    pre-encoded test set. ``None`` entries are skipped, so the common
+    ``class_names(train_set, val_set, test_set)`` needs no guards at the call site.
+
+    Args:
+        *sources: Datasets / streams to consult, in priority order. ``None`` values are ignored.
+
+    Returns:
+        The names as a list of ``str``, or ``None`` when no source carries a usable vocabulary
+        — a source with no labels, or an unencoded one, is not an error.
+
+    Example::
+
+        names = class_names(train_set, val_set, test_set)   # ['bird', 'cat', 'dog'] or None
+    """
+    for source in sources:
+        names = getattr(source, "class_names", None)
+        if not names:
+            continue
+        try:
+            return [str(n) for n in names]
+        except TypeError:  # not iterable — a source using the name for something else
+            continue
+    return None
 
 
 def num_classes(source: Any, key: str = "class") -> int:

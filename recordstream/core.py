@@ -422,6 +422,11 @@ class Stream(torch.utils.data.Dataset[Record]):
         source: Any iterable or indexable dataset (duck-typed) yielding record dicts; ``None`` = empty stream.
         ops: Ordered ops applied lazily on access — native ops and bare library transforms alike (``None`` = no ops).
         chunk_size: Parallel-processing chunk size; ``0`` (the default) processes sequentially.
+        class_names: Optional ordered class vocabulary this stream's labels index into. Set by
+            :meth:`~recordstream.LabelMap.encode` so the vocabulary travels WITH the encoded
+            data — a consumer that needs to name a predicted class id, or persist the mapping
+            beside a checkpoint, reads it via :func:`~recordstream.class_names` instead of
+            being handed a separate LabelMap it has to keep in sync.
     """
 
     def __init__(
@@ -429,9 +434,11 @@ class Stream(torch.utils.data.Dataset[Record]):
         source: Optional[Iterable[Any]] = None,
         ops: Optional[List[Any]] = None,
         chunk_size: Optional[int] = 0,
+        class_names: Optional[List[str]] = None,
     ) -> None:
         self.source = source
         self.ops: List[Any] = ops or []
+        self.class_names: Optional[List[str]] = class_names
         self._workers = 1
         self._chunk_size = chunk_size or 0
         # Populated on first random access when the source is iterable-only
@@ -708,7 +715,7 @@ def ensure_record_dataset(source: RecordSource) -> torch.utils.data.Dataset[Any]
     may be record dicts or raw rows. A ``Stream`` already coerces every item to a record, so:
 
     * a ``Stream`` is returned as-is (already a ``Dataset`` of records; this preserves a
-      subclass's own wrap, e.g. a label-encoding Stream with its ``label_names``), and
+      subclass's own wrap, e.g. a label-encoding Stream with its ``class_names``), and
     * anything else is wrapped in a ``Stream``, which makes it both a map-style ``Dataset``
       AND a record-yielding one.
 

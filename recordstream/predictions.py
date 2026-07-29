@@ -61,7 +61,7 @@ class ClassificationPredictionsSink:
 
     1. Read the model's :class:`~recordstream.outputs.ClassificationOutput` — ``probs`` ``[C]``
        and ``class_idx`` scalar, per record.
-    2. Resolve the int class id to a human-readable label via ``label_names``, and build a top-k
+    2. Resolve the int class id to a human-readable label via ``class_names``, and build a top-k
        list (the ``top_k`` highest-probability classes with their probabilities + labels).
     3. Build a fresh record carrying the original metadata plus the prediction columns under a
        single ``"metadata"`` key:
@@ -85,7 +85,7 @@ class ClassificationPredictionsSink:
     Args:
         ops: Ops to run on each per-prediction record. Required by the time the sink is written
             to; validated there, not at construction.
-        label_names: Optional ``{int_class_id: str}`` map converting the model's int64 class ids
+        class_names: Optional ``{int_class_id: str}`` map converting the model's int64 class ids
             back to human-readable strings. Without it, labels become ``str(class_id)``. YAML int
             keys land here as strings (config loaders stringify mapping keys); both forms are
             accepted and normalized to ``str`` internally.
@@ -98,7 +98,7 @@ class ClassificationPredictionsSink:
     def __init__(
         self,
         ops: Optional[List[Any]] = None,
-        label_names: Optional[Dict[Any, str]] = None,
+        class_names: Optional[Dict[Any, str]] = None,
         top_k: int = 1,
         confidence_threshold: float = 0.0,
     ) -> None:
@@ -109,12 +109,12 @@ class ClassificationPredictionsSink:
         self.confidence_threshold = float(confidence_threshold)
         # Normalize keys to `str` so YAML-loaded maps (always stringified) and Python-constructed
         # maps (which may use int keys) are both addressable by the same lookup.
-        self.label_names: Dict[str, str] = {str(k): str(v) for k, v in (label_names or {}).items()}
+        self.class_names: Dict[str, str] = {str(k): str(v) for k, v in (class_names or {}).items()}
         #: How many predictions have been offered — the ordinal a diagnostic names.
         self._seen = 0
 
     def _label_for(self, class_id: int) -> str:
-        return self.label_names.get(str(int(class_id)), str(int(class_id)))
+        return self.class_names.get(str(int(class_id)), str(int(class_id)))
 
     def write(self, prediction: Dict[str, Any], metadata: Dict[str, Any]) -> None:
         from confluid import flow

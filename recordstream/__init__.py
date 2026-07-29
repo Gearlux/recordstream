@@ -64,7 +64,7 @@ from recordstream.outputs import (
 )
 from recordstream.predictions import ClassificationPredictionsSink, PredictionsSink
 from recordstream.processing import DatasetProcessor
-from recordstream.projection import SupportsProjection, iter_key, num_classes, project
+from recordstream.projection import SupportsProjection, class_names, iter_key, num_classes, project
 from recordstream.runnable import (
     ProgressCallback,
     ProgressReporting,
@@ -152,6 +152,7 @@ __all__ = [
     # ---- projection ----
     "SupportsProjection",
     "iter_key",
+    "class_names",
     "num_classes",
     "project",
     # ---- runnable protocol + orchestration ----
