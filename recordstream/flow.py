@@ -43,7 +43,6 @@ import multiprocessing
 from copy import deepcopy
 from typing import Any, Dict, Iterator, List, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
-import torch.utils.data
 from confluid import configurable, flow
 from confluid import resolve as _confluid_resolve
 from confluid.fluid import Fluid as _ConfluidFluid
@@ -496,7 +495,7 @@ def _graph_worker_task(
 
 
 @configurable(category="engine")
-class FlowGraph(torch.utils.data.Dataset[Record]):
+class FlowGraph:
     """Named-step graph engine — executes a ``flow:`` document natively.
 
     The named-step twin of :class:`~recordstream.core.Stream`, over the SAME kernel: steps run

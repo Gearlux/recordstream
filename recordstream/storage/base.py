@@ -2,8 +2,8 @@ import json
 from typing import Any, Dict, Iterator, Protocol, Self, Tuple, runtime_checkable
 
 import numpy as np
-import torch
 
+from recordstream._compat import is_torch_tensor
 from recordstream.items import Record
 
 #: Root-attribute format tag stamped on stores written in the record key-group layout.
@@ -39,7 +39,7 @@ def to_numpy(data: Any) -> Any:
     Detaches and moves to CPU first so tensors carrying grad or living on a GPU
     convert cleanly. Non-tensor values pass through unchanged.
     """
-    if isinstance(data, torch.Tensor):
+    if is_torch_tensor(data):
         return data.detach().cpu().numpy()
     return data
 
@@ -85,7 +85,7 @@ def split_attrs(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     plain: Dict[str, Any] = {}
     arrays: Dict[str, Any] = {}
     for key, value in attrs.items():
-        if isinstance(value, (np.ndarray, torch.Tensor)):
+        if isinstance(value, np.ndarray) or is_torch_tensor(value):
             arrays[key] = to_numpy(value)
         elif isinstance(value, np.generic):
             plain[key] = value.item()

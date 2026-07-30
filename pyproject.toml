@@ -10,7 +10,6 @@ dependencies = [
     "Pillow",
     "h5py",
     "zarr",
-    "torch",
     "typing-extensions",
     "datasets",
     "albumentations",
@@ -25,6 +24,12 @@ dependencies = [
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
+# The torch-shaped surface, NOT the engine: `recordstream.ops.torch` (ToTensor),
+# `batch_tensor`, and the `outputs` builders. The core is numpy — `Stream` is a plain
+# map-style class, and the two places that recognise a torch tensor do it through
+# `_compat.is_torch_tensor`, which consults sys.modules rather than importing. So a
+# consumer on Keras/JAX installs recordstream without a 2GB framework it never calls.
+torch = ["torch"]
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
@@ -112,6 +117,14 @@ recordstream = "recordstream.cli:main"
 # value = the LiquifyApp instance.
 [project.entry-points."liquifai.apps"]
 recordstream = "recordstream.cli:app"
+
+# Which of this project's extras are ML FRAMEWORKS, for `aisland framework`. Selecting a name
+# here is what makes `aisland setup` add the matching extra to this project's install.
+#
+# The core engine is numpy — `torch` powers only `ToTensor` and the output builders, so a
+# workspace that selects no framework still gets a fully working record engine.
+[tool.aisland]
+frameworks = ["torch"]
 
 [tool.setuptools.packages.find]
 where = ["."]

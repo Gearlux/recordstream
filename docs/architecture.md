@@ -827,3 +827,108 @@ def predict_step(self, batch, batch_idx):
 - **A different balancing policy** (effective-number, sqrt-inverse): add it beside
   `inverse_frequency_weights` in `recordstream.labels` as another statistic returning numpy. Do
   NOT add the injection here — that stays a per-backend method on the runnable.
+
+---
+
+## 9. torch is an extra; the engine is numpy (2026-07-30)
+
+### Context
+
+`recordstream` declared `torch` as a hard dependency, so `import recordstream` imported ~2GB of
+PyTorch — and marainer inherited it transitively, declaring no torch of its own. That was fine
+while every consumer was a Lightning trainer. It stopped being fine when a second training engine
+landed: a Keras-on-TensorFlow install, or a plain-numpy dataset-conversion job, paid for a
+framework it never called.
+
+Auditing what actually needed torch found the coupling was almost entirely nominal:
+
+- **`Stream` and `FlowGraph` subclassed `torch.utils.data.Dataset`.** This was the expensive
+  line, and it bought nothing. `Dataset` is an empty base — `DataLoader` duck-types its argument,
+  needing only `__len__` and `__getitem__` (verified against a plain class with those two
+  methods and no base). Nothing in the workspace does `isinstance(x, Dataset)`, and nothing
+  subclasses `Stream`.
+- **`storage/base.py` and `ops/image.py` imported torch for `isinstance(x, torch.Tensor)` alone** —
+  to decide whether a payload needed `.detach().cpu().numpy()` before being written or rendered.
+- Only `ops/torch.py` (`ToTensor`) and `outputs.py`'s `softmax`/`argmax` builders genuinely
+  compute with it.
+
+The two isinstance sites are the interesting case, because the naive fix — a lazy in-function
+`import torch` — still *imports torch* the first time a record is written.
+
+### Decision
+
+**`torch` moved from `dependencies` to `[project.optional-dependencies] torch`, and the core
+imports no framework.** Four mechanisms, one per coupling:
+
+1. **The `Dataset` base is dropped** in favour of a `MapStyle` Protocol (`__len__` +
+   `__getitem__`) — the engine still *says* "map-style dataset" in its own vocabulary, and
+   `RecordSource = Union[MapStyle, Iterable[Record]]` stays the contract `ensure_record_dataset`
+   enforces.
+2. **Type identity without an import**: `recordstream._compat.is_torch_tensor` consults
+   `sys.modules` rather than importing. This is exact, not a heuristic — *a torch tensor cannot
+   exist in a process that has not imported torch*, so the absence of the module proves the
+   negative. It is the same instinct as the op-family matchers, which identify an albumentations
+   or torchvision transform by its MRO module name.
+3. **`ToTensor` is a lazy export** — `recordstream.ops` maps it in `_OPTIONAL_OPS` and resolves it
+   in a PEP 562 module `__getattr__`, raising an `ImportError` that names the extra instead of a
+   traceback from three libraries down. `__dir__` still advertises it so completion works.
+4. **`outputs.py` splits by what needs a runtime**: the `TypedDict` contracts stay module-level
+   (they are typing-only, and generic in the array type), while `classification_output` /
+   `segmentation_output` import torch in the function body — they are the only part that computes.
+
+### Consequences
+
+- **`DataLoader(stream)` now needs `cast(Any, stream)` in type-checked code.** torch's *stub*
+  declares `Dataset[T]`; the runtime accepts any map-style object. This is a stub's stricter view
+  of a contract that works, and the bridge belongs at the four call sites (all in tests) rather
+  than in the engine — re-adding the base to satisfy a stub would restore the 2GB dependency to
+  silence a type checker.
+- **`MapStyle` must be referenced as the real class in any annotation a consumer introspects, never
+  a string forward-ref.** confluid evaluates annotations in the *consumer's* namespace, so
+  `RecordSource = Union["MapStyle", ...]` raised `NameError: name 'MapStyle' is not defined` from
+  a consumer's `__init__` scan, three packages away.
+- **The numpy-return rule elsewhere is now load-bearing, not stylistic.** `batch_values`,
+  `multi_hot`, `batch_metadata` and the class-balance statistics return numpy precisely so this
+  boundary holds; only `batch_tensor` is torch.
+- **`recordstream.ops.torch` cannot be eagerly imported by anything in the package** — a new
+  convenience re-export there would silently undo all of the above.
+
+### Example
+
+```python
+# storage/base.py — recognise a tensor without importing torch
+from recordstream._compat import is_torch_tensor
+
+def to_numpy(data):
+    return data.detach().cpu().numpy() if is_torch_tensor(data) else np.asarray(data)
+```
+
+```python
+# recordstream/ops/__init__.py — the op is reachable, the import is not eager
+_OPTIONAL_OPS = {"ToTensor": ("recordstream.ops.torch", "torch")}
+
+def __getattr__(name):
+    entry = _OPTIONAL_OPS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_path, extra = entry
+    try:
+        return getattr(importlib.import_module(module_path), name)
+    except ImportError as exc:
+        raise ImportError(f"recordstream.ops.{name} needs the {extra!r} extra: "
+                          f"pip install 'recordstream[{extra}]'") from exc
+```
+
+### What you may change (and where it's documented)
+
+- **Add another optional-framework op**: put it in its own module, add one `_OPTIONAL_OPS` entry
+  and one `__all__` entry, and declare the extra in `pyproject.toml`. No other edit — the error
+  message and `dir()` follow from the mapping.
+- **Recognise another framework's tensor type** (a TF tensor, a jax array): add a sibling to
+  `_compat.py` using the same `sys.modules` rule. Do not add a module-level import of that
+  framework anywhere in the core.
+- **Need a torch-typed return from an existing helper**: add a `dtype=`/`device=` parameter and
+  keep the numpy default, as `batch_tensor` does — do not change an existing numpy return, or the
+  next backend has to reimplement it.
+- **Installation** is documented in the README's Installation section; what each extra provides
+  is the `pyproject.toml` comment beside it.

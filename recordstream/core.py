@@ -1,9 +1,23 @@
 import concurrent.futures
 import multiprocessing
 from contextlib import nullcontext
-from typing import Any, Callable, Collection, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+    runtime_checkable,
+)
 
-import torch.utils.data
 from confluid import configurable
 from confluid import load as _confluid_load
 from confluid import materialize as _confluid_materialize
@@ -161,6 +175,23 @@ def _apply_op(record: Record, op: Any) -> Optional[Record]:
         if matched:
             return invoker(record, op)
     return cast(Optional[Record], op(record))
+
+
+@runtime_checkable
+class MapStyle(Protocol):
+    """A map-style dataset: ``len(ds)`` and ``ds[i]``.
+
+    What recordstream MEANS by "a dataset", said structurally so the engine never imports a
+    framework to express it. ``Stream`` used to inherit ``torch.utils.data.Dataset``, which made
+    torch a hard dependency of a package whose own work is numpy — for nothing: that base is not
+    load-bearing. ``DataLoader`` duck-types its argument (a plain object with these two methods
+    works), nothing in the workspace does ``isinstance(x, Dataset)``, and the annotation is the
+    only thing the inheritance ever bought.
+    """
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, index: int) -> Any: ...
 
 
 def _describe_deferred_source(source: Any) -> str:
@@ -359,7 +390,7 @@ class JointStream:
 
 
 @configurable(category="engine")
-class Stream(torch.utils.data.Dataset[Record]):
+class Stream:
     """
     The primary stream engine for RecordStream.
     Wraps any iterable or indexed dataset and provides a functional API.
@@ -631,18 +662,18 @@ class Stream(torch.utils.data.Dataset[Record]):
 
 
 #: What a wired dataset slot may hold — the contract :func:`ensure_record_dataset` enforces,
-#: named ONCE here rather than restated by every consumer: a map-style ``Dataset`` (which a
-#: :class:`Stream` is), or any iterable of records (a recordstream source, a plain list of
-#: record dicts). Consumers annotate their slots ``Optional[Lazy[RecordSource]]`` — ``Lazy``
-#: because they flow the slot themselves at run time.
-#: What a wired dataset slot may hold: anything MAP-STYLE (``__len__`` + ``__getitem__`` —
-#: which a :class:`Stream` is) or any iterable of records. Expressed structurally rather than
-#: as ``torch.utils.data.Dataset`` so the engine stays framework-free; torch's ``DataLoader``
-#: is itself duck-typed and consumes either.
-RecordSource = Union[torch.utils.data.Dataset[Any], Iterable[Record]]
+#: What a wired dataset slot may hold, named ONCE here rather than restated by every consumer:
+#: anything MAP-STYLE (``__len__`` + ``__getitem__`` — which a :class:`Stream` is), or any
+#: iterable of records (a recordstream source, a plain list of record dicts). Consumers annotate
+#: their slots ``Optional[Lazy[RecordSource]]`` — ``Lazy`` because they flow the slot at run time.
+#:
+#: Expressed with the structural :class:`MapStyle` rather than ``torch.utils.data.Dataset`` so the
+#: engine can say "a dataset" without importing a framework; torch's ``DataLoader`` is itself
+#: duck-typed and consumes either.
+RecordSource = Union[MapStyle, Iterable[Record]]
 
 
-def ensure_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]]) -> torch.utils.data.Dataset[Any]:
+def ensure_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]]) -> "Stream":
     """Normalize any wired source into a map-style ``Dataset`` that yields record dicts.
 
     A wired ``train_set`` / ``val_set`` / ``test_set`` may be a :class:`Stream`, another torch

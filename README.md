@@ -132,6 +132,19 @@ RecordStream is designed to sit between your data catalog and your training loop
 pip install git+https://github.com/Gearlux/recordstream.git@main
 ```
 
+The core engine is **numpy**, and installs no ML framework. PyTorch is an extra, needed only for
+the pieces that genuinely produce tensors — the `ToTensor` op and the `classification_output` /
+`segmentation_output` builders:
+
+```bash
+pip install "recordstream[torch] @ git+https://github.com/Gearlux/recordstream.git@main"
+```
+
+Everything else works without it. A `Stream` is map-style (`__len__`/`__getitem__`), so a
+`DataLoader` still accepts one directly on a torch install; `batch_values`, `multi_hot` and the
+class-balance statistics return numpy, so a non-torch backend converts in one line. Reaching for
+`recordstream.ops.ToTensor` without the extra raises an `ImportError` naming it.
+
 ## 📄 License
 
 MIT

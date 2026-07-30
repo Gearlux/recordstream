@@ -26,11 +26,10 @@ surface. A backend on another framework adds its own builders beside these; it d
 the contracts.
 """
 
-from typing import Generic, List, TypedDict, TypeVar
+from typing import TYPE_CHECKING, Generic, List, TypedDict, TypeVar
 
-import torch
-import torch.nn.functional as F
-from torch import Tensor
+if TYPE_CHECKING:  # torch is imported inside the BUILDERS — the contracts are typing-only
+    from torch import Tensor
 
 #: The array type a contract carries — ``torch.Tensor``, ``np.ndarray``, a TF/JAX array.
 ArrayT = TypeVar("ArrayT")
@@ -93,7 +92,7 @@ class SegmentationOutput(TypedDict, Generic[ArrayT]):
 DetectionPredictions = List[DetectionOutput]
 
 
-def classification_output(logits: Tensor) -> ClassificationOutput[Tensor]:
+def classification_output(logits: "Tensor") -> "ClassificationOutput[Tensor]":
     """Build a full :class:`ClassificationOutput` from raw ``[B, C]`` logits.
 
     Example::
@@ -101,13 +100,19 @@ def classification_output(logits: Tensor) -> ClassificationOutput[Tensor]:
         def predict_step(self, batch, batch_idx):
             return classification_output(self(x))     # what a predictions sink reads
     """
+    import torch
+    import torch.nn.functional as F
+
     probs = F.softmax(logits, dim=-1)
     class_idx = torch.argmax(logits, dim=-1).to(torch.int64)
     return ClassificationOutput(logits=logits, probs=probs, class_idx=class_idx)
 
 
-def segmentation_output(logits: Tensor) -> SegmentationOutput[Tensor]:
+def segmentation_output(logits: "Tensor") -> "SegmentationOutput[Tensor]":
     """Build a full :class:`SegmentationOutput` from raw ``[B, C, H, W]`` logits."""
+    import torch
+    import torch.nn.functional as F
+
     probs = F.softmax(logits, dim=1)
     mask = torch.argmax(logits, dim=1).to(torch.int64)
     return SegmentationOutput(logits=logits, probs=probs, mask=mask)

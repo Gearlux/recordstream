@@ -21,11 +21,11 @@ need it, so the pure-greyscale path stays matplotlib-free.
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, get_args
 
 import numpy as np
-import torch
 from confluid import configurable
 from loggair import get_logger
 from PIL import Image, ImageDraw
 
+from recordstream._compat import is_torch_tensor
 from recordstream.items import Image as ImageItem
 from recordstream.items import NDArrayItem, Record, item_data
 from recordstream.transform import Transform
@@ -123,7 +123,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
 
     if hasattr(data, "convert"):  # PIL.Image.Image
         data = np.array(data.convert("RGB"))
-    elif isinstance(data, torch.Tensor):
+    elif is_torch_tensor(data):
         data = data.detach().cpu().numpy()
 
     if not isinstance(data, np.ndarray):
@@ -238,7 +238,7 @@ def _coerce_to_ndarray(value: Any) -> Optional[np.ndarray]:
         return None
     if hasattr(data, "convert"):  # PIL.Image.Image
         data = np.array(data.convert("RGB"))
-    elif isinstance(data, torch.Tensor):
+    elif is_torch_tensor(data):
         data = data.detach().cpu().numpy()
     try:
         arr = np.asarray(data)
