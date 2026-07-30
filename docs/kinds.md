@@ -79,6 +79,26 @@ batch_metadata(batch, exclude=("image", "class"))        # the remaining columns
 
 Only `batch_tensor` is torch; the rest return plain values or numpy, so a non-torch backend reuses them and converts in one line. `dtype` is a parameter, not an opinion — the same knob as `device`. What stays task-side is only WHICH call a trainer makes.
 
+### Keras: `RecordSequence` — the batching half the framework leaves to you
+
+A `DataLoader` needs one thing from recordstream (`collate_fn=collate_records`) and does the rest itself: row order, batch slicing, the short final batch, the per-epoch reshuffle. Keras 3 has no `DataLoader` — `keras.utils.PyDataset.__getitem__` must return a whole **batch** — so that loop is `RecordSequence`, in `recordstream.keras`:
+
+```python
+from recordstream.keras import RecordSequence
+
+def to_xy(batch):                                            # your collate_fn equivalent
+    return batch_values(batch, "image"), batch_values(batch, "class")
+
+train = RecordSequence(stream, batch_size=32, shuffle=True, transform=to_xy)
+model.fit(train, epochs=3)                                   # reshuffles between epochs itself
+```
+
+`PyDataset`'s prefetch knobs are declared parameters, at Keras's own defaults — pass `workers=4` to overlap a slow record walk (decode, resize, remote read) with the training step, `max_queue_size=` to cap how many prefetched batches may wait, and `use_multiprocessing=True` only when the per-record work is GIL-bound (each process re-pickles the sequence and its source).
+
+`transform` is the whole task-facing surface: it maps one collated record to what the model consumes, so the shape decision stays in your code exactly as it does with a `DataLoader`. Omit it and `__getitem__` hands over the batched record itself — which is also what `seq.batches()` yields, the pairing half of prediction (a model emits `[N, ...]` while a [`PredictionsSink`](predictions.md) writes per record, so you need the batch its output came from to read that batch's [`batch_metadata`](#reading-a-batch-back-recordstreambatch)).
+
+Needs the extra — `pip install "recordstream[keras]"`. Importing `recordstream.keras` is also what sets `KERAS_BACKEND` (Keras reads it at import time and would otherwise default to TensorFlow, which this extra does not install), so it must be the first keras-touching import in a process; never `import keras` ahead of it. Why the adapter lives here rather than in a training project is recorded in [architecture.md](architecture.md#10-the-frameworks-batching-half-lives-beside-the-collate-2026-07-30).
+
 
 ## 1→N expanding ops (iterable-only pipelines)
 

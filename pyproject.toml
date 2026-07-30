@@ -30,6 +30,11 @@ requires-python = ">=3.12"
 # `_compat.is_torch_tensor`, which consults sys.modules rather than importing. So a
 # consumer on Keras/JAX installs recordstream without a 2GB framework it never calls.
 torch = ["torch"]
+# The Keras-shaped surface: `recordstream.keras` (the KERAS_BACKEND ordering + `RecordSequence`,
+# the `PyDataset` a `DataLoader` would have been). Keras 3 is an API, not a runtime, so this
+# names NO compute engine — `recordstream.keras` defaults KERAS_BACKEND to whichever of
+# torch/tensorflow/jax is actually installed, and the consumer's own extra picks one.
+keras = ["keras>=3.0"]
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
@@ -121,10 +126,11 @@ recordstream = "recordstream.cli:app"
 # Which of this project's extras are ML FRAMEWORKS, for `aisland framework`. Selecting a name
 # here is what makes `aisland setup` add the matching extra to this project's install.
 #
-# The core engine is numpy — `torch` powers only `ToTensor` and the output builders, so a
-# workspace that selects no framework still gets a fully working record engine.
+# The core engine is numpy — `torch` powers only `ToTensor` and the output builders, and `keras`
+# only `recordstream.keras`, so a workspace that selects no framework still gets a fully working
+# record engine.
 [tool.aisland]
-frameworks = ["torch"]
+frameworks = ["torch", "keras"]
 
 [tool.setuptools.packages.find]
 where = ["."]

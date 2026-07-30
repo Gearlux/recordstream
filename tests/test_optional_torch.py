@@ -192,3 +192,56 @@ def test_pyproject_declares_torch_as_an_extra_not_a_dependency() -> None:
     required = [d for d in project["dependencies"] if d.split(">")[0].split("=")[0].strip() == "torch"]
     assert not required, f"torch must not be a hard dependency, found: {required}"
     assert any("torch" in d for d in project["optional-dependencies"]["torch"])
+
+
+# --------------------------------------------------------------------------- #
+# 5. keras is an extra too — and DISCOVERY must not pull it either
+# --------------------------------------------------------------------------- #
+
+_SCAN_WITHOUT_KERAS = textwrap.dedent(
+    """
+    import sys
+
+    import recordstream
+    from recordstream.discovery import scan_module
+
+    scan_module("recordstream")          # what a GUI bridge / MCP bootstrap does
+    scan_module("recordstream.ops")
+
+    leaked = sorted(m for m in sys.modules if m == "keras" or m.startswith("keras."))
+    print("LEAKED:" + ",".join(leaked) if leaked else "CLEAN")
+    """
+)
+
+
+def test_neither_importing_nor_scanning_recordstream_imports_keras(tmp_path: object) -> None:
+    """Why `RecordSequence` lives in `recordstream.keras` and NOT at the package root.
+
+    `inspect.getmembers` — inside `scan_module`, and in the GUI bridges — getattrs every name a
+    module advertises, so a PEP 562 lazy root export (the `ops.ToTensor` pattern) would import
+    keras on every discovery scan, including on installs that never asked for it. Run in a
+    subprocess because this one has already imported keras via the sequence tests.
+    """
+    result = subprocess.run(
+        [sys.executable, "-c", _SCAN_WITHOUT_KERAS],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+    )
+
+    assert result.returncode == 0, f"scanning recordstream failed:\n{result.stderr}"
+    assert "CLEAN" in result.stdout, f"keras was imported by a discovery scan: {result.stdout.strip()}"
+
+
+def test_pyproject_declares_keras_as_an_extra_naming_no_compute_engine() -> None:
+    """Keras 3 is an API, not a runtime: the extra must not drag torch/TF/jax in — the consumer's
+    own extra picks one, and `recordstream.keras` defaults to whichever is installed."""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    extras = tomllib.loads(pyproject.read_text())["project"]["optional-dependencies"]
+
+    assert any("keras" in d for d in extras["keras"])
+    engines = [d for d in extras["keras"] if d.split(">")[0].split("=")[0].strip() in ("torch", "tensorflow", "jax")]
+    assert not engines, f"the keras extra must name no compute engine, found: {engines}"

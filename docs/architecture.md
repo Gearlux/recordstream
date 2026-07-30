@@ -932,3 +932,91 @@ def __getattr__(name):
   next backend has to reimplement it.
 - **Installation** is documented in the README's Installation section; what each extra provides
   is the `pyproject.toml` comment beside it.
+
+## 10. The framework's batching half lives beside the collate (`recordstream.keras`, 2026-07-30)
+
+### Context
+
+Batching a record source has two halves: **what one batch contains** (recordstream's
+`collate_records`) and **which rows go in which batch** (the row order, the slicing, the short
+final batch, the per-epoch reshuffle). For torch, the second half is free — a `DataLoader` does it,
+duck-typing any `MapStyle` source (§9) and taking `collate_fn=collate_records` for the first half.
+So recordstream shipped only half of the pair, and nobody noticed the other half was missing.
+
+Keras 3 has no `DataLoader`. `keras.utils.PyDataset.__getitem__` must return a whole BATCH, so a
+consumer has to write that loop itself. The first one did, in a training project — a
+`RecordSequence(keras.utils.PyDataset)` inside an image classifier — and the result read as if the
+adapter were part of the task. It was not: sixty percent of it (row order, `np.arange`, the rng,
+`on_epoch_end`, `collate_records([source[i] for i in rows])`) mentioned nothing about
+classification, while its torch twin in the same project was a single
+`LazyClass(DataLoader, shuffle=True, collate_fn=collate_records)` line. A second Keras consumer
+would have copied the file.
+
+### Decision
+
+**`recordstream.keras.RecordSequence` owns the DataLoader half; the consumer passes the batch
+shape in.** The split is drawn exactly where torch draws it: `transform` is the `collate_fn`
+equivalent, a callable mapping one collated record to what the model consumes. With no
+`transform`, `__getitem__` hands over the batched record — the identity, which is also what
+`batches()` yields for pairing per-record predictions with per-record metadata.
+
+The module also owns the **`KERAS_BACKEND` ordering**, which is why it exists as one module rather
+than a class dropped somewhere. Keras 3 reads that variable at import time and defaults to
+`tensorflow`, which `recordstream[keras]` does not install (Keras is an API; the compute engine is
+the operator's choice), so a bare `import keras` dies inside `keras.src.tree.optree_impl` with
+`ModuleNotFoundError: No module named 'tensorflow'`. A `setdefault` to the first backend actually
+present — probed with `find_spec`, so nothing is imported just to look — has to run in the LOWEST
+layer that imports keras: import sorters put a library import above a first-party one, so a
+consumer's own shim sorts BELOW `from recordstream.keras import RecordSequence` and would lose the
+race.
+
+### Consequences
+
+- **`RecordSequence` is absent from the package root, deliberately.** `inspect.getmembers` — what
+  `discovery.scan_module` and the GUI bridges call — getattrs every name a module advertises, so a
+  PEP 562 lazy export at the root (the `recordstream.ops.ToTensor` pattern) would import keras on
+  every discovery scan of a torch-only install. The import path is the boundary marker:
+  `from recordstream.keras import RecordSequence`.
+- **It is not `@configurable` and carries no discovery `category`.** It is engine plumbing a
+  runnable builds in code, like `collate_records`; tagging it would put a keras import in the
+  registry scan for a class no YAML wires.
+- **The row order is a lazy `@property`, not constructor state.** `len(source)` is real work for a
+  deferred source (a `HuggingFaceSource` LOADS its dataset to answer it), and recordstream
+  constructors do none — so `RecordSequence()` builds zero-arg and a missing `source` is reported
+  by `indices` with a clear message.
+- **A consumer's keras imports now route through recordstream.** A training project keeps its own
+  one-line shim for spelling, but the ordering rule has one home; a project that imports keras
+  ahead of `recordstream.keras` reintroduces the TensorFlow failure.
+- **The extra names no compute engine.** `keras = ["keras>=3.0"]` only; torch/TF/jax come from
+  whichever consumer extra selected one, and `_first_installed_backend` adapts to what is there.
+
+### Example
+
+```python
+# The consumer supplies the SHAPE; the engine supplies the batching.
+from recordstream.keras import RecordSequence
+
+def to_xy(batch):                                    # the classification decision, 3 lines
+    x = np.asarray(batch_values(batch, "image"), dtype="float32")
+    return x, np.asarray(batch_values(batch, "class"), dtype="int64")
+
+seq = RecordSequence(stream, batch_size=32, shuffle=True, transform=to_xy)
+model.fit(seq, epochs=3)
+
+# ...and the torch twin, for the symmetry this restores:
+loader = DataLoader(cast(Any, stream), batch_size=32, shuffle=True, collate_fn=collate_records)
+```
+
+### What you may change (and where it's documented)
+
+- **Add another framework's batching adapter** (a JAX/`grain` sampler, a TF `tf.data` generator):
+  a sibling module behind its own extra, same split — the engine owns row order + collate, the
+  caller owns the batch shape via a `transform`-shaped parameter. Do not grow `RecordSequence` a
+  framework switch.
+- **`PyDataset`'s prefetch knobs are already declared** (`workers` / `use_multiprocessing` /
+  `max_queue_size`, forwarded to `super().__init__()` at Keras's own defaults). Any further
+  passthrough follows the same rule — a named, defaulted, `Args:`-documented parameter, never a
+  `**kwargs` escape hatch, per the declared-parameter mandate (§6). Pinned by
+  `test_every_knob_is_a_declared_parameter`.
+- **Usage** is [docs/kinds.md](kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you);
+  what the extra provides is the `pyproject.toml` comment beside it.

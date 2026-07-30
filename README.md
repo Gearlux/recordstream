@@ -97,7 +97,7 @@ generated tool schema set the toggle too (see [docs/architecture.md](docs/archit
 | Page | Covers |
 |---|---|
 | [docs/record-model.md](docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
-| [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), 1→N expanding ops |
+| [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
 | [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
 | [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing |
 | [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
@@ -124,6 +124,7 @@ RecordStream is designed to sit between your data catalog and your training loop
 - **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability (see [docs/sources.md](docs/sources.md)).
 - **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node — including bare library transforms — every run reproducible.
 - **PyTorch**: `Stream` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#batching--collate_records--the-collate-registry-recordstreamcollate) (`collate_records` is the default).
+- **Keras 3**: no `DataLoader` exists to do the batching, so [`RecordSequence`](docs/kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you) is the `keras.utils.PyDataset` half — row order, slicing, per-epoch reshuffle, `collate_records` — and a `transform` callable supplies the batch shape, exactly as `collate_fn` does for torch.
 - **Augmentation libraries**: [albumentations](https://albumentations.ai) and torchvision `transforms.v2` transforms run **as-is** in any ops list — the engine speaks each library's native convention (kwarg vocabulary vs dict walk), so there is nothing to wrap (see [docs/augmentation.md](docs/augmentation.md)).
 
 ## 🔧 Installation
@@ -132,15 +133,19 @@ RecordStream is designed to sit between your data catalog and your training loop
 pip install git+https://github.com/Gearlux/recordstream.git@main
 ```
 
-The core engine is **numpy**, and installs no ML framework. PyTorch is an extra, needed only for
-the pieces that genuinely produce tensors — the `ToTensor` op and the `classification_output` /
-`segmentation_output` builders:
+The core engine is **numpy**, and installs no ML framework. A framework arrives only with the extra
+that needs it:
+
+| Extra | Provides |
+|---|---|
+| `torch` | The pieces that genuinely produce tensors — the `ToTensor` op, `batch_tensor`, and the `classification_output` / `segmentation_output` builders |
+| `keras` | `recordstream.keras` — the `RecordSequence` `PyDataset` adapter and the `KERAS_BACKEND` ordering. Keras 3 is an API, so this names no compute engine; it runs on whichever of torch / TensorFlow / JAX you have |
 
 ```bash
 pip install "recordstream[torch] @ git+https://github.com/Gearlux/recordstream.git@main"
 ```
 
-Everything else works without it. A `Stream` is map-style (`__len__`/`__getitem__`), so a
+Everything else works without either. A `Stream` is map-style (`__len__`/`__getitem__`), so a
 `DataLoader` still accepts one directly on a torch install; `batch_values`, `multi_hot` and the
 class-balance statistics return numpy, so a non-torch backend converts in one line. Reaching for
 `recordstream.ops.ToTensor` without the extra raises an `ImportError` naming it.
