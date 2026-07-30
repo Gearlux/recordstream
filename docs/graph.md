@@ -1,15 +1,35 @@
-# Graph pipelines — flow documents, the FlowGraph engine and Context ops
+# Graph pipelines — `flow:` documents and the `FlowGraph` engine
 
-## Flow documents & the FlowGraph engine (`recordstream.flow`)
+A pipeline is a **graph of named steps**. There is ONE engine and ONE execution model; `ops:`
+and `flow:` are two spellings of it, and which one you write is purely about whether the
+pipeline branches.
 
-The **readable authoring form** of a graph pipeline is a `flow:` document — named steps where a step's name is how later steps reference its result:
+## `ops:` — the linear spelling
+
+A straight chain is a graph where every step reads the one before it, so it needs no names:
+
+```yaml
+ops:
+  - !class:recordstream.ops.image.ConvertToImage {width: 224, height: 224}
+  - !class:albumentations.Normalize {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+  - !class:recordstream.ops.torch.ToTensor {normalize: false}
+```
+
+The engine compiles that list into positional steps (`s0`, `s1`, `s2`) and runs it on the same
+kernel a `flow:` document uses. The names never surface — nothing in an `ops:` document can
+reference a step. Repeats stay distinct: the same op twice in a row is two steps.
+
+## `flow:` — the named spelling, for branchy pipelines
+
+When a pipeline forks, merges, or feeds one step's value into another's parameter, the steps
+need names — and the name is how a later step refers to an earlier one:
 
 ```yaml
 flow:
-  spec:    !class:mypkg.MakeSpectrogram {}                  # input: the source record (writes key `image`)
+  spec:    !class:mypkg.MakeSpectrogram {}                  # input: the source record
   masked:  !class:recordstream.ops.numpy.Threshold {low_level: 0.5, from: spec}   # 2nd reader of `spec` = fan-out
   thresh:  !class:recordstream.ops.formula.FormulaOp {formula: "amax(a) * 0.6", field: image, from: spec}
-  gated:                                                    # a step with bind: uses the plain-mapping form (op: + reserved keys)
+  gated:                                                    # a step with bind: uses the plain-mapping form
     op: !class:recordstream.ops.numpy.Threshold {output: gated_mask}
     from: spec
     bind:
@@ -18,79 +38,64 @@ flow:
 outputs: out
 ```
 
-Two YAML spelling rules (both verified): SCALAR/list reserved keys (`from:`, `merge_from:`) may ride
-inside a `!class:` marker's mapping alongside its kwargs — but **`bind:` (a nested mapping) MUST use
-the plain-mapping step form** (`op:` + reserved keys, the `gated` step above): a nested mapping under
-a `!class:` marker is consumed by Confluid as addressed configuration and never reaches the step
-grammar. Write bind refs in block style or quoted — `{low_level: thresh[image]}` inline is a YAML
-parse error (`[` opens a flow sequence).
+Two YAML spelling rules (both verified): SCALAR/list reserved keys (`from:`, `merge_from:`) may
+ride inside a `!class:` marker's mapping alongside its kwargs — but **`bind:` (a nested mapping)
+MUST use the plain-mapping step form** (`op:` + reserved keys, the `gated` step above): a nested
+mapping under a `!class:` marker is consumed by Confluid as addressed configuration and never
+reaches the step grammar. Write bind refs in block style or quoted — `{low_level: thresh[image]}`
+inline is a YAML parse error (`[` opens a flow sequence).
 
 Step grammar (three reserved keys, stripped before the op is built):
 
-- **`from:`** — the input step (omitted = previous step; must name an *earlier* step, so document order is the schedule and cycles are inexpressible).
-- **`merge_from:`** — fan-in: UNION the named steps' record ENTRIES into this step's incoming record, in listed order, last-write-wins on a key collision (the `MergeFields` slot semantics).
-- **`bind:`** — `{param: ref}` per-record parameters: a bare `step` binds the step's WHOLE result record, `step[key]` the named ENTRY of its record, and `step.attr` the step op's live `@output` (lowered through `Capture` — stochastic-correct).
+- **`from:`** — the input step (omitted = previous step; must name an *earlier* step, so document
+  order is the schedule and cycles are inexpressible).
+- **`merge_from:`** — fan-in: UNION the named steps' record ENTRIES into this step's incoming
+  record, in listed order, last-write-wins on a key collision.
+- **`bind:`** — `{param: ref}` per-record parameters: a bare `step` binds the step's WHOLE result
+  record, `step[key]` the named ENTRY of its record, and `step.attr` the step op's live
+  `@output` (read after it ran — stochastic-correct).
 
-A plain-mapping step with no op (`out: {from: a, merge_from: [b]}`) is a pure fan-in; `{}` is the identity (names the source). Cell lifetimes are **automatic** in both forms. Steps apply their ops through the engine's op-family dispatch, so bare library transforms sit in flow steps too.
+A plain-mapping step with no op (`out: {from: a, merge_from: [b]}`) is a pure fan-in; `{}` is the
+identity (names the source). `outputs:` picks the yielded step (default: the last). Steps apply
+their ops through the engine's op-family dispatch, so bare library transforms sit in flow steps
+too.
 
-Two engines, one contract — **bidirectional conversion with execution parity**:
-
-```python
-from recordstream import Stream, FlowGraph, to_ops, from_ops
-
-graph  = FlowGraph.from_yaml("graph.yaml", source=src)   # native named-step engine
-stream   = Stream.from_flow_yaml("graph.yaml", source=src)   # same graph, LOWERED to the
-                                                         # flat context-ops list (serial)
-ops    = to_ops(graph.steps, graph.output_step)          # flow -> flat ops
-flow2  = from_ops(ops)                                   # flat ops -> flow (lifting)
-```
-
-`FlowGraph` is a `torch.utils.data.Dataset` like `Stream` (`__len__`/`__getitem__`/`.batch`/`.parallel` — parallel runs the lowered form on Stream's spawn pool, one worker implementation). A purely linear flow lowers to the bare op list — zero context ops.
-
-## Graph pipelines on a flat op list (Context ops)
-
-A branchy pipeline — fan-out, fan-in, a value computed on one branch feeding a parameter on another — runs on the **plain sequential `Stream` engine** via six *context ops* (`recordstream.ops.context`). The engine creates one per-record **`Context`** (a named-cell store, `recordstream.context`) around each record's trip through the op list; the context ops move data between the linear stream and those cells. Graph wiring never mutates the record's entries — a linear run's record stays byte-identical whether or not context threading exists.
-
-| Op | Semantics |
-|---|---|
-| `Save(name)` | snapshot the stream record into a cell (pass-through) — the fork point |
-| `Use(name, drop=False)` | stream := the cell's value; deep-copies unless `drop` frees the cell (move) |
-| `Drop(names)` | free cells explicitly |
-| `Apply(op, param, source, key="", drop=False)` | set `op.<param>` from a cell (a record cell contributes its `key`-named entry, or the whole record when `key` is blank; a raw cell value verbatim), then apply `op` |
-| `Capture(op, output, name)` | apply `op`, record its live `@output` into a cell (stochastic-correct) |
-| `MergeFields(sources, keys, drop)` | fan-in: UNION the named cells' entries into the incoming record (listed order, last-write-wins; `keys` restricts the union) |
-
-```yaml
-ops:
-  - !class:recordstream.ops.context.Save(name=fork)              # fork the stream
-  - !class:albumentations.GaussNoise {p: 1.0}                  # branch A rides the stream
-  - !class:recordstream.ops.context.Save(name=branch_a)
-  - !class:recordstream.ops.context.Use(name=fork,drop=true)     # branch B restarts from the fork
-  - !class:recordstream.ops.numpy.Threshold
-    low_level: 0.5
-  - !class:recordstream.ops.context.MergeFields                  # fan-in
-    sources: [branch_a]
-    keys: [image]
-    drop: [branch_a]
-```
-
-A straight sequence needs none of this — a bare `ops:` list stays exactly as before. Outside an engine (a hand-rolled loop), activate a Context explicitly:
+## Running one
 
 ```python
-from recordstream.context import Context, activate
+from recordstream import FlowGraph, Stream
+from recordstream.sources import HuggingFaceSource
 
-with activate(Context()):
-    for op in ops:
-        record = op(record)
+graph = FlowGraph.from_yaml("graph.yaml", source=HuggingFaceSource(path="mnist"))
+for record in graph:
+    ...
+
+graph.parallel(4)          # spawn workers, one future per source record
+len(graph); graph[3]       # map-style access (unavailable if a step op is 1→N expanding)
 ```
 
-Cells hold whole records (from `Save`) or raw values (from `Capture`); `Apply` reads a record cell's `key`-named entry (whole record when `key` is blank), `MergeFields` unions each cell's entries. Copy discipline: cells are stored by reference, deep-copied on read (`Use` without `drop`), moved on last read (`drop=True`). On a deliberate key collision at the fan-in, rename on the producing branch first (`RenameField`, `recordstream.ops.structure`). These ops are what a `flow:` graph document lowers to. Why the wiring plane is an ambient per-record store instead of extra record keys (and why `FlowGraph` doesn't use it) is recorded in [architecture.md](architecture.md#3-the-per-record-context-is-an-ambient-wiring-plane-recordstreamcontext-2026-07-17).
+`FlowGraph` is a map-style dataset like `Stream` (`__len__`/`__getitem__`/`.batch`/`.parallel`).
+Both classes hold a step graph and call the same per-record kernel; a straight chain takes an
+env-free fast path in that kernel, so `ops:` costs no more to run than it ever did.
 
-> **Carrying a snapshot the context ops cannot?** Context cells are the wiring plane, but they deliberately raise across a `Parallel` boundary and never persist into a sink. For the two jobs cells cannot do — carrying a snapshot **across a `Parallel` boundary** and deliberately **persisting a snapshot into a sink** — copy the value under its own key with `CopyField` (`recordstream.ops.structure`); the snapshot then rides the record as a real entry. Everything else — fan-out, fan-in, cross-branch values — uses the context ops above.
+A LINEAR graph converts to a `Stream` (`graph.to_stream()`) because an op list can express a
+straight chain. A branchy one does not — and there is no lowering pass that would manufacture a
+flat spelling for it. That pass existed until 2026-07-30 (`to_ops`/`from_ops` plus six context
+ops that re-encoded dataflow as imperative mutations of a per-record cell store); it was deleted
+because it destroyed the very structure every consumer — a compiler, a visual editor, a reader —
+wants back. Rationale: [architecture.md](architecture.md).
+
+## Expanding (1→N) steps
+
+A step whose op carries `EXPANDS = True` yields several records from one. The remaining subgraph
+runs once per child over its own shallow copy of the step environment, depth-first, so sibling
+order matches the nested-loop intuition. Such a pipeline is ITERABLE-ONLY: `__len__`/`__getitem__`
+raise, because the expanded index map is unknowable up front.
 
 ## Reattach an ops-only YAML (`Stream.from_ops_yaml`)
 
-A `{ops: [!class:…()]}` document — e.g. one exported by an external pipeline-authoring tool — can be attached to any source:
+A `{ops: [!class:…()]}` document — e.g. one exported by a visual editor — can be attached to any
+source:
 
 ```python
 from recordstream import Stream
@@ -99,4 +104,8 @@ from recordstream.sources import HuggingFaceSource
 stream = Stream.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="mnist"))
 ```
 
-The helper **materializes** the deferred `!class:` markers eagerly (via `confluid.materialize`) so a broken op fails at load time with the YAML in hand. It is a convenience, not a necessity: `Stream` also flows any still-deferred marker in place at engine-route entry (the same lazy-flow convention the composing ops use), which is what lets a bare mapping-form `!class:albumentations.HorizontalFlip {p: 0.5}` sit directly in an `ops:` list. The manual equivalent is `Stream(source=src, ops=confluid.materialize(confluid.load("ops.yaml")["ops"]))`.
+The helper **materializes** the deferred `!class:` markers eagerly (via `confluid.materialize`) so
+a broken op fails at load time with the YAML in hand. It is a convenience, not a necessity:
+`Stream` also flows any still-deferred marker in place at engine-route entry, which is what lets a
+bare mapping-form `!class:albumentations.HorizontalFlip {p: 0.5}` sit directly in an `ops:` list.
+`FlowGraph.from_ops_yaml` loads the same document as a linear step graph.

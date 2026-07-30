@@ -1,7 +1,7 @@
 import concurrent.futures
 import multiprocessing
 from contextlib import nullcontext
-from typing import Any, Callable, Collection, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple, Union, cast
+from typing import Any, Callable, Collection, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union, cast
 
 import torch.utils.data
 from confluid import configurable
@@ -10,7 +10,6 @@ from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
-from recordstream.context import Context, activate
 from recordstream.items import NDArrayItem, Record, item_data, with_data
 
 logger = get_logger(__name__)
@@ -146,7 +145,7 @@ def _apply_op(record: Record, op: Any) -> Optional[Record]:
 
     The single op-application chokepoint shared by the sequential, parallel (via
     :func:`_worker_task`), streamed, and random-access (``__getitem__``) paths; composing
-    ops (``Pipeline`` / ``Parallel`` / ``Enable`` / ``RandomApply`` / the context ops)
+    ops (``Pipeline`` / ``Parallel`` / ``Enable`` / ``RandomApply`` / ``ConfigureOp``)
     route their inner ops through here so every op is applied identically. Each op family
     is invoked the way its library expects — no wrapper/adapter classes: the registered
     families (:func:`register_op_family`; built-ins ``albumentations`` /
@@ -289,13 +288,6 @@ class WrappedOp:
         return {**record, self.key: new_value}
 
 
-class _Carried(NamedTuple):
-    """A record travelling the streamed route together with its per-record Context."""
-
-    record: Any
-    ctx: Context
-
-
 def _expand(op: Any, record: Any) -> List[Any]:
     """Run a 1→N EXPANDING op and return its flattened children."""
     raw = op(record)
@@ -304,76 +296,36 @@ def _expand(op: Any, record: Any) -> List[Any]:
     return [child for child in raw if child is not None]
 
 
+def linear_steps(ops: Sequence[Any]) -> Tuple[List[Any], str]:
+    """Compile a flat op list into the linear step graph the engine executes.
+
+    A sequence IS a graph — every step reads the previous one — so an ``ops:`` list needs no
+    lifting to run on the graph kernel, just names. The names are positional (``s0``, ``s1``,
+    …) and never surface: nothing in an ``ops:`` document can reference a step, so they exist
+    only to key the step environment. Positional (not op-class) naming is deliberate — the
+    same op twice in a row is two distinct steps, which a name-keyed mapping would collapse.
+
+    Returns ``(steps, output_step)``; an empty list yields ``([], "")``, the identity graph.
+    """
+    from recordstream.flow import FlowStep
+
+    steps = [FlowStep(name=f"s{i}", op=op, from_=None, bind={}, merge_from=()) for i, op in enumerate(ops)]
+    return cast(List[Any], steps), (steps[-1].name if steps else "")
+
+
 def _worker_task(
     record: Any, ops: List[Any], families: Optional[List[Tuple[str, OpMatcher, OpInvoker]]] = None
 ) -> Optional[Any]:
     """Single-result worker for STRICTLY 1→1 op lists (the ``Parallel`` op's contract).
 
     Kept for callers that need exactly one carrier back; expanding ops raise here —
-    route expanding pipelines through :func:`_worker_task_multi`.
+    route expanding pipelines through the iterating engine.
     """
-    results = _worker_task_multi(record, ops, allow_expansion=False, families=families)
-    return results[0] if results else None
-
-
-def _worker_task_multi(
-    record: Any,
-    ops: List[Any],
-    allow_expansion: bool = True,
-    families: Optional[List[Tuple[str, OpMatcher, OpInvoker]]] = None,
-) -> List[Any]:
-    """Top-level helper for multiprocess workers. Must be at top level for pickling.
-
-    Runs one source :class:`Record` through the op list and returns EVERY resulting record —
-    usually one, zero when filtered, several when a 1→N EXPANDING op fired; each expansion
-    child continues through the REMAINING ops with a shallow copy of the per-record Context,
-    depth-first so sibling order matches the nested-loop intuition.
-
-    Activates ONE fresh per-record :class:`~recordstream.context.Context` around the op loop so
-    context ops (``Save``/``Use``/``Apply``/``Capture``/``MergeFields``) can move data between
-    the linear stream and named cells — the executor itself stays a plain ``for op in ops``
-    loop. Contexts are created inside the worker (spawn-safe: ops pickle, a Context never
-    crosses a process boundary). ``families`` carries the parent process's non-builtin op
-    families into a spawn worker (:func:`_sync_op_families` — matchers/invokers pickle by
-    reference); in-process callers omit it.
-    """
-    from collections import deque
+    from recordstream.flow import run_steps
 
     _sync_op_families(families)
-    pending: "deque[Tuple[Any, Context, int]]" = deque([(record, Context(), 0)])
-    out: List[Any] = []
-    while pending:
-        current, ctx, start = pending.popleft()
-        alive = True
-        with activate(ctx):
-            i = start
-            while i < len(ops):
-                op = ops[i]
-                i += 1
-                if _op_expands(op):
-                    if not allow_expansion:
-                        raise TypeError(
-                            f"op {type(op).__name__!r} is a 1→N expanding op, which this strictly "
-                            "1→1 route cannot carry — run it through the Stream iteration paths."
-                        )
-                    children = _expand(op, current)
-                    if not children:
-                        alive = False
-                        break
-                    # Depth-first: the first child continues inline; its siblings go to the
-                    # FRONT of the queue (reversed, so sibling order is preserved).
-                    for child in reversed(children[1:]):
-                        pending.appendleft((child, ctx.copy(), i))
-                    current = children[0]
-                    continue
-                result = _apply_op(current, op)
-                if result is None:
-                    alive = False
-                    break
-                current = result
-        if alive and current is not None:
-            out.append(current)
-    return out
+    steps, outputs = linear_steps(ops)
+    return run_steps(record, steps, outputs)
 
 
 @configurable(category="engine")
@@ -475,13 +427,6 @@ class Stream(torch.utils.data.Dataset[Record]):
         ops = list(_confluid_materialize(raw_ops))
         return cls(source=source, ops=ops)
 
-    @classmethod
-    def from_flow_yaml(cls, path: str, source: Optional[Iterable[Any]] = None) -> "Stream":
-        """Attach a ``{flow: {...}}`` graph document to ``source``, LOWERED to the serial form."""
-        from recordstream.flow import flow_yaml_to_stream
-
-        return cast("Stream", flow_yaml_to_stream(path, source=source))
-
     @property
     def _expands(self) -> bool:
         """True when any (materialized) op is a 1→N expanding op — the pipeline is then iterable-only."""
@@ -530,14 +475,13 @@ class Stream(torch.utils.data.Dataset[Record]):
                 "iterator; give the source a __len__ (then Stream caches on first access) or wrap "
                 "it in ``list(...)`` before handing it to Stream."
             )
+        from recordstream.flow import run_steps
+
         _check_ops_materialized(self.ops)
-        record: Any = raw
-        with activate(Context()):
-            for op in self.ops:
-                result = _apply_op(record, op)
-                if result is None:
-                    raise IndexError(f"Record {index} filtered out by {op}")
-                record = result
+        steps, outputs = linear_steps(self.ops)
+        record = run_steps(raw, steps, outputs)
+        if record is None:
+            raise IndexError(f"Record {index} filtered out by the pipeline")
         return cast(Record, record)
 
     def to_sink(self, sink: Any) -> None:
@@ -601,68 +545,52 @@ class Stream(torch.utils.data.Dataset[Record]):
             yield from it
 
     def _iter_streamed(self) -> Iterator[Record]:
-        """Mixed per-record / stream-level op chain (a stream-level op exposes ``.stream``)."""
+        """Mixed per-record / stream-level op chain (a stream-level op exposes ``.stream``).
+
+        A stream-level op (``Parallel``) sees the WHOLE stream rather than one record, so it
+        cannot be a step in the per-record graph — the chain is split at each such op and the
+        per-record runs between them go through the ordinary kernel. Records travel as plain
+        records: the per-record Context they used to be paired with is gone, and with it the
+        "cells cannot cross a stream-op boundary" restriction that pairing imposed.
+        """
+        from recordstream.flow import run_steps_multi
+
         source = self._guard_live_source()
         if source is None:
             return
         _check_ops_materialized(self.ops)
 
-        def to_carried() -> Iterator[Optional[_Carried]]:
-            for item in source:
-                yield _Carried(item, Context())
-
-        def per_record(stream: Iterator[Optional[_Carried]], op: Any) -> Iterator[Optional[_Carried]]:
-            expands = _op_expands(op)
-            for c in stream:
-                if c is None:
+        def per_record(stream: Iterator[Optional[Record]], op: Any) -> Iterator[Optional[Record]]:
+            steps, outputs = linear_steps([op])
+            for record in stream:
+                if record is None:
                     continue
-                with activate(c.ctx):
-                    if expands:
-                        children = _expand(op, c.record)
-                    else:
-                        s = _apply_op(c.record, op)
-                if expands:
-                    for j, child in enumerate(children):
-                        yield _Carried(child, c.ctx if j == 0 else c.ctx.copy())
-                else:
-                    yield None if s is None else _Carried(s, c.ctx)
+                yield from run_steps_multi(record, steps, outputs)
 
-        def strip(stream: Iterator[Optional[_Carried]], op: Any) -> Iterator[Optional[Record]]:
-            for c in stream:
-                if c is None:
-                    yield None
-                    continue
-                if c.ctx.live():
-                    raise RuntimeError(
-                        f"Stream: context cells {c.ctx.live()!r} are still live at the stream-level op "
-                        f"{type(op).__name__!r}. Context cells cannot cross a stream-op boundary "
-                        f"(e.g. Parallel) — drop them before it, or move the whole graph inside it."
-                    )
-                yield c.record
-
-        def wrap(stream: Iterator[Optional[Record]]) -> Iterator[Optional[_Carried]]:
-            for s in stream:
-                yield None if s is None else _Carried(s, Context())
-
-        carried: Iterator[Optional[_Carried]] = to_carried()
+        carried: Iterator[Optional[Record]] = iter(source)
         for op in self.ops:
             if hasattr(op, "stream") and callable(op.stream):
-                carried = wrap(op.stream(strip(carried, op)))
+                carried = op.stream(carried)
             else:
                 carried = per_record(carried, op)
 
-        for c in carried:
-            if c is not None:
-                yield c.record
+        for record in carried:
+            if record is not None:
+                yield record
 
     def _iter_sequential(self) -> Iterator[Record]:
-        """Standard single-threaded execution."""
+        """Standard single-threaded execution — the flat op list run as a linear step graph."""
+        from recordstream.flow import _result_readers, run_steps_multi
+
         source = self._guard_live_source()
         if source is None:
             return
         _check_ops_materialized(self.ops)
+        # Compile + analyse ONCE per iteration, never per record (see run_steps_multi).
+        steps, outputs = linear_steps(self.ops)
+        readers = _result_readers(steps, outputs)
         for item in source:
-            yield from _worker_task_multi(item, self.ops)
+            yield from run_steps_multi(item, steps, outputs, readers)
 
     def _iter_parallel(self) -> Iterator[Record]:
         """Multiprocess execution engine."""
@@ -674,11 +602,14 @@ class Stream(torch.utils.data.Dataset[Record]):
         # We use 'spawn' to be consistent with Loggair and prevent CI deadlocks
         ctx = multiprocessing.get_context("spawn")
 
+        from recordstream.flow import _graph_worker_task
+
+        steps, outputs = linear_steps(self.ops)
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
             futures = []
             extra_families = _extra_op_families()  # ship third-party op families to the workers
             for item in source:
-                futures.append(executor.submit(_worker_task_multi, item, self.ops, True, extra_families))
+                futures.append(executor.submit(_graph_worker_task, item, steps, outputs, extra_families))
 
             for future in futures:
                 yield from future.result()
@@ -704,6 +635,10 @@ class Stream(torch.utils.data.Dataset[Record]):
 #: :class:`Stream` is), or any iterable of records (a recordstream source, a plain list of
 #: record dicts). Consumers annotate their slots ``Optional[Lazy[RecordSource]]`` — ``Lazy``
 #: because they flow the slot themselves at run time.
+#: What a wired dataset slot may hold: anything MAP-STYLE (``__len__`` + ``__getitem__`` —
+#: which a :class:`Stream` is) or any iterable of records. Expressed structurally rather than
+#: as ``torch.utils.data.Dataset`` so the engine stays framework-free; torch's ``DataLoader``
+#: is itself duck-typed and consumes either.
 RecordSource = Union[torch.utils.data.Dataset[Any], Iterable[Record]]
 
 

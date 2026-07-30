@@ -1,21 +1,20 @@
-"""The ``flow:`` document, the :class:`FlowGraph` engine, and the flow⇄ops converters.
+"""The ``flow:`` document and the :class:`FlowGraph` engine.
 
-A **flow document** is the readable, named-step form of a graph-shaped pipeline: a
-mapping of ``step-name → op``, where a step's name is also the name later steps use to
-reference its result. It is the authoring format (humans and graph exporters
-write it); the flat context-ops form (:mod:`recordstream.ops.context`) is the serial
-execution format the plain :class:`~recordstream.core.Stream` engine runs. The two convert
-**bidirectionally**: :func:`to_ops` lowers a flow into a flat op list, :func:`from_ops`
-lifts a flat op list back — with execution parity in both directions.
+A **flow document** is the named-step form of a pipeline: a mapping of ``step-name → op``,
+where a step's name is how later steps reference its result. It is the spelling to reach for
+when a pipeline BRANCHES; a straight chain is written as a plain ``ops:`` list, which the
+engine compiles to positional steps (``recordstream.core.linear_steps``). Both parse to the
+same :class:`FlowStep` list and run through the same per-record kernel — there is ONE
+execution model, and no lowering pass between the two forms (the flow⇄ops converters and the
+per-record context ops they emitted were deleted 2026-07-30; see ``docs/architecture.md`` §3).
 
 .. code-block:: yaml
 
     flow:
-      spec:     !class:waivefront.SpectrogramOp()             # input: the source record
-      rescaled: !class:recordstream.ops.numpy.RescaleOp()       # input: previous step
-      masked:   !class:waivefront.SegmentOp() {from: spec}    # 2nd reader of spec = fan-out
-      thresh:   !class:recordstream.ops.formula.FormulaOp(formula="a*0.5") {from: masked}
-      out: {from: masked, merge_from: [rescaled]}             # typed fan-in (no op)
+      spec:     !class:mypkg.MakeSpectrogram()                # input: the source record
+      rescaled: !class:recordstream.ops.numpy.Threshold()     # input: previous step
+      masked:   !class:mypkg.Segment() {from: spec}           # 2nd reader of spec = fan-out
+      out: {from: masked, merge_from: [rescaled]}             # fan-in (no op)
     outputs: out
 
 Step grammar (the three RESERVED step keys, stripped before the op is built):
@@ -23,20 +22,19 @@ Step grammar (the three RESERVED step keys, stripped before the op is built):
 - ``from:`` — the step supplying this step's input record. Omitted = the previous step
   (the first step reads the source record). Must name an EARLIER step: document order is
   the schedule, so forward references are errors and cycles are inexpressible.
-- ``merge_from:`` — fan-in: UNION another step's record entries into this step's incoming
-  record before the op runs (the ``MergeFields`` slot semantics — last-write-wins on a
-  key collision, in listed order).
+- ``merge_from:`` — fan-in: UNION the named steps' record entries into this step's incoming
+  record before the op runs (listed order, last-write-wins on a key collision).
 - ``bind:`` — ``{param: ref}`` per-record parameters: ``ref`` is a step name (the step's
-  whole result record, ``step[key]`` for a named entry, or the raw value) or
-  ``step.attr`` (the step op's live ``@output`` after it ran — lowered through ``Capture``).
+  whole result record), ``step[key]`` (one entry of it), or ``step.attr`` (the step op's
+  live ``@output`` after it ran — read through wrapper chains by :func:`_read_output`).
 
 A step may be a plain mapping with no op (``out: {from: a, merge_from: [b]}``) — a pure
 fan-in/identity step; ``{}`` is the identity (used to give the source a referable name).
 ``outputs:`` names the step whose result the pipeline yields (default: the last step).
 
-Cell-lifetime management is AUTOMATIC in both forms: :class:`FlowGraph` frees each step
-result after its last reader, and :func:`to_ops` computes the same liveness into
-``drop`` flags on the emitted context ops.
+Step results are freed automatically: :func:`_result_readers` counts each step's readers
+slot-granularly and the kernel drops a result after its last one. A straight chain needs no
+environment at all — :func:`is_linear` routes it to :func:`_run_linear`.
 """
 
 import concurrent.futures
@@ -51,16 +49,42 @@ from confluid import resolve as _confluid_resolve
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
-from recordstream.core import OpInvoker, OpMatcher, _apply_op, _extra_op_families, _sync_op_families
+from recordstream.core import (
+    OpInvoker,
+    OpMatcher,
+    _apply_op,
+    _expand,
+    _extra_op_families,
+    _op_expands,
+    _sync_op_families,
+)
 from recordstream.items import Record
-from recordstream.ops.context import _MISSING, Apply, Capture, Drop, MergeFields, Save, Use, _read_output
 
 logger = get_logger(__name__)
 
 RESERVED_STEP_KEYS = ("from", "merge_from", "bind")
 """Step-grammar keys stripped from a step mapping before the op is constructed."""
 
-__all__ = ["FlowGraph", "FlowStep", "from_ops", "parse_flow", "to_ops", "RESERVED_STEP_KEYS"]
+__all__ = ["FlowGraph", "FlowStep", "parse_flow", "run_steps", "run_steps_multi", "RESERVED_STEP_KEYS"]
+
+_MISSING = object()
+
+
+def _read_output(op: Any, name: str) -> Any:
+    """Read attribute ``name`` off ``op``, looking through ``target``/``op`` wrapper chains.
+
+    Backs the ``bind: {param: "step.attr"}`` grammar — the step op's live ``@output`` after it
+    ran. The wrapper walk matters because a step op may be a composing op (``ConfigureOp``
+    wrapping the real op in ``target``). Returns ``_MISSING`` when absent.
+    """
+    cur, seen = op, set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        value = getattr(cur, name, _MISSING)
+        if value is not _MISSING:
+            return value
+        cur = getattr(cur, "target", None) or getattr(cur, "op", None)
+    return _MISSING
 
 
 class FlowStep(NamedTuple):
@@ -226,7 +250,12 @@ def _result_readers(steps: Sequence[FlowStep], outputs: str) -> Dict[str, List[T
     following step can ride the linear stream. Slots: ``"in"`` (input), ``"merge"``,
     ``"bind"``, and the final ``"out"`` read at index ``len(steps)``. A ``bind`` step-result
     reference counts; an ``@output`` (``step.attr``) reference does NOT.
+
+    NO steps is the identity graph (a bare ``ops: []``): nothing is produced, so nothing is
+    read — and there is no output step to account for.
     """
+    if not steps:
+        return {}
     readers: Dict[str, List[Tuple[int, str]]] = {s.name: [] for s in steps}
     for i, step in enumerate(steps):
         implicit = steps[i - 1].name if i > 0 else None
@@ -248,25 +277,106 @@ def _result_readers(steps: Sequence[FlowStep], outputs: str) -> Dict[str, List[T
 # ---------------------------------------------------------------------------
 
 
-def run_steps(
+def run_steps_multi(
     seed: Any,
     steps: Sequence[FlowStep],
     outputs: str,
     readers: Optional[Dict[str, List[Tuple[int, str]]]] = None,
-) -> Optional[Record]:
-    """Run ONE record through the parsed steps; ``None`` = filtered (an op returned None).
+) -> List[Record]:
+    """Run ONE source record through the parsed steps, returning EVERY resulting record.
 
     The engine's per-record kernel, module-level so a spawn worker can pickle a reference to
-    it. ``readers`` is the slot-granular reader accounting from :func:`_result_readers`; it
+    it. Usually one record back, zero when a step filtered (an op returned ``None``), several
+    when a 1→N EXPANDING step fired.
+
+    ``readers`` is the slot-granular reader accounting from :func:`_result_readers`; it
     depends only on ``(steps, outputs)``, so a caller running many records MUST compute it
     once and pass it in — recomputing per record is an O(steps²) tax on every record (it was
     measured at 3.4 µs/record on a 23-step pipeline, roughly half the graph engine's total
     overhead over a flat op list).
+
+    EXPANSION semantics: a step whose op carries ``EXPANDS`` yields N children, and the
+    REMAINING subgraph runs once per child over its own shallow copy of the step environment
+    (independent name→result maps, shared values — the graph twin of ``Context.copy()``).
+    Traversal is DEPTH-FIRST, so sibling order matches the nested-loop intuition and the flat
+    engine's documented order. An empty expansion or a ``None`` child just drops that branch.
+
+    NO steps is the IDENTITY graph — the seed comes straight back. That is what makes a bare
+    ``Stream(source=..., ops=[])`` yield its source unchanged once the flat engine routes
+    through this kernel.
     """
+    if not steps:
+        return [] if seed is None else [cast(Record, seed)]
+    out: List[Record] = []
+    if is_linear(steps, outputs):
+        _run_linear(seed, steps, 0, out)
+        return out
     if readers is None:
         readers = _result_readers(steps, outputs)
-    env: Dict[str, Any] = {}
-    remaining = {name: len(idx) for name, idx in readers.items()}
+    base_remaining = {name: len(idx) for name, idx in readers.items()}
+    _run_from(0, seed, steps, outputs, {}, base_remaining, None, out)
+    return out
+
+
+def is_linear(steps: Sequence[FlowStep], outputs: str) -> bool:
+    """True when the graph is a straight chain — no named reference reaches back.
+
+    Every step reads the one before it, nothing binds, nothing merges, and the yielded step
+    is the last one. Such a graph needs no step ENVIRONMENT at all: the record can ride a
+    local variable exactly as it did in the flat op loop, which is what keeps an ``ops:``
+    list as cheap to run as before it became a graph (the env bookkeeping measured ~33%
+    of engine overhead on a 23-step chain).
+    """
+    if not steps or outputs != steps[-1].name:
+        return False
+    return all(s.from_ is None and not s.bind and not s.merge_from for s in steps)
+
+
+def _run_linear(
+    record: Any,
+    steps: Sequence[FlowStep],
+    index: int,
+    out: List[Record],
+) -> None:
+    """Run a straight chain from ``steps[index:]`` — the env-free path (see :func:`is_linear`).
+
+    Same expansion contract as :func:`_run_from`: a 1→N step forks the remaining chain,
+    depth-first, so sibling order matches the nested-loop intuition.
+    """
+    for i in range(index, len(steps)):
+        op = steps[i].op
+        if op is None:
+            continue
+        if _op_expands(op):
+            for child in _expand(op, record):
+                _run_linear(child, steps, i + 1, out)
+            return
+        result = _apply_op(record, op)
+        if result is None:
+            return
+        record = result
+    out.append(cast(Record, record))
+
+
+def _run_from(
+    index: int,
+    seed: Any,
+    steps: Sequence[FlowStep],
+    outputs: str,
+    env: Dict[str, Any],
+    remaining: Dict[str, int],
+    prev: Optional[str],
+    out: List[Record],
+) -> None:
+    """Run ``steps[index:]`` over ``env``, appending every surviving result to ``out``.
+
+    Recurses ONCE PER CHILD at an expanding step (recursion depth = the number of expanding
+    steps on the path, not the record count), which is what gives depth-first sibling order
+    for free.
+
+    Each expansion branch gets its OWN shallow copy of the step environment (independent
+    name→result maps, shared values), so siblings cannot see each other's results.
+    """
 
     def read_result(name: str, *, copy: bool) -> Any:
         value = env[name]
@@ -277,8 +387,8 @@ def run_steps(
             value = deepcopy(value)
         return value
 
-    prev: Optional[str] = None
-    for step in steps:
+    for i in range(index, len(steps)):
+        step = steps[i]
         # 1. the input record (implicit stream reads move; explicit fan-out reads copy)
         if step.from_ is not None:
             record = read_result(step.from_, copy=True)
@@ -308,12 +418,6 @@ def run_steps(
         # 3. per-record parameter binds
         if step.op is not None:
             op = step.op
-            if getattr(op, "EXPANDS", False):
-                raise NotImplementedError(
-                    f"flow step {step.name!r}: {type(op).__name__!r} is a 1→N expanding op — "
-                    "FlowGraph steps are strictly 1→1 (a named-step env has one result per step). "
-                    "Run expanding pipelines through the Stream engine (iterable-only)."
-                )
             for param, ref in step.bind.items():
                 parsed = _split_bind_ref(ref)
                 if parsed.attr is not None:
@@ -330,15 +434,47 @@ def run_steps(
                         # "step[key]" = the named entry; bare "step" = the whole record.
                         value = value[parsed.key]
                 setattr(op, param, value)
+
+            # 4. a 1→N step forks the REMAINING subgraph, one branch per child
+            if _op_expands(op):
+                for child in _expand(op, record):
+                    child_env = dict(env)
+                    child_env[step.name] = child
+                    _run_from(i + 1, seed, steps, outputs, child_env, dict(remaining), step.name, out)
+                return
+
             result = _apply_op(record, op)
             if result is None:
-                return None
+                return
             record = result
 
         env[step.name] = record
         prev = step.name
 
-    return cast(Optional[Record], env.get(outputs)) if outputs in env else None
+    if outputs in env:
+        out.append(cast(Record, env[outputs]))
+
+
+def run_steps(
+    seed: Any,
+    steps: Sequence[FlowStep],
+    outputs: str,
+    readers: Optional[Dict[str, List[Tuple[int, str]]]] = None,
+) -> Optional[Record]:
+    """Strictly 1→1 twin of :func:`run_steps_multi` — one result back, or ``None``.
+
+    For callers that need exactly one carrier (indexing, a single-record probe). An expanding
+    step RAISES here rather than silently dropping its siblings; route those through
+    :func:`run_steps_multi`.
+    """
+    for step in steps:
+        if step.op is not None and _op_expands(step.op):
+            raise TypeError(
+                f"flow step {step.name!r}: {type(step.op).__name__!r} is a 1→N expanding op, which "
+                "this strictly 1→1 route cannot carry — iterate the graph instead."
+            )
+    results = run_steps_multi(seed, steps, outputs, readers)
+    return results[0] if results else None
 
 
 def _graph_worker_task(
@@ -346,27 +482,27 @@ def _graph_worker_task(
     steps: Sequence[FlowStep],
     outputs: str,
     families: Optional[List[Tuple[str, OpMatcher, OpInvoker]]] = None,
-) -> Optional[Record]:
+) -> List[Record]:
     """Spawn-worker entry point: re-register third-party op families, then run one record.
 
     Module-level for pickling (the same constraint :func:`recordstream.core._worker_task_multi`
-    obeys). ``readers`` is deliberately NOT passed across the boundary — it is cheap to derive
-    once per worker call relative to the process hop, and shipping it would add a second
-    pickled structure that must stay in sync with ``steps``.
+    obeys). Returns a LIST because an expanding step makes one seed yield several records.
+    ``readers`` is deliberately NOT passed across the boundary — it is cheap to derive once per
+    worker call relative to the process hop, and shipping it would add a second pickled
+    structure that must stay in sync with ``steps``.
     """
     _sync_op_families(families)
-    return run_steps(seed, steps, outputs)
+    return run_steps_multi(seed, steps, outputs)
 
 
 @configurable(category="engine")
 class FlowGraph(torch.utils.data.Dataset[Record]):
     """Named-step graph engine — executes a ``flow:`` document natively.
 
-    The readable twin of :class:`~recordstream.core.Stream`: steps run in document order over
-    a per-record environment of named results, with fan-out isolation (copy-on-read, move
-    on last read) and automatic cell lifetimes. Any FlowGraph converts to a flat op list
-    for the serial engine (:func:`to_ops`) and back (:func:`from_ops`) — execution parity
-    between the two is a pinned contract.
+    The named-step twin of :class:`~recordstream.core.Stream`, over the SAME kernel: steps run
+    in document order against a per-record environment of named results, with fan-out isolation
+    (copy-on-read, move on last read) and automatic result lifetimes. A LINEAR graph converts
+    to a Stream (:meth:`to_stream`); a branchy one has no flat spelling by design.
 
     Args:
         source: Any iterable or indexable dataset (duck-typed) yielding record dicts; ``None`` = empty stream.
@@ -389,6 +525,7 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
         self._chunk_size = int(chunk_size)
         self._workers = 1
         self._parsed: Optional[Tuple[List[FlowStep], str]] = None
+        self._readers: Optional[Dict[str, List[Tuple[int, str]]]] = None
 
     # -- parsing -----------------------------------------------------------
 
@@ -416,6 +553,13 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
                 self._parsed = parse_flow(cast(Dict[str, Any], self.flow), self.outputs)
         return self._parsed
 
+    def _ensure_readers(self) -> Dict[str, List[Tuple[int, str]]]:
+        """The reader accounting, computed ONCE per graph (see :func:`run_steps`)."""
+        if self._readers is None:
+            steps, outputs = self._ensure_parsed()
+            self._readers = _result_readers(steps, outputs)
+        return self._readers
+
     @classmethod
     def from_yaml(cls, path: str, source: Optional[Any] = None) -> "FlowGraph":
         """Build a FlowGraph from a ``{flow: {...}, outputs: ...}`` YAML document (or inline string).
@@ -430,95 +574,24 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
 
     @classmethod
     def from_ops_yaml(cls, path: str, source: Optional[Any] = None) -> "FlowGraph":
-        """Lift a flat ``{ops: [...]}`` YAML document into a FlowGraph (via :func:`from_ops`)."""
-        from recordstream.core import Stream
+        """Load a flat ``{ops: [...]}`` YAML document as a LINEAR step graph.
+
+        No lifting is involved: a sequence IS a graph, so the op list becomes positional
+        steps (``recordstream.core.linear_steps``) — the same compilation a ``Stream``'s
+        ``ops`` list goes through, because they are the same thing spelled two ways.
+        """
+        from recordstream.core import Stream, linear_steps
 
         stream = Stream.from_ops_yaml(path, source=source)
-        flow_doc, outputs = from_ops(stream.ops)
-        return cls(source=source, flow=flow_doc, outputs=outputs)
+        steps, outputs = linear_steps(stream.ops)
+        return cls(source=source, flow=steps, outputs=outputs)
 
     # -- execution ---------------------------------------------------------
 
     def _run(self, seed: Any) -> Optional[Any]:
         """Run one record through the steps; ``None`` = filtered (an op returned None)."""
         steps, outputs = self._ensure_parsed()
-        readers = _result_readers(steps, outputs)
-        env: Dict[str, Any] = {}
-        remaining = {name: len(idx) for name, idx in readers.items()}
-
-        def read_result(name: str, *, copy: bool) -> Any:
-            value = env[name]
-            remaining[name] -= 1
-            if remaining[name] <= 0:
-                del env[name]
-            elif copy:
-                from copy import deepcopy
-
-                value = deepcopy(value)
-            return value
-
-        prev: Optional[str] = None
-        for step in steps:
-            # 1. the input record (implicit stream reads move; explicit fan-out reads copy)
-            if step.from_ is not None:
-                record = read_result(step.from_, copy=True)
-            elif prev is not None:
-                record = read_result(prev, copy=False)
-            else:
-                record = seed
-
-            # 2. fan-in: UNION the merge_from steps' entries (slot order, last wins)
-            if step.merge_from:
-                if not isinstance(record, dict):
-                    raise TypeError(
-                        f"flow step {step.name!r}: merge_from is the record fan-in but the carrier is "
-                        f"{type(record).__name__} — expected a record dict."
-                    )
-                merged = dict(record)
-                for ref in step.merge_from:
-                    value = read_result(ref, copy=True)
-                    if not isinstance(value, dict):
-                        raise TypeError(
-                            f"flow step {step.name!r}: merge_from step {ref!r} holds "
-                            f"{type(value).__name__}, expected a record"
-                        )
-                    merged.update(value)
-                record = merged
-
-            # 3. per-record parameter binds
-            if step.op is not None:
-                op = step.op
-                if getattr(op, "EXPANDS", False):
-                    raise NotImplementedError(
-                        f"flow step {step.name!r}: {type(op).__name__!r} is a 1→N expanding op — "
-                        "FlowGraph steps are strictly 1→1 (a named-step env has one result per step). "
-                        "Run expanding pipelines through the Stream engine (iterable-only)."
-                    )
-                for param, ref in step.bind.items():
-                    parsed = _split_bind_ref(ref)
-                    if parsed.attr is not None:
-                        producer = next(s for s in steps if s.name == parsed.step)
-                        value = _read_output(producer.op, parsed.attr)
-                        if value is _MISSING:
-                            raise AttributeError(
-                                f"flow step {step.name!r}: bind {param}={ref!r} — "
-                                f"step {parsed.step!r} op has no @output attribute {parsed.attr!r}"
-                            )
-                    else:
-                        value = read_result(parsed.step, copy=False)
-                        if isinstance(value, dict) and parsed.key:
-                            # "step[key]" = the named entry; bare "step" = the whole record.
-                            value = value[parsed.key]
-                    setattr(op, param, value)
-                result = _apply_op(record, op)
-                if result is None:
-                    return None
-                record = result
-
-            env[step.name] = record
-            prev = step.name
-
-        return cast(Optional[Record], env.get(outputs)) if outputs in env else None
+        return run_steps(seed, steps, outputs, self._ensure_readers())
 
     def __iter__(self) -> Iterator[Any]:
         if self.source is None:
@@ -541,22 +614,48 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
             yield from self._iter_parallel()
             return
         assert self.source is not None
+        steps, outputs = self._ensure_parsed()
+        readers = self._ensure_readers()
         for item in self.source:
-            result = self._run(item)
-            if result is not None:
-                yield result
+            yield from run_steps_multi(item, steps, outputs, readers)
 
     def _iter_parallel(self) -> Iterator[Record]:
-        """Multiprocess execution — delegates to the serial engine over the LOWERED op list."""
-        from recordstream.core import Stream
+        """Multiprocess execution — the graph's OWN spawn pool, one future per source record.
 
+        Mirrors :meth:`recordstream.core.Stream._iter_parallel`: ``spawn`` (consistent with
+        Loggair, no CI deadlocks), third-party op families shipped to the workers by
+        reference. The steps pickle because their ops already must; the source never crosses
+        the boundary (only the seed record does).
+        """
         assert self.source is not None
-        stream = Stream(source=self.source, ops=to_ops(self.steps, self.output_step)).parallel(self._workers)
-        yield from stream
+        steps, outputs = self._ensure_parsed()
+        ctx = multiprocessing.get_context("spawn")
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
+            extra_families = _extra_op_families()
+            futures = [
+                executor.submit(_graph_worker_task, item, steps, outputs, extra_families) for item in self.source
+            ]
+            for future in futures:
+                yield from future.result()
+
+    @property
+    def _expands(self) -> bool:
+        """True when any step op is 1→N — the length/index map is then unknowable."""
+        return any(step.op is not None and _op_expands(step.op) for step in self._ensure_parsed()[0])
+
+    def _guard_not_expanding(self, operation: str) -> None:
+        if self._expands:
+            raise TypeError(
+                f"FlowGraph.{operation} is unavailable: a step op is 1→N EXPANDING, so the "
+                "expanded length/index map is unknowable. Iterate the graph, wrap it in a torch "
+                "IterableDataset, window at the SOURCE for random access, or call .collect()."
+            )
 
     def __len__(self) -> int:
         from collections.abc import Sized
 
+        self._guard_not_expanding("__len__")
         if isinstance(self.source, Sized):
             return len(self.source)
         return 0
@@ -564,6 +663,7 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
     def __getitem__(self, index: int) -> Any:
         if self.source is None:
             raise TypeError("FlowGraph source is None — cannot index.")
+        self._guard_not_expanding("__getitem__")
         if hasattr(self.source, "__getitem__"):
             raw = self.source[index]
         else:
@@ -577,7 +677,7 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
         return result
 
     def parallel(self, workers: int = 4) -> "FlowGraph":
-        """Enable multiprocess execution (spawn, via the lowered serial form)."""
+        """Enable multiprocess execution on the graph's own spawn pool."""
         self._workers = workers
         return self
 
@@ -591,287 +691,19 @@ class FlowGraph(torch.utils.data.Dataset[Record]):
         return list(self)
 
     def to_stream(self) -> Any:
-        """The serial-engine twin: a Stream running the LOWERED flat op list (same results)."""
+        """The ``Stream`` twin of a LINEAR graph — same source, same ops, same engine.
+
+        Only a straight chain converts: a `Stream` carries an op LIST, which cannot express
+        fan-out. A branchy graph has no flat spelling (that is what the deleted lowering pass
+        manufactured, at the cost of destroying the structure), so it raises.
+        """
         from recordstream.core import Stream
 
-        return Stream(source=self.source, ops=to_ops(self.steps, self.output_step))
-
-
-# ---------------------------------------------------------------------------
-# Lowering: flow -> flat context-ops list
-# ---------------------------------------------------------------------------
-
-
-def to_ops(steps: Union[Sequence[FlowStep], Dict[str, Any]], outputs: str = "") -> List[Any]:
-    """Lower a flow (parsed steps or a raw flow mapping) into a flat context-ops list.
-
-    The result runs on the plain serial :class:`~recordstream.core.Stream` engine and is the
-    serialization form a graph exporter's serial mode emits. Cell names are the step
-    names (deterministic, diffable); liveness is compiled into ``drop`` flags so a
-    well-formed graph leaves the Context empty. A purely linear flow lowers to the bare
-    op list — zero context ops.
-    """
-    if isinstance(steps, dict):
-        parsed, outputs = parse_flow(steps, outputs)
-    else:
-        parsed = list(steps)
-        outputs = outputs or (parsed[-1].name if parsed else "")
-
-    readers = _result_readers(parsed, outputs)
-    needs_cell: Dict[str, bool] = {}
-    cell_reads_left: Dict[str, int] = {}
-    for i, step in enumerate(parsed):
-        consumers = list(readers[step.name])
-        stream_read: Optional[Tuple[int, str]] = None
-        if i + 1 < len(parsed) and (parsed[i + 1].from_ or step.name) == step.name:
-            stream_read = (i + 1, "in")
-        elif i == len(parsed) - 1:
-            stream_read = (len(parsed), "out")
-        cell_reads = [c for c in consumers if c != stream_read]
-        needs_cell[step.name] = bool(cell_reads)
-        cell_reads_left[step.name] = len(cell_reads)
-
-    ops: List[Any] = []
-    attr_cells: Dict[str, str] = {}  # "step.attr" -> cell name
-
-    # Pre-scan @output refs: the producer op must be wrapped in Capture at ITS step.
-    attr_refs: Dict[str, List[str]] = {}
-    for step in parsed:
-        for ref in step.bind.values():
-            parsed_ref = _split_bind_ref(ref)
-            if parsed_ref.attr is not None:
-                attr_refs.setdefault(parsed_ref.step, [])
-                if parsed_ref.attr not in attr_refs[parsed_ref.step]:
-                    attr_refs[parsed_ref.step].append(parsed_ref.attr)
-
-    def take_cell(name: str) -> Tuple[str, bool]:
-        """(cell, is_last_read) — decrement the read counter."""
-        cell_reads_left[name] -= 1
-        return name, cell_reads_left[name] <= 0
-
-    prev_name: Optional[str] = None
-    for i, step in enumerate(parsed):
-        # 1. input slot (explicit from == previous step consumes the stream — no Use)
-        if step.from_ is not None and step.from_ != prev_name:
-            cell, last = take_cell(step.from_)
-            ops.append(Use(name=cell, drop=last))
-
-        # 2. fan-in slot — typed union (MergeFields)
-        if step.merge_from:
-            merge_drops: List[str] = []
-            merge_cells: List[str] = []
-            for ref in step.merge_from:
-                cell, last = take_cell(ref)
-                merge_cells.append(cell)
-                if last:
-                    merge_drops.append(cell)
-            ops.append(MergeFields(sources=merge_cells, drop=merge_drops))
-
-        # 3. the op, wrapped for binds (Apply) and @output captures (Capture)
-        emitted: Optional[Any] = step.op
-        if emitted is not None:
-            for param, ref in step.bind.items():
-                parsed_ref = _split_bind_ref(ref)
-                if parsed_ref.attr is not None:
-                    cell = attr_cells[ref]
-                    cell_reads_left.setdefault(cell, 1)
-                    cell_reads_left[cell] -= 1
-                    emitted = Apply(op=emitted, param=param, source=cell, drop=cell_reads_left[cell] <= 0)
-                else:
-                    cell, last = take_cell(parsed_ref.step)
-                    emitted = Apply(op=emitted, param=param, source=cell, key=parsed_ref.key or "", drop=last)
-            captures = attr_refs.get(step.name, [])
-            if captures:
-                for attr in captures:
-                    cell = f"{step.name}.{attr}"
-                    attr_cells[cell] = cell
-                    cell_reads_left[cell] = sum(
-                        1 for s in parsed for r in s.bind.values() if r == f"{step.name}.{attr}"
-                    )
-                if len(captures) == 1:
-                    emitted = Capture(op=emitted, output=captures[0], name=f"{step.name}.{captures[0]}")
-                else:
-                    emitted = Capture(op=emitted, captures={a: f"{step.name}.{a}" for a in captures})
-            ops.append(emitted)
-        elif step.merge_from is None and step.from_ is None and i == 0:
-            # identity first step ({}: names the source) — nothing to run
-            pass
-
-        # 4. persist the result for non-stream readers
-        if needs_cell[step.name]:
-            ops.append(Save(name=step.name))
-
-        prev_name = step.name
-
-    # 5. the output: if it is not the final stream, fetch it.
-    if parsed and outputs != parsed[-1].name:
-        cell, last = take_cell(outputs)
-        ops.append(Use(name=cell, drop=last))
-
-    # 6. safety net: any cells the liveness pass left alive get an explicit Drop.
-    leftovers = [name for name, left in cell_reads_left.items() if left > 0 and needs_cell.get(name, True)]
-    if leftovers:
-        ops.append(Drop(names=sorted(leftovers)))
-
-    return ops
-
-
-# ---------------------------------------------------------------------------
-# Lifting: flat context-ops list -> flow
-# ---------------------------------------------------------------------------
-
-
-_CONTEXT_OP_CLASSES = (Save, Use, Drop, Apply, Capture, MergeFields)
-
-
-def _ctx_view(raw: Any) -> Optional[type]:
-    """The context-op class ``raw`` represents, live instance OR confluid marker; else None."""
-    if isinstance(raw, _ConfluidFluid):
-        target = getattr(raw, "target", None)
-        return target if isinstance(target, type) and target in _CONTEXT_OP_CLASSES else None
-    return type(raw) if isinstance(raw, _CONTEXT_OP_CLASSES) else None
-
-
-def _ctx_field(raw: Any, name: str, default: Any = None) -> Any:
-    """Read a context-op field off a live instance OR a marker's kwargs."""
-    if isinstance(raw, _ConfluidFluid):
-        return raw.kwargs.get(name, default)
-    return getattr(raw, name, default)
-
-
-def _capture_items(raw: Any) -> Dict[str, str]:
-    """A Capture's ``{output_attr: cell}`` map, live instance or marker."""
-    if not isinstance(raw, _ConfluidFluid):
-        return cast(Capture, raw)._items()
-    items = dict(raw.kwargs.get("captures") or {})
-    output = str(raw.kwargs.get("output", "") or "")
-    if output:
-        items.setdefault(output, str(raw.kwargs.get("name", "") or "") or output)
-    return items
-
-
-def _auto_name(op: Any, index: int, taken: Dict[str, int]) -> str:
-    if op is None:
-        base = "step"
-    elif isinstance(op, _ConfluidFluid):
-        target = getattr(op, "target", None)
-        base = getattr(target, "__name__", str(target)).lower()
-    else:
-        base = type(op).__name__.lower()
-    taken[base] = taken.get(base, 0) + 1
-    return base if taken[base] == 1 else f"{base}_{taken[base]}"
-
-
-def from_ops(ops: Sequence[Any], outputs: str = "") -> Tuple[Dict[str, Any], str]:
-    """Lift a flat op list into a ``(flow_mapping, outputs)`` pair.
-
-    Context ops are absorbed into step grammar: ``Save`` names the preceding step (or an
-    identity first step for a source fork), ``Use`` starts a branch (``from:``),
-    ``MergeFields`` becomes ``merge_from`` on the following step (or a pure fan-in step),
-    ``Apply``/``Capture`` unwrap into ``bind:`` references, and ``Drop`` vanishes (liveness
-    is recomputed on lowering). A plain linear list lifts to a linear flow with
-    auto-generated step names. The result round-trips.
-
-    Accepts LIVE ops or confluid ``Instance``/``Class`` MARKERS interchangeably.
-    """
-    flow_map: Dict[str, Dict[str, Any]] = {}
-    taken: Dict[str, int] = {}
-    prev_name: Optional[str] = None
-    capture_cells: Dict[str, str] = {}  # cell -> "step.attr" bind ref
-    pending: Dict[str, Any] = {}  # accumulating step grammar (from/merge_from/...)
-
-    def cell_ref(cell: str) -> str:
-        """Map a cell name to its bind reference (an @output capture or a step result)."""
-        return capture_cells.get(cell, cell)
-
-    def flush_step(op: Optional[Any], explicit_name: Optional[str] = None) -> str:
-        nonlocal prev_name, pending
-        name = explicit_name or _auto_name(op, len(flow_map), taken)
-        entry: Any
-        if op is not None and not pending:
-            entry = op  # a grammar-less step is just its op (the compact document form)
-        else:
-            entry = dict(pending)
-            if op is not None:
-                entry["op"] = op
-        flow_map[name] = entry
-        pending = {}
-        prev_name = name
-        return name
-
-    for raw in ops:
-        view = _ctx_view(raw)
-        if view is Save:
-            save_name = str(_ctx_field(raw, "name", ""))
-            if prev_name is not None:
-                # rename the just-flushed step to the cell name
-                entry = flow_map.pop(prev_name)
-                for e in flow_map.values():
-                    b = e.get("bind") if isinstance(e, dict) else None
-                    if b:
-                        for p, r in list(b.items()):
-                            head, dot, attr = r.partition(".")
-                            if head == prev_name:
-                                b[p] = save_name + (dot + attr if dot else "")
-                flow_map[save_name] = entry
-                for cell, ref in list(capture_cells.items()):
-                    head, dot, attr = ref.partition(".")
-                    if head == prev_name:
-                        capture_cells[cell] = save_name + (dot + attr if dot else "")
-                prev_name = save_name
-            else:
-                # Save before any op: an identity step naming the source
-                flow_map[save_name] = {}
-                prev_name = save_name
-            continue
-        if view is Use:
-            pending["from"] = cell_ref(str(_ctx_field(raw, "name", "")))
-            continue
-        if view is MergeFields:
-            sources = [cell_ref(str(c)) for c in (_ctx_field(raw, "sources", None) or [])]
-            pending["merge_from"] = sources
-            pending["__mix_pending__"] = True
-            continue
-        if view is Drop:
-            continue  # liveness is recomputed on lowering
-
-        # A real op (possibly Apply/Capture-wrapped): unwrap into bind grammar.
-        bind: Dict[str, str] = {}
-        captures: Dict[str, str] = {}
-        op: Any = raw
-        while _ctx_view(op) in (Apply, Capture):
-            if _ctx_view(op) is Capture:
-                for attr, cell in _capture_items(op).items():
-                    captures[cell] = attr
-            else:
-                ref = cell_ref(str(_ctx_field(op, "source", "")))
-                apply_key = str(_ctx_field(op, "key", "") or "")
-                bind[str(_ctx_field(op, "param", ""))] = f"{ref}[{apply_key}]" if apply_key else ref
-            op = _ctx_field(op, "op")
-        pending.pop("__mix_pending__", None)
-        if bind:
-            pending["bind"] = bind
-        name = flush_step(op)
-        for cell, attr in captures.items():
-            capture_cells[cell] = f"{name}.{attr}"
-
-    # A trailing MergeFields (or Use) with no following op = a pure fan-in step.
-    if pending:
-        pending.pop("__mix_pending__", None)
-        flush_step(None)
-
-    if not flow_map:
-        raise ValueError("from_ops: no steps could be lifted (empty op list?)")
-    out = outputs or prev_name or next(reversed(flow_map))
-    return flow_map, out
-
-
-def flow_yaml_to_stream(path: str, source: Optional[Any] = None) -> Any:
-    """Convenience: load a ``flow:`` YAML and return the SERIAL engine (lowered Stream)."""
-    from recordstream.core import Stream
-
-    doc = _confluid_resolve(path)
-    if not isinstance(doc, dict) or "flow" not in doc:
-        raise ValueError(f"flow_yaml_to_stream: {path!r} has no 'flow:' mapping")
-    parsed, outputs = parse_flow(doc["flow"], str(doc.get("outputs", "") or ""))
-    return Stream(source=source, ops=to_ops(parsed, outputs))
+        steps, outputs = self._ensure_parsed()
+        if not is_linear(steps, outputs):
+            raise TypeError(
+                "FlowGraph.to_stream: this graph is not a straight chain (it forks or merges), "
+                "and a Stream's ops list cannot express that. Iterate the FlowGraph directly — "
+                "it is the same engine."
+            )
+        return Stream(source=self.source, ops=[s.op for s in steps if s.op is not None])

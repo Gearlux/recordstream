@@ -15,7 +15,6 @@ from confluid import parse_param_docs  # type: ignore[import-not-found]
 from recordstream import Pipeline, Transform
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
 from recordstream.ops.configure import ConfigureOp
-from recordstream.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
@@ -48,12 +47,6 @@ _NODE_CLASSES = [
     DropField,
     CopyField,
     SelectFields,
-    Save,
-    Use,
-    Drop,
-    Apply,
-    Capture,
-    MergeFields,
     ConfigureOp,
     FormulaOp,
     Enable,

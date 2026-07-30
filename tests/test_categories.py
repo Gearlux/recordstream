@@ -12,7 +12,6 @@ from confluid.registry import get_registry
 from recordstream import Pipeline
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
 from recordstream.ops.configure import ConfigureOp
-from recordstream.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
@@ -70,12 +69,6 @@ def test_op_classes_tagged() -> None:
         DropField,
         CopyField,
         SelectFields,
-        Save,
-        Use,
-        Drop,
-        Apply,
-        Capture,
-        MergeFields,
         PrintRecordOp,
     ):
         assert cls.__confluid_category__ == "op", cls.__name__
@@ -104,8 +97,6 @@ def test_op_group_tags() -> None:
     assert DecodeTarget.__confluid_group__ == "structure"
     assert CocoToTorchVisionDetection.__confluid_group__ == "structure"
     assert MasksToDetectionBoxes.__confluid_group__ == "structure"
-    for ctx_op in (Save, Use, Drop, Apply, Capture, MergeFields):
-        assert ctx_op.__confluid_group__ == "structure", ctx_op.__name__
     assert Parallel.__confluid_group__ == "compose"
     assert Enable.__confluid_group__ == "compose"
     assert Pipeline.__confluid_group__ == "compose"
@@ -155,8 +146,5 @@ def test_groups_enumerable_via_registry() -> None:
         "CocoToTorchVisionDetection",
         "MasksToDetectionBoxes",
         "SelectFields",
-        "Save",
-        "Use",
-        "MergeFields",
     } <= registry.list_classes(group="structure")
     assert "Pipeline" in registry.list_classes(category="op", group="compose")

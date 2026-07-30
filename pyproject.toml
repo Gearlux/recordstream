@@ -69,8 +69,6 @@ recordstream-ops-random-apply = "recordstream.ops.random_apply"
 # changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.
 recordstream-ops-configure = "recordstream.ops.configure"
 recordstream-ops-formula = "recordstream.ops.formula"
-# Context ops (Save/Use/Drop/Apply/Capture/MergeFields) — the graph-plane building blocks lowered from flow: docs
-recordstream-ops-context = "recordstream.ops.context"
 # The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
 recordstream-flow = "recordstream.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source

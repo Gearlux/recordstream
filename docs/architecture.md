@@ -272,91 +272,105 @@ mask = batch_tensor(batch, "target").long()               # a segmenter's [N, H,
 
 ---
 
-## 3. The per-record Context is an ambient wiring plane (`recordstream.context`, 2026-07-17)
+## 3. The graph IS the execution model — the lowering pass was deleted (2026-07-30)
+
+*(Supersedes "The per-record Context is an ambient wiring plane", 2026-07-17.)*
 
 ### Context
 
-Graph-shaped pipelines — fan-out, fan-in, cross-branch values — need somewhere to hold a value
-between the op that produces it and the op that consumes it. The obvious candidate, extra keys on
-the record itself, was rejected: the record is the carrier that **persists** — it flows into
-sinks, crosses process boundaries, and is the record's serialized identity — while wiring data is
-transient scaffolding that should be gone by the end of a well-formed graph. Three constraints
-shaped the mechanism: ops keep the plain `__call__(record)` signature (no threading a context
-parameter through every op), the executor stays a bare `for op in ops` loop (graphs run on the
-*plain sequential engine*), and a linear pipeline's records must stay byte-for-byte untouched.
+Between 2026-07-17 and 2026-07-30 this package had two ways to run a pipeline. A `flow:`
+document (named steps, explicit `from:`/`merge_from:`/`bind:` edges) was the readable authoring
+form; a flat `ops:` list was the execution form. A **lowering pass** (`to_ops`) compiled the
+first into the second by inserting six *context ops* — `Save`/`Use`/`Drop`/`Apply`/`Capture`/
+`MergeFields` — that moved records through an ambient per-record cell store, and a **lifting
+pass** (`from_ops`) reconstructed a flow document from such a list. Execution parity in both
+directions was a pinned contract with its own suite.
+
+The arrangement was coherent but it cost a second executor (`FlowGraph` duplicating `Stream`'s
+iteration, length, indexing and batching while being strictly less capable — no `to_sink`, no
+`project`, and a `NotImplementedError` on 1→N expanding steps), a permanent parity tax on every
+change to an op's semantics, and an ambient `contextvars` plane that nothing in the workspace's
+15 real configs ever used. Adoption told the story plainly: every config on disk was a linear
+`ops:` list; zero were `flow:` documents; the only producer of branchy pipelines — the visual
+editor — compiled its canvas graph *down* to context ops and then lifted it *back* to a flow
+document purely for readability.
+
+The decisive argument was about the consumer nobody had built yet. A lowered list re-encodes
+dataflow as imperative mutation of named cells, which is exactly the information a compiler
+needs and cannot recover: reverse-dependency analysis walks `node.inputs` backwards from the
+outputs, and a flat list has no inputs. Handing a compiler the lowered form means asking it to
+run the lifting pass first to rebuild what was just destroyed.
 
 ### Decision
 
-`recordstream/context.py` is a **per-record named-cell store activated ambiently**: the engine
-creates one fresh `Context` per source item and activates it around the op loop via a
-`contextvars.ContextVar`; the six wiring ops (`Save`/`Use`/`Drop`/`Apply`/`Capture`/`MergeFields`
-in `recordstream.ops.context`) reach it inside `__call__` through `require(op_name)` — no signature
-change anywhere. Deliberate semantics: cells are stored **by reference** and copy-on-read is the
-*reading* op's decision (`Use` deep-copies unless `drop` frees the cell = move); a missing cell
-on read or delete **raises loudly** with the live-cell list (a liveness bug must never pass
-silently); 1→N expansion children get `Context.copy()` (shallow — independent cell *sets*, shared
-values); cells may NOT cross a stream-level op boundary (`Parallel` raises on live cells — each
-inner chain gets its own contexts). A `Context` is never `@configurable` and never appears in
-YAML — it is pure runtime plumbing. The public surface is two-tier by design: the `Context` class
-is a package-root export, while `activate`/`current`/`require` stay module-qualified — reachable,
-but visibly plumbing. `FlowGraph` deliberately does NOT use this module: its named-step documents
-give the compiler full knowledge of cell lifetimes, so it manages its own per-record env
-directly, held to the context-op semantics by the pinned flow⇄ops execution-parity contract.
+**One execution model: the step graph.** Both spellings parse to the same `FlowStep` list and run
+through the same per-record kernel (`recordstream.flow.run_steps_multi`).
+
+- An `ops:` list compiles to positional steps (`core.linear_steps` — `s0`, `s1`, …) whose names
+  never surface. A sequence IS a graph; no lifting is involved.
+- A `flow:` document parses to the same steps with author-chosen names and explicit edges.
+- The kernel takes an **env-free fast path** for a straight chain (`is_linear`), so the linear
+  case carries none of the graph bookkeeping.
+- `to_ops`, `from_ops`, `Stream.from_flow_yaml`, `recordstream.context` and
+  `recordstream.ops.context` are **deleted**, with no back-compat shims.
+
+Fan-out, fan-in and cross-step values are expressed as step GRAMMAR rather than as ops: `from:`
+is the fork, `merge_from:` the union, `bind:` the cross-step value (including a producer's live
+`@output` via `step.attr`). Branch isolation, which the cell store provided by deep-copying on
+read, is now a property of the environment: each expansion branch gets its own shallow copy of
+the step env, and a fan-out read copies.
 
 ### Consequences
 
-- A plain sequential `ops:` list executes a real fan-out/fan-in graph — which is exactly what
-  graph exporters (a visual canvas, the `flow:` compiler) lower to, so ONE executor serves both
-  linear and graph pipelines.
-- Linear pipelines are provably untouched: no context op ⇒ the Context is created and never
-  used; the record-byte-identical invariant is pinned in the record-model suite under `tests/`.
-- Spawn-parallelism is safe by construction: contexts are created *inside* the worker and never
-  pickled or shared across processes.
-- Ambient state cuts both ways: running an op list containing context ops *outside* an engine
-  needs an explicit `with activate(Context()):` — forgetting it is a loud, actionable
-  `RuntimeError`, not silent misbehavior.
-- Custom ops can join the wiring plane through the same `require()` seam the built-in six use —
-  the module being public is what keeps the wiring plane open rather than a closed set of six.
+- **One executor.** `Stream` and `FlowGraph` are two facades over one kernel; the parity suite is
+  gone because there is nothing left to keep in parity.
+- **Expanding ops work everywhere.** The graph gained 1→N support (the remaining subgraph runs per
+  child, depth-first) that the old `FlowGraph` refused outright.
+- **A branchy pipeline has no flat spelling — deliberately.** `FlowGraph.to_stream()` raises for
+  one, and a visual editor's ops-export raises pointing at its flow export. This is the honest
+  consequence of deleting the pass that manufactured such a spelling.
+- **Compilation becomes possible.** A backend reads `FlowGraph.steps` and maps each step to an IR
+  node with real `inputs`; reverse-dependency pruning runs on the result.
+- **Measured cost:** on a 23-step pipeline of trivial ops the graph engine was 1.41x the old flat
+  loop; hoisting a per-record analysis pass and adding the linear fast path brought it to 1.02x,
+  and with real ops in the chain the difference is not measurable.
+- **Lost with the cell store:** a hand-written wiring op that stashed a value under its own cell
+  name. Anything that must persist belongs in the record; anything that wires belongs in the
+  grammar.
 
 ### Example
 
+```yaml
+# Fan-out -> two branches -> fan-in, entirely in step grammar. No cells, no snapshots.
+flow:
+  spec:   !class:mypkg.MakeSpectrogram {}
+  masked: !class:recordstream.ops.numpy.Threshold {low_level: 0.5, from: spec}
+  boost:  !class:mypkg.Boost {from: spec}          # second reader of `spec` = the fork
+  out:    {from: boost, merge_from: [masked]}      # union, last-write-wins
+outputs: out
+```
+
 ```python
-from recordstream import Stream
-from recordstream.ops.context import MergeFields, Save
+# The same graph, and what a compiler front end reads off it.
+from recordstream.flow import parse_flow
 
-# Fan-out/fan-in on the PLAIN sequential engine: snapshot → mutate the stream → merge back.
-stream = Stream(
-    source=my_source,
-    ops=[
-        Save(name="clean"),                                             # snapshot into a cell
-        my_augment_op,                                                  # the stream mutates freely
-        MergeFields(sources=["clean"], keys=["mask"], drop=["clean"]),  # fan-in, cell freed
-    ],
-)
-
-# The same op list outside an engine needs the Context an engine would have created:
-from recordstream.context import Context, activate, require
-
-with activate(Context()):
-    for op in ops:
-        record = op(record)
-
-# A custom op joins the wiring plane through the same seam the built-in six use:
-#     require("MyOp").get("clean")   /   require("MyOp").put("my_cell", value)
+steps, outputs = parse_flow(doc["flow"], doc["outputs"])
+for step in steps:
+    print(step.name, "<-", step.from_, step.merge_from)   # every edge, explicit
+# out <- boost ('masked',)
 ```
 
 ### What you may change (and where it's documented)
 
-- **Writing a custom wiring op** is the supported extension point: call `require("YourOpName")`
-  inside `__call__`, follow the by-reference/copy-on-read discipline, and free cells you consume.
-  Usage of the six built-in ops lives in [graph.md](graph.md).
-- **Keep the surface narrow.** Don't root-export `activate`/`current`/`require`, and don't grow
-  `Context` into a general blackboard — anything that should *persist with the record* belongs in
-  the record itself, not in a cell.
-- **Changing cell semantics** (by-reference storage, loud missing-cell errors, the `Parallel`
-  boundary rule, `copy()` shallowness) is an architectural change: the flow⇄ops parity suite and
-  the pinned context invariants define the contract. Update this record and the recordstream
-  `AGENTS.md` context mandate together.
+- **Adding a step-grammar key** is an architectural change: it widens the contract every consumer
+  (the engine, a compiler front end, a visual editor's compiler) reads. Update this record, the
+  `AGENTS.md` flow mandate, and [graph.md](graph.md) together.
+- **The linear fast path** (`is_linear`) is an optimization, not a semantic: it must produce
+  results identical to the general path, and the suite pins that both spellings agree.
+- **Do NOT reintroduce a lowering pass.** A flat list that encodes branches as cell mutations is
+  a second execution model wearing the first one's clothes; the reason it was removed is written
+  above. If a future runtime genuinely needs a flattened schedule, it owns that pass — over its
+  own IR, downstream of the graph.
 
 ---
 

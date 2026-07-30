@@ -15,8 +15,6 @@ Submodules:
     - recordstream.ops.configure: ConfigureOp (per-record parameter injection)
     - recordstream.ops.formula: FormulaOp (math formula over one record entry)
     - recordstream.ops.sink: RecordSinkOp (adapt a DataSink as a pass-through op)
-    - recordstream.ops.context: Save, Use, Drop, Apply, Capture, MergeFields (the per-record
-      Context graph plane — the flat-list building blocks a branchy flow: document lowers to)
     - recordstream.ops.debug: PrintRecordOp (per-record summary probe)
 
 The sequential composer ``Pipeline`` lives in :mod:`recordstream.transform` (package-root
@@ -24,7 +22,6 @@ export) — one list mixing native ops with bare albumentations / torchvision-v2
 """
 
 from recordstream.ops.configure import ConfigureOp
-from recordstream.ops.context import Apply, Capture, Drop, MergeFields, Save, Use
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
@@ -38,29 +35,23 @@ from recordstream.ops.target import CocoToTorchVisionDetection, DecodeTarget, En
 from recordstream.ops.torch import ToTensor
 
 __all__ = [
-    "Apply",
-    "Capture",
     "CocoToTorchVisionDetection",
     "ConfigureOp",
     "ConnectedComponents",
     "ConvertToImage",
     "CopyField",
     "DecodeTarget",
-    "Drop",
     "DropField",
     "Enable",
     "EncodeTarget",
     "FormulaOp",
     "MasksToDetectionBoxes",
-    "MergeFields",
     "Parallel",
     "PrintRecordOp",
     "RandomApply",
     "RenameField",
-    "Save",
     "RecordSinkOp",
     "SelectFields",
     "Threshold",
     "ToTensor",
-    "Use",
 ]

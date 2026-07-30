@@ -12,7 +12,6 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 # --- shared infrastructure -----------------------------------------------------------------
 from recordstream.batch import batch_metadata, batch_tensor, batch_values, multi_hot
 from recordstream.collate import collate, collate_records, get_collate, register_collate, registered_collates
-from recordstream.context import Context
 from recordstream.core import (
     FilterOp,
     JointStream,
@@ -26,7 +25,7 @@ from recordstream.core import (
 
 # --- the record data model + transforms + item codec ----------------------------------------
 from recordstream.dispatch import dispatch, register_kernel, registered_kernels
-from recordstream.flow import FlowGraph, from_ops, to_ops
+from recordstream.flow import FlowGraph
 from recordstream.io import (
     EncodedField,
     EncodedItem,
@@ -110,7 +109,6 @@ __all__ = [
     "encode_record",
     "decode_record",
     # ---- shared infrastructure ----
-    "Context",
     "Stream",
     "JointStream",
     "RecordSource",
@@ -120,8 +118,6 @@ __all__ = [
     "register_op_family",
     "registered_op_families",
     "FlowGraph",
-    "from_ops",
-    "to_ops",
     "collate",
     "batch_metadata",
     "batch_tensor",

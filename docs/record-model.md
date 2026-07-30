@@ -401,8 +401,9 @@ flow:
 
 `bind:` references have three shapes: a bare `step` binds the step's WHOLE result record,
 `step[key]` binds the named ENTRY of that step's record, and `step.attr` binds the step op's live
-`@output`. Lowering (`to_ops`) compiles `merge_from` to the `MergeFields` context op and entry-binds
-to `Apply(key=...)`; lifting (`from_ops`) round-trips both. See [graph.md](graph.md).
+`@output`. All three are read by the engine directly from the step grammar — there is no lowering
+to a flat op list (the pass that did that, and the six context ops it emitted, were deleted
+2026-07-30). See [graph.md](graph.md).
 
 ## Storage — the record key-group layout
 

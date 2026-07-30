@@ -1,14 +1,13 @@
 """FlowGraph over dict records — merge_from fan-in, step[key]/bare-step bind, lowering parity."""
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np
 import pytest
 
-from recordstream import FlowGraph, Image, Label, Mask, Pipeline, Record, Stream, Transform, to_ops
-from recordstream.flow import from_ops, parse_flow
-from recordstream.ops.context import MergeFields
+from recordstream import FlowGraph, Image, Label, Mask, Pipeline, Record, Stream, Transform
+from recordstream.flow import parse_flow
 from recordstream.ops.structure import RenameField, SelectFields
 
 
@@ -150,59 +149,6 @@ class TestFlowGraph:
             parse_flow({"a": {"merge_from": ["b"]}, "b": {}})
 
 
-class TestLoweringParity:
-    def _flow(self) -> Dict[str, Any]:
-        return {
-            "start": {},
-            "masked": {"op": _MakeMask(), "from": "start"},
-            "mask_only": {"op": SelectFields(keys=["mask"]), "from": "masked"},
-            "boosted": {"op": _AddOffset(offset=1.0), "from": "start"},
-            "out": {"from": "boosted", "merge_from": ["mask_only"]},
-        }
-
-    def test_to_ops_runs_on_stream(self) -> None:
-        # The lowered flat op list (MergeFields wiring) matches the native FlowGraph result.
-        steps, outputs = parse_flow(self._flow())
-        native = list(FlowGraph(source=[_seed(0.25)], flow=self._flow(), outputs="out"))
-        lowered = list(Stream(source=[_seed(0.25)], ops=to_ops(steps, outputs)))
-        assert len(native) == len(lowered) == 1
-        assert list(native[0].keys()) == list(lowered[0].keys())
-        assert np.array_equal(np.asarray(native[0]["image"]), np.asarray(lowered[0]["image"]))
-        assert np.array_equal(np.asarray(native[0]["mask"]), np.asarray(lowered[0]["mask"]))
-
-    def test_round_trip_from_ops(self) -> None:
-        steps, outputs = parse_flow(self._flow())
-        ops = to_ops(steps, outputs)
-        assert any(isinstance(op, MergeFields) for op in ops)
-        lifted, lifted_out = from_ops(ops)
-        relowered = to_ops(*parse_flow(lifted, lifted_out))
-        native = list(Stream(source=[_seed(0.5)], ops=relowered))
-        assert len(native) == 1 and "mask" in native[0]
-
-    def test_key_bind_round_trip(self) -> None:
-        class _Reader(Transform):
-            def __init__(self, item: Any = None) -> None:
-                super().__init__()
-                self.item = item
-
-            def __call__(self, record: Record) -> Record:
-                return {**record, "echo": self.item}
-
-        flow = {
-            "start": {},
-            "probe": {"op": _AddOffset(offset=3.0), "from": "start"},
-            "final": {"op": _Reader(), "from": "start", "bind": {"item": "probe[image]"}},
-        }
-        steps, outputs = parse_flow(flow)
-        ops = to_ops(steps, outputs)
-        lifted, _ = from_ops(ops)
-        # the key-bind grammar survives the round trip
-        final_step = lifted["final"] if "final" in lifted else list(lifted.values())[-1]
-        assert isinstance(final_step, dict) and final_step["bind"]["item"].endswith("[image]")
-        (out,) = list(Stream(source=[_seed(0.0)], ops=ops))
-        assert np.allclose(np.asarray(out["echo"]), 3.0)
-
-
 class TestRecordsThroughStream:
     def test_stream_carries_record_dicts_verbatim(self) -> None:
         stream = Stream(source=[_seed(1.0)], ops=[_AddOffset(offset=1.0)])
@@ -257,13 +203,19 @@ outputs: out
         assert int(np.asarray(out["mask"]).sum()) == 8  # fixed 0.5 threshold
         assert int(np.asarray(out["gated_mask"]).sum()) == 6  # per-record amax(a)*0.6 bind
 
-    def test_yaml_bind_parity_with_lowered_stream(self, tmp_path: Path) -> None:
+    def test_yaml_bind_runs_the_same_from_either_loader(self, tmp_path: Path) -> None:
+        # FlowGraph.from_yaml and a hand-parsed flow are the same graph on the same engine.
         path = tmp_path / "graph.yaml"
         path.write_text(self._doc())
-        a = list(FlowGraph.from_yaml(str(path), source=[self._record()]))[0]
-        b = list(Stream.from_flow_yaml(str(path), source=[self._record()]))[0]
-        assert np.array_equal(np.asarray(a["gated_mask"]), np.asarray(b["gated_mask"]))
-        assert np.array_equal(np.asarray(a["mask"]), np.asarray(b["mask"]))
+        record = self._record()
+
+        from_yaml = list(FlowGraph.from_yaml(str(path), source=[dict(record)]))
+        import confluid
+
+        doc = confluid.resolve(str(path))
+        parsed = list(FlowGraph(source=[dict(record)], flow=doc["flow"], outputs=str(doc.get("outputs", ""))))
+        assert len(from_yaml) == len(parsed) == 1
+        assert set(from_yaml[0]) == set(parsed[0])
 
     def test_nested_bind_under_marker_is_consumed_not_parsed(self, tmp_path: Path) -> None:
         # Pin the confluid behavior that makes the op:-form MANDATORY for bind — if this
@@ -283,3 +235,181 @@ flow:
 
         marker = confluid.resolve(str(path))["flow"]["gated"]
         assert "bind" not in marker.kwargs  # consumed as addressed configuration
+
+
+class TestNativeExecution:
+    """The graph engine runs on its OWN executor — it never lowers to run (2026-07-29)."""
+
+    def test_reader_accounting_is_computed_once_per_graph(self, monkeypatch: Any) -> None:
+        # _result_readers depends only on (steps, outputs); recomputing it per record was an
+        # O(steps^2) tax measured at ~half the graph engine's overhead over a flat op list.
+        import recordstream.flow as flow_mod
+
+        calls = {"n": 0}
+        real = flow_mod._result_readers
+
+        def counting(steps: Any, outputs: str) -> Any:
+            calls["n"] += 1
+            return real(steps, outputs)
+
+        monkeypatch.setattr(flow_mod, "_result_readers", counting)
+        graph = FlowGraph(source=[_seed(1.0) for _ in range(25)], flow={"plus": _AddOffset(offset=2.0)})
+        assert len(list(graph)) == 25
+        assert calls["n"] == 1
+
+    def test_there_is_no_lowering_pass_left_to_call(self) -> None:
+        # The delegation this replaced built Stream(ops=to_ops(...)). Both converters are gone
+        # with the context ops they targeted; a reintroduced one would be a second executor.
+        import recordstream
+        import recordstream.flow as flow_mod
+
+        for gone in ("to_ops", "from_ops", "flow_yaml_to_stream"):
+            assert not hasattr(flow_mod, gone), f"{gone} is back — the lowering pass has returned"
+            assert not hasattr(recordstream, gone)
+        assert not hasattr(Stream, "from_flow_yaml")
+
+    def test_parallel_runs_the_graph_natively(self) -> None:
+        source = [_seed(float(i)) for i in range(6)]
+        serial = list(FlowGraph(source=source, flow={"plus": _AddOffset(offset=2.0)}))
+        parallel = list(FlowGraph(source=source, flow={"plus": _AddOffset(offset=2.0)}).parallel(2))
+
+        assert len(parallel) == len(serial) == 6
+        for got, want in zip(parallel, serial):
+            assert np.allclose(np.asarray(got["image"]), np.asarray(want["image"]))
+
+    def test_parallel_preserves_source_order(self) -> None:
+        source = [_seed(float(i)) for i in range(8)]
+        out = list(FlowGraph(source=source, flow={"plus": _AddOffset(offset=1.0)}).parallel(3))
+        assert [float(np.asarray(r["image"]).flat[0]) for r in out] == [float(i) + 1.0 for i in range(8)]
+
+
+class _SplitChannels(Transform):
+    """A 1→N EXPANDING step: one record per channel of the image."""
+
+    EXPANDS = True
+
+    def __call__(self, record: Record) -> Any:  # type: ignore[override]
+        image = record["image"]
+        return [{**record, "image": Image(np.asarray(image)[..., c : c + 1]), "channel": c} for c in range(3)]
+
+
+class _Tag(Transform):
+    """Marks the record so a post-expansion step is observable."""
+
+    def __init__(self, tag: str = "") -> None:
+        super().__init__()
+        self.tag = tag
+
+    def __call__(self, record: Record) -> Record:
+        return {**record, "tag": self.tag}
+
+
+class TestExpandingSteps:
+    """A 1→N step forks the REMAINING subgraph, one branch per child (2026-07-29)."""
+
+    def test_expansion_yields_one_record_per_child(self) -> None:
+        graph = FlowGraph(source=[_seed(1.0)], flow={"split": _SplitChannels()})
+        out = list(graph)
+        assert [r["channel"] for r in out] == [0, 1, 2]
+
+    def test_downstream_steps_run_once_per_child(self) -> None:
+        graph = FlowGraph(source=[_seed(1.0)], flow={"split": _SplitChannels(), "tagged": _Tag(tag="t")})
+        out = list(graph)
+        assert [r["channel"] for r in out] == [0, 1, 2]
+        assert all(r["tag"] == "t" for r in out)
+
+    def test_depth_first_sibling_order_across_chained_expansions(self) -> None:
+        # Nested-loop order (the flat engine's documented contract): the INNER expansion
+        # varies fastest. Two 3-way splits => 9 branches, the second split's channel cycling
+        # 0,1,2 within each child of the first.
+        graph = FlowGraph(source=[_seed(1.0)], flow={"a": _SplitChannels(), "b": _SplitChannels()})
+        out = list(graph)
+        assert len(out) == 9
+        assert [r["channel"] for r in out] == [0, 1, 2] * 3
+
+    def test_branches_do_not_share_env_state(self) -> None:
+        # Each child gets its OWN shallow copy of the step environment (the graph twin of
+        # Context.copy()): a later fan-in must not see a sibling's result.
+        flow = {
+            "src": {},
+            "split": _SplitChannels(),
+            "out": {"from": "split", "merge_from": ["src"]},
+        }
+        out = list(FlowGraph(source=[_seed(1.0)], flow=flow, outputs="out"))
+        assert [r["channel"] for r in out] == [0, 1, 2]
+
+    def test_len_and_getitem_raise_for_an_expanding_graph(self) -> None:
+        graph = FlowGraph(source=[_seed(1.0)], flow={"split": _SplitChannels()})
+        with pytest.raises(TypeError, match="EXPANDING"):
+            len(graph)
+        with pytest.raises(TypeError, match="EXPANDING"):
+            graph[0]
+
+    def test_empty_expansion_drops_the_branch(self) -> None:
+        class _Drop(Transform):
+            EXPANDS = True
+
+            def __call__(self, record: Record) -> Any:  # type: ignore[override]
+                return []
+
+        assert list(FlowGraph(source=[_seed(1.0)], flow={"gone": _Drop()})) == []
+
+    def test_expansion_survives_the_spawn_boundary(self) -> None:
+        # The worker returns a LIST precisely so one seed can yield several records.
+        source = [_seed(1.0), _seed(2.0)]
+        out = list(FlowGraph(source=source, flow={"split": _SplitChannels()}).parallel(2))
+        assert len(out) == 6
+        assert [r["channel"] for r in out] == [0, 1, 2, 0, 1, 2]
+
+
+class TestOneExecutor:
+    """`ops:` is the LINEAR SPELLING of a graph — both forms run the same kernel (2026-07-29)."""
+
+    def test_an_ops_list_compiles_to_a_linear_step_graph(self) -> None:
+        from recordstream.core import linear_steps
+
+        ops = [_AddOffset(offset=1.0), _AddOffset(offset=2.0)]
+        steps, outputs = linear_steps(ops)
+        assert [s.name for s in steps] == ["s0", "s1"]
+        assert outputs == "s1"
+        # Positional names, so the SAME op twice is two steps (a name-keyed mapping would collapse them).
+        assert all(s.from_ is None and not s.bind and not s.merge_from for s in steps)
+
+    def test_a_repeated_op_stays_two_distinct_steps(self) -> None:
+        from recordstream.core import linear_steps
+
+        op = _AddOffset(offset=1.0)
+        steps, _ = linear_steps([op, op])
+        assert len(steps) == 2
+        (out,) = list(Stream(source=[_seed(0.0)], ops=[op, op]))
+        assert np.allclose(np.asarray(out["image"]), 2.0)  # applied twice, not once
+
+    def test_stream_and_flowgraph_agree_on_the_same_linear_chain(self) -> None:
+        ops = [_AddOffset(offset=1.0), _MakeMask()]
+        flat = list(Stream(source=[_seed(0.75)], ops=ops))
+        graph = list(FlowGraph(source=[_seed(0.75)], flow={f"s{i}": op for i, op in enumerate(ops)}))
+        assert len(flat) == len(graph) == 1
+        assert np.allclose(np.asarray(flat[0]["image"]), np.asarray(graph[0]["image"]))
+        assert np.array_equal(np.asarray(flat[0]["mask"]), np.asarray(graph[0]["mask"]))
+
+    def test_an_empty_ops_list_is_the_identity(self) -> None:
+        # The kernel treats "no steps" as the identity graph; a bare Stream must still yield.
+        source = [_seed(1.0), _seed(2.0)]
+        assert len(list(Stream(source=source, ops=[]))) == 2
+        assert len(list(Stream(source=source))) == 2
+
+    def test_a_linear_chain_takes_the_env_free_path(self) -> None:
+        from recordstream.core import linear_steps
+        from recordstream.flow import is_linear
+
+        steps, outputs = linear_steps([_AddOffset(offset=1.0), _AddOffset(offset=2.0)])
+        assert is_linear(steps, outputs)
+        # A fan-out graph must NOT qualify — it needs the step environment.
+        branchy, out = parse_flow({"start": {}, "a": {"op": _AddOffset(offset=1.0), "from": "start"}}, "a")
+        assert not is_linear(branchy, out)
+
+    def test_stream_expansion_still_yields_every_child(self) -> None:
+        # The flat engine's 1→N contract, now served by the shared kernel's linear path.
+        out = list(Stream(source=[_seed(1.0)], ops=[_SplitChannels(), _Tag(tag="t")]))
+        assert [r["channel"] for r in out] == [0, 1, 2]
+        assert all(r["tag"] == "t" for r in out)
