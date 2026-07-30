@@ -439,7 +439,9 @@ def test_a_stream_rejects_non_string_names_at_construction() -> None:
     from recordstream import Stream
 
     with pytest.raises(Exception, match="valid string"):
-        Stream(source=[], class_names=[1, 2])
+        # The wrong type is the POINT — this asserts the runtime check, which is what a caller
+        # building a Stream from YAML gets. mypy would otherwise reject the very call under test.
+        Stream(source=[], class_names=[1, 2])  # type: ignore[list-item]
 
 
 # --------------------------------------------------------------------------- #
