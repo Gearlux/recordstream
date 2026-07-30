@@ -31,7 +31,7 @@ jobs:
         # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
         uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system --no-deps git+https://github.com/Gearlux/liquifai.git@main
-        uv pip install --system -e ".[dev]"
+        uv pip install --system -e ".[dev,torch]"
     - name: Run Isort
       run: isort --check-only .
     - name: Run Black
@@ -60,7 +60,7 @@ jobs:
         # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
         uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system --no-deps git+https://github.com/Gearlux/liquifai.git@main
-        uv pip install --system -e ".[dev]"
+        uv pip install --system -e ".[dev,torch]"
     - name: Run Tests
       run: |
         if [ -d tests ] && find tests -name '*.py' | grep -q .; then
@@ -94,7 +94,7 @@ jobs:
         # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
         uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system --no-deps git+https://github.com/Gearlux/liquifai.git@main
-        uv pip install --system -e ".[dev]"
+        uv pip install --system -e ".[dev,torch]"
     - name: Run Examples
       run: |
         for f in examples/*.py; do
@@ -132,7 +132,7 @@ jobs:
         # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
         uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system --no-deps git+https://github.com/Gearlux/liquifai.git@main
-        uv pip install --system -e ".[dev]"
+        uv pip install --system -e ".[dev,torch]"
         # Notebook-only dependencies live in the optional `[notebook]` extra
         # when a project ships notebooks; absence is not an error.
         uv pip install --system -e ".[notebook]" 2>/dev/null || echo "No [notebook] extras declared; continuing with defaults."

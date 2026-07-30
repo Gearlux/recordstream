@@ -45,7 +45,7 @@ pipeline {
                 sh "if [ -f '${env.WORKSPACE_ROOT}/loggair/pyproject.toml' ]; then ${VENV_BIN}/uv pip install --no-deps -e '${env.WORKSPACE_ROOT}/loggair'; else ${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/loggair.git@main; fi"
                 sh "if [ -f '${env.WORKSPACE_ROOT}/confluid/pyproject.toml' ]; then ${VENV_BIN}/uv pip install --no-deps -e '${env.WORKSPACE_ROOT}/confluid'; else ${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/confluid.git@main; fi"
                 sh "if [ -f '${env.WORKSPACE_ROOT}/liquifai/pyproject.toml' ]; then ${VENV_BIN}/uv pip install --no-deps -e '${env.WORKSPACE_ROOT}/liquifai'; else ${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/liquifai.git@main; fi"
-                sh "${VENV_BIN}/uv pip install -e .[dev]"
+                sh "${VENV_BIN}/uv pip install -e .[dev,torch]"
                 // Notebook-only extras (matplotlib, jupyter kernels, etc.) live
                 // in the optional `[notebook]` extra when the project ships
                 // notebooks; absence is not an error.

@@ -35,7 +35,7 @@ pipeline {
                 // (Gearlux distribution names are intentionally unpublished on PyPI).
                 sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/confluid.git@main"
                 sh "${VENV_BIN}/uv pip install --no-deps git+https://github.com/Gearlux/liquifai.git@main"
-                sh "${VENV_BIN}/uv pip install -e .[dev]"
+                sh "${VENV_BIN}/uv pip install -e .[dev,torch]"
                 // Notebook-only extras (matplotlib, jupyter kernels, etc.) live
                 // in the optional `[notebook]` extra when the project ships
                 // notebooks; absence is not an error.
