@@ -129,7 +129,7 @@ def batch_tensor(batch: Record, key: str, device: Any = None, dtype: Any = None)
             when the result feeds a model.
         dtype: Optional target dtype — a PARAMETER, not an opinion: the caller names the
             contract its loss requires and this honours it. Pass ``torch.int64`` for class ids
-            (``CrossEntropyLoss`` raises *"expected scalar type Long but found Int"* on an
+            (``CrossEntropyLoss`` raises *"expected target dtype to be Long or Byte, but got Int"* on an
             int32 target, and a dataset yielding int32 label tensors is perfectly legal) or for
             a pixel-class mask. ``None`` keeps whatever the values carry.
 

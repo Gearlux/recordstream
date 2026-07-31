@@ -103,7 +103,10 @@ def test_dtype_matters_because_the_loss_rejects_the_wrong_one() -> None:
     batch = collate_records([{"class": Label(torch.tensor(i, dtype=torch.int32))} for i in range(3)])
     logits = torch.randn(3, 4)
 
-    with pytest.raises(RuntimeError, match="expected scalar type Long"):
+    # Matched loosely on purpose: torch reworded this in 2.13 ("expected scalar type Long but
+    # found Int" -> "expected target dtype to be Long or Byte, but got Int"). The REJECTION is
+    # the contract this test pins; the exact phrasing is torch's to change.
+    with pytest.raises(RuntimeError, match="(scalar type|target dtype).*Long"):
         nn.CrossEntropyLoss()(logits, batch_tensor(batch, "class"))
 
     nn.CrossEntropyLoss()(logits, batch_tensor(batch, "class", dtype=torch.int64))  # no raise
