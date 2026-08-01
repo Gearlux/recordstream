@@ -4,6 +4,21 @@ A pipeline is a **graph of named steps**. There is ONE engine and ONE execution 
 and `flow:` are two spellings of it, and which one you write is purely about whether the
 pipeline branches.
 
+`recordstream.core` and `recordstream.flow` are packages with **one module per cohesive unit**.
+Import from the package — `from recordstream.core import Stream` / `from recordstream.flow import
+FlowGraph` — but spell the **submodule** path in a config, because that is what `cls.__module__`
+says and what a generated config emits:
+
+| class | module | `!class:` path |
+| --- | --- | --- |
+| `Stream`, `JointStream` | `core/stream.py` | `recordstream.core.stream.Stream` |
+| `FilterOp`, `WrappedOp` | `core/wrappers.py` | `recordstream.core.wrappers.FilterOp` |
+| `FlowGraph` | `flow/graph.py` | `recordstream.flow.graph.FlowGraph` |
+
+The shorter `!class:recordstream.core.Stream` still resolves (Confluid falls back to a
+module-path import, and each package re-exports every name), so an older config keeps loading.
+Rationale: [docs/architecture.md §12](architecture.md#12-core-and-flow-are-packages-too--layered-by-import-direction-2026-08-01).
+
 ## `ops:` — the linear spelling
 
 A straight chain is a graph where every step reads the one before it, so it needs no names:

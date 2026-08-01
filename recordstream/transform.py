@@ -17,7 +17,7 @@ holds several values of a handled type.
 
 recordstream ships NO native augmentation ops — geometric/photometric augmentation comes from
 the libraries (torchvision ``transforms.v2`` / albumentations) dropped into an ops list
-AS-IS; the engine invokes each op family natively (see ``recordstream.core._apply_op``).
+AS-IS; the engine invokes each op family natively (see ``recordstream.core.families._apply_op``).
 There are no wrapper/adapter classes.
 """
 

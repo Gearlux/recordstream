@@ -23,7 +23,7 @@ key broadcasts into the same-named constructor parameter, with no nesting and no
 runnable: !class:mypkg.Classifier
   model: !lazy:mypkg.Backbone { name: resnet18 }
 
-train_set: !class:recordstream.sources.HuggingFaceSource { path: mnist, split: train }
+train_set: !class:recordstream.sources.huggingface.HuggingFaceSource { path: mnist, split: train }
 max_epochs: 3          # -> Classifier(max_epochs=3)
 batch_size: 32         # -> Classifier(batch_size=32)
 ```

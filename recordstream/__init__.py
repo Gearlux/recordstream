@@ -5,7 +5,7 @@ The data model is the RECORD: a record is a plain ``dict`` of typed values (each
 owning its metadata — an ``Image`` its layout, a ``Label`` its classes), and ops dispatch
 on value TYPE (the torchvision-v2 model). Bare albumentations / torchvision ``transforms.v2``
 transforms drop into any ops list AS-IS — the engine invokes each op family natively
-(``recordstream.core._apply_op``). Import the whole surface from the package top level
+(``recordstream.core.families._apply_op``). Import the whole surface from the package top level
 (``from recordstream import Record, Image, Transform, Pipeline, ...``).
 """
 

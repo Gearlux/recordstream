@@ -239,7 +239,7 @@ no library covers them.
 
 ### Mixing libraries — as-is, no adapters
 
-The engine's single op-application chokepoint, `recordstream.core._apply_op(record, op)`, dispatches
+The engine's single op-application chokepoint, `recordstream.core.families._apply_op(record, op)`, dispatches
 on the op's FAMILY (by MRO module name, no eager import) and invokes each family the way its own
 library expects:
 

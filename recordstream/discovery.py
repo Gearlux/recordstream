@@ -16,7 +16,7 @@ wire pipeline pieces without any hand-written tool definitions (the workspace's
   their property panels.
 
 The serialization half doubles as the workspace's generic string-callable hook
-pattern (:class:`~recordstream.core.WrappedOp` stores its ``f`` this way; consuming
+pattern (:class:`~recordstream.core.wrappers.WrappedOp` stores its ``f`` this way; consuming
 packages reuse it for their own dotted-path hooks). Curated discovery (MCP
 form-specs, option pickers) builds on the Confluid registry instead — which
 registers classes AND builder functions, but only opt-in by name; this module is

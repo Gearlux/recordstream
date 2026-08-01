@@ -1,22 +1,27 @@
+"""The ``Stream`` engine, its fan-in sibling ``JointStream``, and the ops-list plumbing.
+
+``Stream`` is the dataset-surface facade over the one step-graph kernel: an ``ops:`` list is
+compiled to POSITIONAL steps by :func:`linear_steps` and run by
+:mod:`recordstream.flow`, exactly as a ``flow:`` document's author-named steps are. The two
+spellings are the same thing (``docs/architecture.md`` §3).
+
+What else lives here and why:
+
+* ``JointStream`` — 20 lines that exist to be ``Stream.joint``'s return value (§5).
+* :func:`linear_steps` / :func:`_worker_task` — both compile or run an ops LIST, which is
+  ``Stream``'s spelling of a pipeline.
+* :func:`ensure_record_dataset` — its whole body is "already a Stream? else wrap in one".
+* the deferred-source guidance helpers — they phrase ``Stream``'s own Fluid errors.
+
+The imports of :mod:`recordstream.flow` are body-local ON PURPOSE: flow imports the op
+dispatch from :mod:`recordstream.core.families` at module level, so a top-level import back
+would close the cycle.
+"""
+
 import concurrent.futures
 import multiprocessing
 from contextlib import nullcontext
-from typing import (
-    Any,
-    Callable,
-    Collection,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Optional,
-    Protocol,
-    Sequence,
-    Tuple,
-    Union,
-    cast,
-    runtime_checkable,
-)
+from typing import Any, Callable, Collection, Iterable, Iterator, List, Optional, Sequence, Tuple, Union, cast
 
 from confluid import configurable
 from confluid import load as _confluid_load
@@ -24,174 +29,12 @@ from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
-from recordstream.items import NDArrayItem, Record, item_data, with_data
+from recordstream.core.families import OpInvoker, OpMatcher, _extra_op_families, _op_expands, _sync_op_families
+from recordstream.core.mapstyle import RecordSource
+from recordstream.core.wrappers import FilterOp, WrappedOp
+from recordstream.items import Record
 
 logger = get_logger(__name__)
-
-
-def _op_expands(op: Any) -> bool:
-    """True when an op is a 1→N expanding op (explicit ``EXPANDS = True`` class attribute)."""
-    return bool(getattr(op, "EXPANDS", False))
-
-
-#: An op-family MATCHER recognises a library's op objects. Keep it IMPORT-FREE — inspect
-#: ``type(op).__mro__`` module names rather than importing the library.
-OpMatcher = Callable[[Any], bool]
-#: An op-family INVOKER applies one foreign op with its library's native calling
-#: convention: ``(record, op) -> Optional[Record]`` (``None`` = drop the record).
-OpInvoker = Callable[[Record, Any], Optional[Record]]
-
-#: The registered op families, in registration order. Dispatch checks LAST-registered
-#: first, so a later (more specific) family can shadow an earlier one.
-_OP_FAMILIES: List[Tuple[str, OpMatcher, OpInvoker]] = []
-
-
-def register_op_family(name: str, matcher: OpMatcher, invoker: OpInvoker) -> None:
-    """Teach the engine to invoke a NEW library's ops natively — the open extension point.
-
-    ``matcher(op) -> bool`` recognises the family's op objects (keep it import-free —
-    inspect ``type(op).__mro__`` module names); ``invoker(record, op)`` applies one op with
-    the library's own calling convention and returns the new record (``None`` drops it).
-    Re-registering a ``name`` REPLACES that family in place; otherwise the family is
-    appended, and dispatch checks last-registered first (a more specific family shadows an
-    earlier one — register yours after the built-ins to win an overlap).
-
-    Both callables MUST be module-level functions (picklable by reference): the engine's
-    spawn-parallel routes ship non-builtin families to worker processes by pickling them.
-
-    Example — kornia augmentations (``nn.Module``s over batched BCHW tensors)::
-
-        def is_kornia(op) -> bool:
-            return any(c.__module__.startswith("kornia.augmentation") for c in type(op).__mro__)
-
-        def invoke_kornia(record, op):
-            img = record["image"]                    # a CHW torch.Tensor (e.g. after ToTensor)
-            out = op(img.unsqueeze(0)).squeeze(0)    # kornia draws once per batch call
-            return {**record, "image": out}
-
-        register_op_family("kornia", is_kornia, invoke_kornia)
-    """
-    entry = (str(name), matcher, invoker)
-    for i, (existing, _, _) in enumerate(_OP_FAMILIES):
-        if existing == name:
-            _OP_FAMILIES[i] = entry
-            return
-    _OP_FAMILIES.append(entry)
-
-
-def registered_op_families() -> Tuple[str, ...]:
-    """The registered op-family names, in registration/dispatch-precedence order."""
-    return tuple(name for name, _, _ in _OP_FAMILIES)
-
-
-def _sync_op_families(families: Optional[List[Tuple[str, OpMatcher, OpInvoker]]]) -> None:
-    """Merge families shipped from the parent process into this process's registry.
-
-    Spawn workers import this module (built-ins present) but never re-run the user's
-    registration side effects — the parallel routes therefore pass the parent's
-    non-builtin entries along and merge them here (idempotent by name).
-    """
-    for name, matcher, invoker in families or []:
-        register_op_family(name, matcher, invoker)
-
-
-def _extra_op_families() -> List[Tuple[str, OpMatcher, OpInvoker]]:
-    """The non-builtin registry entries — what a spawn worker cannot rebuild by import alone."""
-    return [entry for entry in _OP_FAMILIES if entry[0] not in _BUILTIN_FAMILIES]
-
-
-#: The record keys albumentations understands — its OWN target vocabulary. An albumentations
-#: op receives exactly these keys (the ones present) and nothing else, so extra record
-#: entries (scalars, domain items) never reach a library that would reject them.
-_ALB_KEYS: Tuple[str, ...] = ("image", "mask", "masks", "bboxes", "keypoints", "labels")
-
-
-def _is_albumentations(op: Any) -> bool:
-    """True for an albumentations transform / ``Compose`` — by MRO module name (no import here)."""
-    return any(getattr(cls, "__module__", "").startswith("albumentations") for cls in type(op).__mro__)
-
-
-def _invoke_albumentations(record: Record, op: Any) -> Optional[Record]:
-    """albumentations dispatches by KWARG NAME: hand the op exactly its own target keys
-    present in the record (one call = one joint draw across them); array outputs are
-    re-wrapped in the incoming value's item type (``with_data``) so ``Image``/``Mask``
-    keep their type and metadata. Box-carrying augmentation belongs in albumentations' own
-    ``A.Compose(..., bbox_params=...)`` — format handling is Compose's job in that library.
-    """
-    kwargs = {k: record[k] for k in _ALB_KEYS if k in record}
-    if not kwargs:
-        logger.debug(
-            f"albumentations op {type(op).__name__} received no known keys "
-            f"({', '.join(_ALB_KEYS)}) — record keys: {list(record)}; passing through."
-        )
-        return record
-    out = op(**kwargs)
-    merged = dict(record)
-    for key, value in out.items():
-        original = record.get(key)
-        if isinstance(original, NDArrayItem) and not isinstance(value, NDArrayItem):
-            value = with_data(original, value)
-        merged[key] = value
-    return merged
-
-
-def _is_torchvision_v2(op: Any) -> bool:
-    """True for a torchvision ``transforms.v2`` transform — by MRO module name (no import here)."""
-    return any(getattr(cls, "__module__", "").startswith("torchvision.transforms.v2") for cls in type(op).__mro__)
-
-
-def _invoke_torchvision_v2(record: Record, op: Any) -> Optional[Record]:
-    """torchvision v2 natively walks a dict: params sampled once, tensor/tv_tensor/PIL
-    leaves transformed, everything else passed through — called as-is."""
-    return cast(Record, op(record))
-
-
-# The built-in families register through the SAME open registry third parties use —
-# one mechanism, no privileged code path. Registered at import, so spawn workers
-# rebuild them by importing this module.
-register_op_family("albumentations", _is_albumentations, _invoke_albumentations)
-register_op_family("torchvision_v2", _is_torchvision_v2, _invoke_torchvision_v2)
-_BUILTIN_FAMILIES: Tuple[str, ...] = ("albumentations", "torchvision_v2")
-
-
-def _apply_op(record: Record, op: Any) -> Optional[Record]:
-    """Apply one op to the record dict — the engine's op-FAMILY dispatch.
-
-    The single op-application chokepoint shared by the sequential, parallel (via
-    :func:`_worker_task`), streamed, and random-access (``__getitem__``) paths; composing
-    ops (``Pipeline`` / ``Parallel`` / ``Enable`` / ``RandomApply`` / ``ConfigureOp``)
-    route their inner ops through here so every op is applied identically. Each op family
-    is invoked the way its library expects — no wrapper/adapter classes: the registered
-    families (:func:`register_op_family`; built-ins ``albumentations`` /
-    ``torchvision_v2``) are checked LAST-registered first, and an op matching none of
-    them is a native/wiring op called ``op(record) -> Optional[Record]`` (``None`` drops
-    the record — filter semantics).
-    """
-    for _name, matcher, invoker in reversed(_OP_FAMILIES):
-        try:
-            matched = matcher(op)
-        except Exception:  # pragma: no cover - a defensive matcher never breaks dispatch
-            matched = False
-        if matched:
-            return invoker(record, op)
-    return cast(Optional[Record], op(record))
-
-
-@runtime_checkable
-class MapStyle(Protocol):
-    """A map-style dataset: ``len(ds)`` and ``ds[i]``.
-
-    What recordstream MEANS by "a dataset", said structurally so the engine never imports a
-    framework to express it. ``Stream`` used to inherit ``torch.utils.data.Dataset``, which made
-    torch a hard dependency of a package whose own work is numpy — for nothing: that base is not
-    load-bearing. ``DataLoader`` duck-types its argument (a plain object with these two methods
-    works), nothing in the workspace does ``isinstance(x, Dataset)``, and the annotation is the
-    only thing the inheritance ever bought.
-    """
-
-    def __len__(self) -> int: ...
-
-    def __getitem__(self, index: int) -> Any: ...
 
 
 def _describe_deferred_source(source: Any) -> str:
@@ -243,88 +86,6 @@ def _check_ops_materialized(ops: List[Any]) -> None:
                 ops[i] = flow(op)
             except Exception as exc:
                 raise TypeError(_fluid_op_guidance(op, i)) from exc
-
-
-@configurable
-class FilterOp:
-    """Configurable filter operation.
-
-    The op form of :meth:`Stream.filter` — a predicate gate over the stream: the record
-    passes when the predicate returns ``True`` and is dropped otherwise (``__call__``
-    returns ``None``, which every engine route treats as "skip this record").
-
-    Args:
-        p: Predicate ``record -> bool``; the record passes through when it returns ``True``, else is dropped.
-            Defaults to ``None`` (zero-arg construction); a predicate must be set before the op runs.
-    """
-
-    def __init__(self, p: Optional[Callable[[Record], bool]] = None):
-        # Lazy / zero-arg: store config only; a missing predicate is validated lazily in __call__.
-        self.p = p
-
-    def __call__(self, record: Record) -> Optional[Record]:
-        if self.p is None:
-            raise ValueError("FilterOp.p (predicate) is not set — provide a record->bool callable before use.")
-        return record if self.p(record) else None
-
-
-@configurable
-class WrappedOp:
-    """Configurable transformation wrapper with smart mapping.
-
-    The op form of :meth:`Stream.map` — lifts a plain function over one record value. The
-    callable is ALWAYS stored as its importable ``module:function`` path (via
-    :mod:`recordstream.discovery`), so the op pickles across ``spawn`` workers and
-    serializes into Confluid YAML verbatim; the live function resolves lazily on first
-    call.
-
-    Args:
-        f: The wrapped callable, or its importable ``module:function`` path (stored as a string for serialization).
-            Defaults to ``""`` (zero-arg construction); resolving an empty path fails lazily on first call.
-        key: The record key whose value payload the function transforms (item metadata preserved).
-            ``None`` (default) = the function receives the WHOLE record dict and returns the new record.
-        kw: Extra keyword arguments forwarded to the wrapped callable on every call (defaults to none).
-    """
-
-    def __init__(self, f: Union[str, Callable] = "", key: Optional[str] = None, kw: Optional[Dict[str, Any]] = None):
-        from recordstream.discovery import get_callable_path
-
-        # Lazy / zero-arg: store config only (the empty-path default resolves lazily via the `func`
-        # property). EXPLICIT: always store the string path for serialization.
-        self.f = get_callable_path(f) if callable(f) else f
-        self.key = key
-        self.kw = dict(kw) if kw else {}
-        # Internal cache for the live callable
-        self._func_cache: Optional[Callable] = None
-
-    @property
-    def func(self) -> Callable:
-        if self._func_cache is None:
-            from recordstream.discovery import resolve_callable
-
-            self._func_cache = resolve_callable(self.f)
-        return self._func_cache
-
-    def __call__(self, record: Record) -> Optional[Record]:
-        if self.key is None:
-            return cast(Optional[Record], self.func(record, **self.kw))
-        if self.key not in record:
-            raise KeyError(f"WrappedOp: record has no key {self.key!r} (keys: {list(record)})")
-        value = record[self.key]
-        new_data = self.func(item_data(value), **self.kw)
-        try:
-            new_value = with_data(value, new_data)
-        except TypeError:
-            new_value = new_data  # a plain (non-item) value is replaced verbatim
-        return {**record, self.key: new_value}
-
-
-def _expand(op: Any, record: Any) -> List[Any]:
-    """Run a 1→N EXPANDING op and return its flattened children."""
-    raw = op(record)
-    if raw is None:
-        return []
-    return [child for child in raw if child is not None]
 
 
 def linear_steps(ops: Sequence[Any]) -> Tuple[List[Any], str]:
@@ -396,10 +157,11 @@ class Stream:
     Wraps any iterable or indexed dataset and provides a functional API.
 
     Every carrier is a plain record ``dict`` of typed values, and every op is applied
-    through the op-FAMILY dispatch (:func:`_apply_op`) — so native recordstream ops,
-    bare albumentations transforms, and bare torchvision ``transforms.v2`` transforms
-    all sit in ONE ``ops`` list as-is. ``source`` is duck-typed (any iterable; the
-    Indexable protocol if ``__getitem__``/``__len__`` are present).
+    through the op-FAMILY dispatch (:func:`~recordstream.core.families._apply_op`) — so
+    native recordstream ops, bare albumentations transforms, and bare torchvision
+    ``transforms.v2`` transforms all sit in ONE ``ops`` list as-is. ``source`` is
+    duck-typed (any iterable; the Indexable protocol if ``__getitem__``/``__len__`` are
+    present).
 
     Args:
         source: Any iterable or indexable dataset (duck-typed) yielding record dicts; ``None`` = empty stream.
@@ -659,18 +421,6 @@ class Stream:
         want = set(keys)
         for record in self:
             yield {k: v for k, v in record.items() if k in want}
-
-
-#: What a wired dataset slot may hold — the contract :func:`ensure_record_dataset` enforces,
-#: What a wired dataset slot may hold, named ONCE here rather than restated by every consumer:
-#: anything MAP-STYLE (``__len__`` + ``__getitem__`` — which a :class:`Stream` is), or any
-#: iterable of records (a recordstream source, a plain list of record dicts). Consumers annotate
-#: their slots ``Optional[Lazy[RecordSource]]`` — ``Lazy`` because they flow the slot at run time.
-#:
-#: Expressed with the structural :class:`MapStyle` rather than ``torch.utils.data.Dataset`` so the
-#: engine can say "a dataset" without importing a framework; torch's ``DataLoader`` is itself
-#: duck-typed and consumes either.
-RecordSource = Union[MapStyle, Iterable[Record]]
 
 
 def ensure_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]]) -> "Stream":

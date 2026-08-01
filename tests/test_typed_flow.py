@@ -243,16 +243,19 @@ class TestNativeExecution:
     def test_reader_accounting_is_computed_once_per_graph(self, monkeypatch: Any) -> None:
         # _result_readers depends only on (steps, outputs); recomputing it per record was an
         # O(steps^2) tax measured at ~half the graph engine's overhead over a flat op list.
-        import recordstream.flow as flow_mod
+        # Patch the module that USES the name, not the one that defines it: `flow.graph`
+        # imports `_result_readers` from `flow.execute`, so it holds its own binding and
+        # patching `flow.execute` (or the `recordstream.flow` package) would miss.
+        import recordstream.flow.graph as graph_mod
 
         calls = {"n": 0}
-        real = flow_mod._result_readers
+        real = graph_mod._result_readers
 
         def counting(steps: Any, outputs: str) -> Any:
             calls["n"] += 1
             return real(steps, outputs)
 
-        monkeypatch.setattr(flow_mod, "_result_readers", counting)
+        monkeypatch.setattr(graph_mod, "_result_readers", counting)
         graph = FlowGraph(source=[_seed(1.0) for _ in range(25)], flow={"plus": _AddOffset(offset=2.0)})
         assert len(list(graph)) == 25
         assert calls["n"] == 1

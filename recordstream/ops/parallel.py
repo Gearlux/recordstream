@@ -1,6 +1,6 @@
 """``Parallel`` — explicit parallel sub-pipeline op.
 
-Place inside a :class:`~recordstream.core.Stream`'s ops list to dispatch each
+Place inside a :class:`~recordstream.core.stream.Stream`'s ops list to dispatch each
 upstream record through an inner sub-pipeline (``self.ops``) in a
 spawn-context worker pool. Bounded prefetch caps outstanding work so the
 executor queue can't grow unboundedly with source length.

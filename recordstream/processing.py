@@ -1,6 +1,6 @@
 """Generic source→sink pipeline runner.
 
-:class:`DatasetProcessor` orchestrates a :class:`~recordstream.core.Stream` from source
+:class:`DatasetProcessor` orchestrates a :class:`~recordstream.core.stream.Stream` from source
 to sink — a runnable that drives whole-dataset processing (windowing, format
 conversion, data acquisition) with an optional console progress bar. It is the
 generic, modality-neutral data-pipeline runner: it iterates the stream and writes
@@ -38,7 +38,7 @@ class DatasetProcessor(ProgressReporting):
     """Orchestrate a RecordStream pipeline from source to sink.
 
     Args:
-        stream: The :class:`~recordstream.core.Stream` to execute. Required to run;
+        stream: The :class:`~recordstream.core.stream.Stream` to execute. Required to run;
             defaulted to ``None`` for zero-arg construction (validated in
             :meth:`run`, the workspace lazy-construction rule).
         sink: Optional sink; when absent, records are materialized to a list.
@@ -87,7 +87,7 @@ class DatasetProcessor(ProgressReporting):
 
         if sink:
             logger.info(f"Streaming data to sink: {sink.__class__.__name__}")
-            # Replicates recordstream.core.Stream.to_sink so we can iterate through
+            # Replicates recordstream.core.stream.Stream.to_sink so we can iterate through
             # our progress wrapper while preserving the Storage context + flush.
             sink_ctx: Any = sink if isinstance(sink, Storage) else nullcontext()
             count = 0

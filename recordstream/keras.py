@@ -19,7 +19,7 @@ is a real hazard, because import sorters group a library import ahead of a first
 the rest: hand :func:`~recordstream.collate.collate_records` to a ``DataLoader`` as its
 ``collate_fn`` and torch owns the row order, the batch slicing and the per-epoch reshuffle (a
 ``Stream`` is map-style, which is all a ``DataLoader`` needs — see
-:class:`~recordstream.core.MapStyle`). Keras 3 has no ``DataLoader``:
+:class:`~recordstream.core.mapstyle.MapStyle`). Keras 3 has no ``DataLoader``:
 ``keras.utils.PyDataset.__getitem__`` must return a whole BATCH, so somebody has to write that
 loop. :class:`RecordSequence` is that loop and nothing else — row order, slicing, reshuffle,
 ``collate_records`` — the DataLoader half, kept beside the collate half it calls instead of

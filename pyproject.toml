@@ -55,7 +55,7 @@ notebook = [
 vision = [
     "scipy",
     # Bare torchvision transforms.v2 ops run as-is through the engine's op-family dispatch
-    # (recordstream.core._apply_op); the extra makes `pip install recordstream[vision]` the
+    # (recordstream.core.families._apply_op); the extra makes `pip install recordstream[vision]` the
     # documented way to enable them.
     "torchvision",
 ]
@@ -70,6 +70,11 @@ build-backend = "setuptools.build_meta"
 # every ``@configurable`` on bootstrap without hardcoding the list.
 [project.entry-points."confluid.configurables"]
 recordstream = "recordstream"
+# ONE entry point per engine PACKAGE (core / flow / sources are each one class per cohesive
+# module, all re-exported by the package __init__, so importing it registers every
+# @configurable). Unlike recordstream.ops.*, do NOT add per-submodule entry points: scan_module's
+# __module__ filter finds nothing in a package __init__, so a visual editor's node bridge
+# surfaces these through its second pass over ``__all__`` — which is why that list is load-bearing.
 recordstream-core = "recordstream.core"
 recordstream-sources = "recordstream.sources"
 recordstream-ops-parallel = "recordstream.ops.parallel"
@@ -79,7 +84,8 @@ recordstream-ops-random-apply = "recordstream.ops.random_apply"
 # changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.
 recordstream-ops-configure = "recordstream.ops.configure"
 recordstream-ops-formula = "recordstream.ops.formula"
-# The FlowGraph engine (flow: named-step documents + the flow<->ops converters)
+# The FlowGraph engine (flow: named-step documents) + the per-record kernel both authoring
+# forms run on. There is no flow<->ops lowering pass — it was deleted 2026-07-30 (architecture §3).
 recordstream-flow = "recordstream.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source
 recordstream-storage-query = "recordstream.storage.query"

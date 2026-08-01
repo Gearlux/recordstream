@@ -16,7 +16,7 @@ Design notes
 * Every public function is a lazy generator (**Lazy Evaluation** mandate) —
   nothing materializes the whole source.
 * :func:`num_classes` (integer class-id semantics) is a free function, *not* a
-  method on the generic :class:`~recordstream.core.Stream` engine — counting classes is
+  method on the generic :class:`~recordstream.core.stream.Stream` engine — counting classes is
   a classification concern, and bolting it onto the task-agnostic engine would
   make every ``Stream`` look classification-capable to duck-typed consumers.
 """

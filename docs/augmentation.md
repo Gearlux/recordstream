@@ -4,7 +4,7 @@ RecordStream does not reimplement augmentations, and it does not wrap them eithe
 [albumentations](https://albumentations.ai) transform or a bare torchvision `transforms.v2`
 transform drops **as-is** into any ops list — `Stream(ops=[...])`, a `Pipeline`, a `flow:` step,
 inside `RandomApply` / `Enable` — and the engine's op-family dispatch
-(`recordstream.core._apply_op`) invokes it the way its own library expects. There are no adapter
+(`recordstream.core.families._apply_op`) invokes it the way its own library expects. There are no adapter
 classes and no generated per-transform op families.
 
 ```python

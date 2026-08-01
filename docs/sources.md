@@ -1,5 +1,22 @@
 # Sources — HuggingFace, splits, ranges, concatenation (`recordstream.sources`)
 
+`recordstream.sources` is a package with **one class per module**. Import from the package —
+`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource` —
+but spell the **submodule** path in a config, because that is what `cls.__module__` says and
+what a generated config emits:
+
+| class | module | `!class:` path |
+| --- | --- | --- |
+| `HuggingFaceSource` | `huggingface.py` | `recordstream.sources.huggingface.HuggingFaceSource` |
+| `DatasetSplit` | `split.py` | `recordstream.sources.split.DatasetSplit` |
+| `RangeSource` | `range.py` | `recordstream.sources.range.RangeSource` |
+| `ConcatSource` | `concat.py` | `recordstream.sources.concat.ConcatSource` |
+
+The shorter `!class:recordstream.sources.HuggingFaceSource` still resolves (Confluid falls back to
+a module-path import, and the package re-exports every name), so an older config keeps loading —
+but a generated one will use the submodule spelling. Rationale:
+[docs/architecture.md §11](architecture.md#11-sources-are-a-package-one-class-per-module--and-the-module-path-is-the-contract-2026-08-01).
+
 ## Hugging Face datasets
 
 `HuggingFaceSource` turns any `datasets.Dataset` (a Hub repo id or a local imagefolder path) into plain record dicts of typed values: the `input_feature` column becomes an `Image` under the record key `"image"`, the `target_feature` column a `Label` under `"class"`, and each kept metadata column its own `Label` entry keyed by the column name (plus the source-provenance `hf_path` / `hf_split` entries) — traceability that often goes missing in bare dictionary loading.
@@ -7,7 +24,7 @@
 - **`metadata_features` (which extra columns become record entries):** the sentinel **`"*"`** (or `["*"]`, the default) keeps **every column except `input_feature` / `target_feature`** — the full-traceability option, resolved against the dataset's real columns at load; an explicit list keeps exactly those columns; `None` / `[]` keep none.
 
 ```yaml
-hf_train: !class:recordstream.sources.HuggingFaceSource()
+hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
   path: mnist
   input_feature: image
   target_feature: label
@@ -31,19 +48,19 @@ split.train   # ≈80% — the remainder      split.val   # ≈10%      split.te
 The views are disjoint and complementary, computed once over a single deterministic shuffle (cached), so the underlying source is consumed once. In Confluid YAML they're reachable by **attribute reference** — `!ref:my_split.train` / `.val` / `.test`. All three refs resolve to the *same* `DatasetSplit` instance, so the upstream source is loaded **exactly once**:
 
 ```yaml
-hf_train: !class:recordstream.sources.HuggingFaceSource()
+hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
   path: mnist
   split: train
 
-my_split: !class:recordstream.sources.DatasetSplit()
+my_split: !class:recordstream.sources.split.DatasetSplit()
   source: !ref:hf_train
   val_fraction: 0.1
   test_fraction: 0.1
   seed: 42
 
-train_set: !class:recordstream.core.Stream() { source: !ref:my_split.train }
-val_set:   !class:recordstream.core.Stream() { source: !ref:my_split.val }
-test_set:  !class:recordstream.core.Stream() { source: !ref:my_split.test }
+train_set: !class:recordstream.core.stream.Stream() { source: !ref:my_split.train }
+val_set:   !class:recordstream.core.stream.Stream() { source: !ref:my_split.val }
+test_set:  !class:recordstream.core.stream.Stream() { source: !ref:my_split.test }
 ```
 
 Omit `test_fraction` for a plain two-way train/val split; omit both fractions and `train` is the whole source (`val`/`test` empty).
@@ -51,7 +68,7 @@ Omit `test_fraction` for a plain two-way train/val split; omit both fractions an
 **Select-one API.** Passing `split` makes the `DatasetSplit` *itself* iterate that one view (`split=None` ⇒ `train`), so it's directly usable as a single `source:`. `split` is the closed `Literal["train", "val", "test"]`, exported as `recordstream.SplitName`.
 
 ```yaml
-val_set: !class:recordstream.sources.DatasetSplit()
+val_set: !class:recordstream.sources.split.DatasetSplit()
   source: !ref:hf_train
   split: val
   val_fraction: 0.1
@@ -63,7 +80,7 @@ val_set: !class:recordstream.sources.DatasetSplit()
 - **`RangeSource(source, start, stop)`** — a contiguous index slice `[start:stop)` over a source (negatives count from the end; clamped). The plain-slice counterpart to `DatasetSplit`.
 
     ```yaml
-    first_half: !class:recordstream.sources.RangeSource()
+    first_half: !class:recordstream.sources.range.RangeSource()
       source: !ref:hf_train
       start: 0
       stop: 5000
@@ -72,7 +89,7 @@ val_set: !class:recordstream.sources.DatasetSplit()
 - **`ConcatSource(sources)`** — joins multiple indexable sources into one longer indexable source (the indexable counterpart to `JointStream`, which is iteration-only). Because it's indexable, a `ConcatSource` can itself be wrapped by `DatasetSplit` / `RangeSource`.
 
     ```yaml
-    combined: !class:recordstream.sources.ConcatSource()
+    combined: !class:recordstream.sources.concat.ConcatSource()
       sources:
         - !ref:train_main
         - !ref:extra_shard

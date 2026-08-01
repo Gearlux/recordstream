@@ -20,7 +20,7 @@ Maintenance rules:
 | Data model | `items.py`, `io.py` | A record is a plain `dict` of typed values; one codec serializes any value | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Native ops | `transform.py`, `dispatch.py`, `ops/*` | Type-dispatched `Transform`s (kernels, `field=`) + structural/compose/context ops | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Library interop | `core._apply_op`, `register_op_family` | External libraries run as-is via the op-family dispatch — no adapters | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
-| Engines | `core.py` (`Stream`/`JointStream`), `flow.py` (`FlowGraph`) | One op-application chokepoint, four routes; a named-step graph engine with pinned lowering parity | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-recordstreamcontext-2026-07-17), [§5](#5-the-engines-own-callable-wrappers-live-in-corepy-2026-07-20) |
+| Engines | `core/` (`Stream`/`JointStream`), `flow/` (`FlowGraph`) | One op-application chokepoint, four routes; one per-record kernel behind two authoring forms | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-recordstreamcontext-2026-07-17), [§5](#5-the-engines-own-callable-wrappers-live-in-core-2026-07-20-still-true-after-the-2026-08-01-package-split) |
 | Graph wiring | `context.py`, `ops/context.py` | Fan-out/fan-in/cross-branch values on the plain sequential engine | [§3](#3-the-per-record-context-is-an-ambient-wiring-plane-recordstreamcontext-2026-07-17) |
 | Batching | `collate.py` | Grouping is the engine's; stacking is a pluggable registry | [§2](#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17) |
 | Storage & query | `storage/*` | The `typedrecord-v1` key-group layout over the codec; metadata scans without array loads | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) (contracts) + [storage.md](storage.md) |
@@ -65,7 +65,7 @@ Collapse to ONE carrier and ONE op engine:
   `field=` or the first value of the natural type, and raises a `ValueError` naming the record's
   keys on every miss.
 - **External libraries run AS-IS through the engine's op-family dispatch**
-  (`recordstream.core._apply_op`): an albumentations op receives exactly its own kwarg vocabulary
+  (`recordstream.core.families._apply_op`): an albumentations op receives exactly its own kwarg vocabulary
   (`image`/`mask`/`masks`/`bboxes`/`keypoints`/`labels` keys present in the record; one call =
   one joint draw; array outputs re-wrapped in the incoming `NDArrayItem` type so `Image`/`Mask`
   survive); a torchvision-v2 op is called on the dict as-is; everything else is `op(record)` with
@@ -304,7 +304,7 @@ run the lifting pass first to rebuild what was just destroyed.
 ### Decision
 
 **One execution model: the step graph.** Both spellings parse to the same `FlowStep` list and run
-through the same per-record kernel (`recordstream.flow.run_steps_multi`).
+through the same per-record kernel (`recordstream.flow.execute.run_steps_multi`).
 
 - An `ops:` list compiles to positional steps (`core.linear_steps` — `s0`, `s1`, …) whose names
   never surface. A sequence IS a graph; no lifting is involved.
@@ -447,20 +447,26 @@ schemas = scan_module("recordstream.ops.numpy")   # one JSON schema per op defin
 
 ---
 
-## 5. The engine's own callable wrappers live in `core.py` (2026-07-20)
+## 5. The engine's own callable wrappers live in `core` (2026-07-20; still true after the 2026-08-01 package split)
+
+> **Note (2026-08-01).** `core.py` became the `core/` PACKAGE (§11). Everything below holds
+> unchanged — the split preserved exactly the property this record protects. `FilterOp` and
+> `WrappedOp` moved to `core/wrappers.py` and `JointStream` sits beside `Stream` in
+> `core/stream.py`, still inside `core`, still importing one way. What a config SPELLS changed
+> (`!class:recordstream.core.wrappers.FilterOp`); what depends on whom did not.
 
 ### Context
 
-Three classes sit in `core.py` next to the `Stream` engine that look, at first glance, like they
+Three classes sit in `core` next to the `Stream` engine that look, at first glance, like they
 belong elsewhere: `FilterOp` and `WrappedOp` (op-shaped, so why not `ops/`?) and `JointStream`
 (a second engine in the engine module).
 
 ### Decision
 
-They stay in `core.py` because of **who constructs them and which way imports flow**. All three
+They stay in `core` because of **who constructs them and which way imports flow**. All three
 are the construction targets of `Stream`'s own fluent API — `.filter(pred)` appends a `FilterOp`,
 `.map(fn)` appends a `WrappedOp`, `Stream.joint([...])` wraps a `JointStream` — so the engine itself
-instantiates them. And `core.py` is the *bottom* of the op-facing layer: every composing op in
+instantiates them. And `core` is the *bottom* of the op-facing layer: every composing op in
 `ops/` imports `core._apply_op` (the op-family dispatch chokepoint); moving `FilterOp`/`WrappedOp`
 into `ops/` would make `core` import from `ops` and close an import cycle. `JointStream` is
 `Stream`'s iteration-only fan-in sibling (`category="engine"`), 20 lines that exist to be
@@ -477,8 +483,8 @@ off visual canvases.
 - `ops/` stays a pure consumer of `core` — the layering is one-directional.
 - `WrappedOp` is a package-root export (the public "lift a plain function" surface, and its
   stored-string `f` is the reference use of the discovery serialization half); `FilterOp` is not
-  root-exported (normally reached via `Stream.filter`; importable as `recordstream.core.FilterOp`).
-- `JointStream` is YAML-addressable (`!class:recordstream.core.JointStream()`) and canvas-composable as
+  root-exported (normally reached via `Stream.filter`; importable as `recordstream.core.wrappers.FilterOp`).
+- `JointStream` is YAML-addressable (`!class:recordstream.core.stream.JointStream()`) and canvas-composable as
   an engine node; its indexable counterpart for raw sources is `ConcatSource`.
 
 ### Example
@@ -494,7 +500,7 @@ both = Stream.joint([stream_a, stream_b])                 # Stream(source=JointS
 
 ### What you may change (and where it's documented)
 
-- **A new engine-constructed helper** (another fluent-API target) belongs in `core.py` for the
+- **A new engine-constructed helper** (another fluent-API target) belongs in `core` for the
   same import-direction reason; an op users wire *directly* (YAML/canvas) belongs in `ops/` with
   a category and group.
 - **Do not add a discovery category to `FilterOp`/`WrappedOp`** — surfacing a raw-callable
@@ -1020,3 +1026,173 @@ loader = DataLoader(cast(Any, stream), batch_size=32, shuffle=True, collate_fn=c
   `test_every_knob_is_a_declared_parameter`.
 - **Usage** is [docs/kinds.md](kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you);
   what the extra provides is the `pyproject.toml` comment beside it.
+
+## 11. Sources are a package, one class per module — and the module path is the contract (2026-08-01)
+
+### Context
+
+`recordstream/sources.py` had grown to four unrelated `@configurable` classes in 511 lines: a
+concrete loader (`HuggingFaceSource`, which reaches the network) and three pure view sources that
+only do index arithmetic (`DatasetSplit`, `RangeSource`, `ConcatSource`). Nothing tied them
+together beyond the word "source" — editing the HF metadata resolution meant scrolling past the
+split partitioner, and a reader looking for the concat offsets had to know it was the last class
+in the file. `recordstream.ops` had already been a package for exactly this reason.
+
+The split is not free, because in this workspace a class's **module path is a published
+contract**. `confluid.pydantic_export._qualname` builds it as `f"{cls.__module__}.{cls.__qualname__}"`,
+and that string is what a generated config emits as its `!class:` tag, what a form-spec / MCP
+schema reports, and what keys the discovery-service enrichment table. Moving a class to a
+submodule therefore changes the tag every generator writes.
+
+### Decision
+
+**One class per module under `recordstream/sources/`, and the submodule path is canonical.**
+`huggingface.py` / `split.py` / `range.py` / `concat.py`, plus a `base.py` holding the one helper
+the three view sources share. `__init__.py` re-exports every public name so
+`from recordstream.sources import DatasetSplit` is unchanged.
+
+The alternative — pinning `__module__` back to `recordstream.sources` in `__init__.py` so no
+downstream string moves — was measured and rejected. It breaks
+`confluid.registry.key_for()`: `_entry_for_object` finds an entry by recomputing
+`f"{cls.__module__}.{cls.__qualname__}"` and comparing against the key stored when
+`@configurable` ran, so a rewritten `__module__` misses. The fallout is silent — with a namesake
+registered, a pinned class dumps the ambiguous `!class:Thing()` while an unpinned twin correctly
+dumps its disambiguated `!class:__main__.Thing~2()`. It also breaks `inspect.getsource`, which
+searches `__init__.py` and raises `OSError: could not find class definition`.
+
+### Consequences
+
+- **Both spellings still resolve.** `confluid.resolve_class` falls back to
+  `importlib.import_module(module_path)` + `getattr`, and the package re-exports every name, so a
+  hand-written `!class:recordstream.sources.HuggingFaceSource` in an old config keeps loading.
+  What *changed* is what generators WRITE, so every such string in the workspace was updated in
+  the same change — including the discovery-service enrichment key, whose miss would have silently
+  dropped a field alias rather than failing.
+- **`__init__.py`'s `__all__` became load-bearing.** `recordstream.discovery.scan_module` filters
+  members on `member.__module__ == mod_name`, so it now returns `[]` for the package. A visual
+  editor's node bridge survives only through its second pass, which walks `__all__` — verified by
+  running that bridge before and after and diffing the registered node keys (identical).
+- **One entry point for the package, not one per submodule.** Unlike `recordstream.ops.*`, where
+  each module is entry-pointed, `recordstream/sources/__init__.py` imports all four submodules, so
+  importing the package registers every `@configurable`. Adding per-submodule entry points would
+  only re-scan the same classes.
+- **A new source is a new file.** There is no longer a "where in the file" question, and a source
+  that needs a heavy import keeps it out of its siblings' import path.
+
+### Example
+
+```yaml
+# canonical — what a generator emits, matching cls.__module__
+train_set: !class:recordstream.sources.huggingface.HuggingFaceSource
+  path: mnist
+  split: train
+
+my_split: !class:recordstream.sources.split.DatasetSplit()
+  source: !ref:train_set
+  val_fraction: 0.1
+  seed: 42
+```
+
+```python
+# the import surface is the package, unchanged by the split
+from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+```
+
+### What you may change (and where it's documented)
+
+- **Add a source**: one new module under `recordstream/sources/`, its class re-exported from
+  `__init__.py` AND listed in `__all__` — the second half is what puts it in a visual editor's
+  palette, and forgetting it fails silently.
+- **Share code between view sources**: `base.py`. It is private to the package; a helper a
+  consumer should call belongs at the package root instead.
+- **Usage** is [docs/sources.md](sources.md).
+
+## 12. `core` and `flow` are packages too — layered by import direction (2026-08-01)
+
+### Context
+
+`core.py` was 713 lines holding four unrelated things: the op-family registry and the
+`_apply_op` chokepoint, the `MapStyle` Protocol, the two fluent-API callable wrappers, and the
+`Stream` engine. `flow.py` was 708: the step model, the document parser, the per-record kernel,
+and `FlowGraph`. Both had crossed the line where a reader looking for one thing scrolls past
+three others — the same threshold that made `sources.py` a package (§11).
+
+Unlike `sources.py`, neither file is class-dominated: roughly 45% of `core.py` was free
+functions. A literal one-class-per-module rule would have produced a 30-line `joint_stream.py`
+and two ~35-line wrapper modules, which §5 had already considered and rejected as "structure for
+structure's sake". And the split had to preserve something load-bearing: §5's whole argument is
+that `core` is the BOTTOM of the op-facing layer, so a naive split risked closing the very
+import cycle that record exists to prevent.
+
+### Decision
+
+**One module per cohesive unit, layered so imports run strictly one way.** A class gets its own
+module when it dominates one (`Stream`, `FlowGraph`); otherwise the unit is the boundary.
+
+    core/    families.py  → mapstyle.py → wrappers.py → stream.py
+    flow/    steps.py     → parse.py    → execute.py  → graph.py
+
+`core/families.py` is the bottom: the registry, the built-in families, `_apply_op`, and the
+`EXPANDS` protocol — everything about applying ONE op to ONE record, importing nothing from its
+siblings. `flow/execute.py` imports it directly, which is what keeps `flow` from reaching back
+into `core.stream`; `core.stream` reaches `flow` only through body-local imports, exactly as
+`core.py` did.
+
+Three functions sit where their DEPENDENCY puts them rather than where their name suggests:
+`ensure_record_dataset` is in `stream.py` (its whole body builds a `Stream`, and putting it in
+`mapstyle.py` beside the `RecordSource` type it consumes would have made a pure type module
+import the engine); `linear_steps` and `_worker_task` likewise, because both compile or run an
+ops LIST, which is `Stream`'s spelling of a pipeline.
+
+### Consequences
+
+- **The canonical `!class:` path moved** — `recordstream.core.stream.Stream`,
+  `recordstream.core.wrappers.FilterOp`, `recordstream.flow.graph.FlowGraph`. The package
+  spelling still resolves (§11), so hand-written configs keep loading, but generators emit the
+  new one, so all 64 downstream files were updated in the same change.
+- **A monkeypatch must now name the module that USES a symbol, not the one that defines it.**
+  This is the one behaviour change with teeth. `flow/graph.py` does
+  `from recordstream.flow.execute import _result_readers`, which BINDS the name — so patching
+  `recordstream.flow` (which worked when both lived in one module) silently misses. The suite
+  caught it immediately; a test that had been asserting a performance property was suddenly
+  asserting nothing. `recordstream/core/__init__.py` carries a note saying so.
+- **`_OP_FAMILIES` is the exception, and only because it is mutable.** The registry list is
+  re-exported by identity, so `core._OP_FAMILIES[:] = snapshot` still restores the real registry.
+  Rebinding it (`core._OP_FAMILIES = []`) would not.
+- **`core/__init__.py` re-exports PRIVATE names deliberately** (`_apply_op` and friends), marked
+  `# noqa: F401`. They are the engine's internal cross-module surface — every composing op in
+  `ops/` imports `_apply_op` from `recordstream.core` — so the package boundary has to carry them
+  even though `__all__` (and therefore a visual editor's palette) must not.
+- **`__all__` became load-bearing in both packages**, for the reason §11 gives. `core.py` had
+  none at all, so `Stream` and `JointStream` reached the palette purely through
+  `scan_module`'s `__module__` filter; after the split that pass returns `[]`. Verified by
+  diffing the registered node keys before and after (identical).
+
+### Example
+
+```yaml
+# canonical — what a generator emits, matching cls.__module__
+train_set: !class:recordstream.core.stream.Stream()
+  source: !ref:hf_train
+  ops: !ref:preprocess
+```
+
+```python
+# the import surface is the package, unchanged by the split
+from recordstream.core import Stream, ensure_record_dataset
+from recordstream.flow import FlowGraph, run_steps_multi
+
+# ...but a test double names the USER of a symbol, not its definition:
+monkeypatch.setattr(recordstream.flow.graph, "_result_readers", counting)   # ✓
+monkeypatch.setattr(recordstream.flow, "_result_readers", counting)         # ✗ silently misses
+```
+
+### What you may change (and where it's documented)
+
+- **Add an engine-constructed helper**: `core/wrappers.py` if it wraps a raw callable, else the
+  module whose layer it belongs to — never a new module above `stream.py`, which would invert the
+  direction the layering protects (§5).
+- **Add an op family**: `register_op_family` from anywhere; `core/families.py` only holds the
+  built-ins, and they register through the same public API (§1).
+- **Split `flow/execute.py` further** if a third route appears — but `is_linear` must stay the
+  single gate, and the routes must keep agreeing record-for-record (§3).
