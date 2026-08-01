@@ -47,9 +47,9 @@ class DatasetSplit:
           test_fraction: 0.1
           seed: 42
 
-        train_set: !class:recordstream.core.Stream()
+        train_set: !class:recordstream.core.stream.Stream()
           source: !ref:my_split.train
-        val_set: !class:recordstream.core.Stream()
+        val_set: !class:recordstream.core.stream.Stream()
           source: !ref:my_split.val
 
     **Select-one API.** Passing ``split`` makes the ``DatasetSplit`` itself iterate that one
