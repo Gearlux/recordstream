@@ -1,6 +1,8 @@
 """``HuggingFaceSource`` — a Hugging Face dataset as a stream of record dicts."""
 
-from typing import Any, Collection, Iterator, List, Optional
+from pathlib import Path
+from typing import Any, Collection, Dict, Iterator, List, Optional
+from urllib.parse import quote, urlencode
 
 from confluid import configurable
 from loggair import get_logger
@@ -8,6 +10,18 @@ from loggair import get_logger
 from recordstream.items import Image, Label, Record
 
 logger = get_logger(__name__)
+
+#: Scheme of the canonical identifier for a Hub dataset. Matches the convention hosted
+#: tracking services already use for a dataset source, so a URI recorded here is the one
+#: their UI expects rather than a spelling invented for this package.
+HF_URI_PREFIX = "hf://datasets/"
+
+#: Where a Hub dataset is browsable. The ``/viewer/<config>/<split>`` suffix opens the
+#: dataset viewer on exactly the rows this source reads.
+HF_BROWSE_PREFIX = "https://huggingface.co/datasets/"
+
+#: The config name the Hub viewer uses when a dataset declares no named configs.
+HF_DEFAULT_CONFIG = "default"
 
 # Sentinel for ``HuggingFaceSource.metadata_features`` meaning "every dataset column except the
 # input/target features" — the full-traceability option, kept OPT-IN (``None`` / ``[]`` still = no
@@ -61,6 +75,11 @@ class HuggingFaceSource:
     does NO functional work — ``HuggingFaceSource()`` is valid, and the dataset is downloaded
     only on first access to :attr:`dataset` (cached thereafter; reset ``_dataset`` to reload).
     ``path`` is therefore optional at construction and validated lazily when the data is needed.
+
+    It also carries its own IDENTITY (:mod:`recordstream.uri`): :attr:`dataset_uri` names the
+    dataset canonically (``hf://datasets/ylecun/mnist?split=train``, or a ``file://`` URI for a
+    local imagefolder) and :attr:`dataset_url` links to the Hub viewer for the same rows. Both
+    read stored configuration only — asking either never loads anything.
 
     Args:
         path: HF dataset identifier — a Hub repo id (e.g. ``kitofrank/RFUAV``) or a local imagefolder path.
@@ -116,9 +135,63 @@ class HuggingFaceSource:
                 )
             from datasets import load_dataset
 
-            logger.info(f"HuggingFaceSource: Loading {self.path} ({self.split})...")
+            # The identifier goes in the LOAD line: it is the one moment a reader of the log
+            # can tie the run to a specific dataset, and the browsable URL is what makes that
+            # tie followable rather than merely recorded.
+            logger.info(f"HuggingFaceSource: Loading {self.dataset_url or self.dataset_uri}...")
             self._dataset = load_dataset(self.path, name=self.name, split=self.split, **self._load_kwargs)
         return self._dataset
+
+    # -- identity (see recordstream.uri) ------------------------------------------------------
+
+    @property
+    def _identity_query(self) -> str:
+        """The ``name`` / ``revision`` / ``split`` selection as a sorted query string.
+
+        Sorted so two identically-configured sources produce the SAME string — a URI whose
+        parameter order depended on insertion would not compare equal to itself.
+        """
+        parts: Dict[str, str] = {}
+        if self.name:
+            parts["name"] = str(self.name)
+        revision = self._load_kwargs.get("revision")
+        if revision:
+            parts["revision"] = str(revision)
+        if self.split:
+            parts["split"] = str(self.split)
+        return urlencode(sorted(parts.items()))
+
+    @property
+    def dataset_uri(self) -> Optional[str]:
+        """Canonical identifier for the dataset this source reads — ``None`` without a ``path``.
+
+        A Hub repo id becomes ``hf://datasets/<path>?…``; a local directory becomes its
+        ``file://`` URI. Which one applies is decided by whether ``path`` exists on disk —
+        the same question ``datasets.load_dataset`` itself answers. Pure string work over the
+        stored configuration: nothing is loaded, so an unconsumed source still answers.
+        """
+        if not self.path:
+            return None
+        local = Path(self.path)
+        base = local.resolve().as_uri() if local.exists() else HF_URI_PREFIX + quote(str(self.path).strip("/"))
+        query = self._identity_query
+        return f"{base}?{query}" if query else base
+
+    @property
+    def dataset_url(self) -> Optional[str]:
+        """Browsable Hub link, or ``None`` for a local dataset (which has no web page).
+
+        Points at the dataset VIEWER on this source's config + split when a split is
+        configured, so the link opens on the rows this source reads rather than on the
+        repository's front page.
+        """
+        if not self.path or Path(self.path).exists():
+            return None
+        page = HF_BROWSE_PREFIX + quote(str(self.path).strip("/"))
+        if not self.split:
+            return page
+        config = quote(str(self.name)) if self.name else HF_DEFAULT_CONFIG
+        return f"{page}/viewer/{config}/{quote(str(self.split))}"
 
     @property
     def resolved_metadata_features(self) -> List[str]:
