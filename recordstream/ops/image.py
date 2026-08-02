@@ -27,7 +27,8 @@ from PIL import Image, ImageDraw
 
 from recordstream._compat import is_torch_tensor
 from recordstream.items import Image as ImageItem
-from recordstream.items import NDArrayItem, Record, item_data
+from recordstream.items import Mask as MaskItem
+from recordstream.items import NDArrayItem, Record, item_data, item_value
 from recordstream.transform import Transform
 
 logger = get_logger("recordstream.ops.image")
@@ -676,10 +677,98 @@ class ConvertToImage(Transform):
         return {**record, self.output: ImageItem(out_arr, layout="HWC")}
 
 
+@configurable(category="op", group="image")
+class ConvertToMask(Transform):
+    """A mask-bearing field → a :class:`~recordstream.Mask` item of per-pixel class ids.
+
+    The segmentation counterpart of :class:`ConvertToImage`, and the same shape of op: it reads
+    ONE field and writes a differently-typed item under ``output``, leaving every other key
+    untouched. A segmentation dataset ships its target as a greyscale/paletted PNG whose pixel
+    values ARE the class ids (the Oxford-IIIT Pet trimap, Cityscapes label ids, a VOC
+    segmentation map); this turns that payload into the ``int64`` ``[H, W]`` array every
+    per-pixel loss expects.
+
+    **It converts and nothing else** — deliberately, because recordstream already owns the rest:
+
+    * **remapping** the ids (1-based trimap → 0-based class ids, a Cityscapes id → trainId
+      table) is :class:`~recordstream.ops.formula.FormulaOp` over this op's ``output``
+      (``formula: a - 1``) or :class:`~recordstream.ops.target.EncodeTarget`;
+    * **resizing / augmenting** it *together with the image* is a bare albumentations transform
+      dropped into the same ops list — the engine's op-family dispatch hands it the ``image``
+      and ``mask`` keys in ONE call, so a single joint draw moves both and the ``Mask`` type
+      survives the round trip. That is why ``output`` defaults to ``"mask"``: it is
+      albumentations' own key vocabulary, so the very next op in the chain finds it.
+
+    ``int64`` is not a knob: a class-id mask is integer by definition, and it is the dtype
+    ``torch.nn.CrossEntropyLoss`` requires (it rejects int32 with *"expected target dtype to be
+    Long or Byte, but got Int"*). A library that casts on the way past — albumentations returns
+    int32 — is corrected at the model boundary by ``batch_tensor(..., dtype=...)``, where the
+    caller names the contract.
+
+    Args:
+        field: Name of the source field to read; blank (default) picks the first array/PIL-bearing item.
+        output: Name of the key the ``Mask`` item is written to (added if new); defaults to ``mask``.
+    """
+
+    handles = (NDArrayItem,)
+    consumes = (NDArrayItem,)
+    produces = (MaskItem,)
+
+    def __init__(self, field: str = "", output: str = "mask") -> None:
+        # Lazy / zero-arg: store config only. A missing/unusable field is reported at call time.
+        super().__init__()
+        self.field = field
+        self.output = output
+
+    def _find_source(self, record: Record) -> Any:
+        """Resolve the payload to convert (``self.field``, else the first array/PIL-bearing item).
+
+        The "array or PIL" rule is :class:`~recordstream.ops.torch.ToTensor`'s, not a third
+        spelling: a mask arrives either already decoded (an ndarray) or as the PIL image a
+        source handed over, and both are equally normal.
+
+        Unwrapping goes through :func:`~recordstream.item_value` rather than
+        :func:`~recordstream.item_data`, and the difference is load-bearing here: a source that
+        does not know a column is a mask hands it over as a :class:`~recordstream.Label` (this
+        is what ``HuggingFaceSource`` does for every metadata column), whose payload slot is
+        ``value``, not ``data`` — ``item_data`` would return the ``Label`` itself and the PIL
+        image inside it would never be found.
+        """
+        if self.field:
+            if self.field not in record:
+                raise ValueError(f"ConvertToMask: field {self.field!r} not in record (keys: {list(record)})")
+            return item_value(record[self.field])
+        for _key, item in record.items():
+            data = item_value(item)
+            if isinstance(data, np.ndarray) or is_torch_tensor(data) or hasattr(data, "convert"):
+                return data
+        raise ValueError(f"ConvertToMask: no array/PIL-bearing field in record (keys: {list(record)})")
+
+    def __call__(self, record: Record) -> Record:
+        value = self._find_source(record)
+        if hasattr(value, "convert"):  # a PIL image — an L / P mode plane is already the id map
+            value = np.asarray(value)
+        elif is_torch_tensor(value):
+            value = value.detach().cpu().numpy()
+        arr = np.asarray(value)
+        # Squeeze SINGLETON axes only, so a mask stored as [H, W, 1] or [1, H, W] lands as
+        # [H, W]. An RGB-encoded mask is deliberately NOT collapsed: picking one of three
+        # channels (or looking up a palette) is a decision this op must not make silently.
+        if arr.ndim > 2:
+            arr = np.squeeze(arr)
+        if arr.ndim != 2:
+            raise ValueError(
+                f"ConvertToMask: expected a 2-D [H, W] class-id map, got shape {tuple(np.shape(value))}. "
+                "An RGB-encoded mask needs a channel/palette decode first (e.g. select_channel)."
+            )
+        return {**record, self.output: MaskItem(arr.astype(np.int64))}
+
+
 __all__ = [
     "Colormap",
     "COLORMAPS",
     "ConvertToImage",
+    "ConvertToMask",
     "normalize_to_uint8",
     "value_to_image",
     "record_to_image",

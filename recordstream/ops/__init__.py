@@ -5,7 +5,7 @@ Submodules:
     - recordstream.ops.numpy: Threshold, ConnectedComponents (+ threshold_array /
       connected_component_bboxes / resolve_expression helpers)
     - recordstream.ops.torch: ToTensor (+ to_tensor helper)
-    - recordstream.ops.image: ConvertToImage (+ value_to_image / normalize_to_uint8 …)
+    - recordstream.ops.image: ConvertToImage, ConvertToMask (+ value_to_image / normalize_to_uint8 …)
     - recordstream.ops.target: EncodeTarget, DecodeTarget,
       CocoToTorchVisionDetection, MasksToDetectionBoxes
     - recordstream.ops.structure: RenameField, DropField, CopyField, SelectFields
@@ -28,7 +28,7 @@ from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
-from recordstream.ops.image import ConvertToImage
+from recordstream.ops.image import ConvertToImage, ConvertToMask
 from recordstream.ops.numpy import ConnectedComponents, Threshold
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
@@ -41,6 +41,7 @@ __all__ = [
     "ConfigureOp",
     "ConnectedComponents",
     "ConvertToImage",
+    "ConvertToMask",
     "CopyField",
     "DecodeTarget",
     "DropField",

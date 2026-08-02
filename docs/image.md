@@ -29,6 +29,40 @@ u8 = normalize_to_uint8(arr, vmin=-80.0, vmax=0.0)    # fixed dB window across a
 
 `record_to_image(record, ...)` renders a record's first array-bearing (2-D / 3-D) value the same way — the ad-hoc whole-record preview for viewer tooling. Pillow is a runtime dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
 
+## Masks (`ConvertToMask`)
+
+The segmentation counterpart, and the same shape of op — read one field, write a differently-typed item under `output`. A segmentation dataset ships its target as a greyscale/paletted PNG whose pixel values *are* the class ids (an Oxford-IIIT Pet trimap, Cityscapes label ids, a VOC segmentation map); this turns that payload into the `int64` `[H, W]` `Mask` every per-pixel loss expects.
+
+```python
+from recordstream.ops.image import ConvertToMask
+
+op = ConvertToMask(
+    field="segmentation_mask",  # source key; blank picks the first array/PIL-bearing value
+    output="mask",              # key the int64 Mask item is written to
+)
+```
+
+It converts and **nothing else**, because the rest of the chain is ops that already exist:
+
+| you want | use |
+| --- | --- |
+| remap the ids (a 1-based trimap → 0-based) | `FormulaOp(field="mask", formula="a - 1")` |
+| remap through a lookup table (Cityscapes id → trainId) | `EncodeTarget` |
+| resize / augment it **together with the image** | a bare `albumentations` transform in the same ops list |
+| drop the source column | `DropField(key="segmentation_mask")` |
+
+That fourth row is why `output` defaults to `"mask"`: it is albumentations' own key vocabulary, so the engine's op-family dispatch hands `image` **and** `mask` to one call — a single joint draw moves both, and the `Mask` type survives the round trip. An image-only transform (`Normalize`) still touches the image alone.
+
+```yaml
+# the target half of a segmentation `preprocess` chain
+- !class:recordstream.ops.image.ConvertToMask {field: segmentation_mask, output: mask}
+- !class:recordstream.ops.formula.FormulaOp   {field: mask, formula: a - 1}
+- !class:recordstream.ops.structure.DropField {key: segmentation_mask}
+- !class:albumentations.Resize                {height: 224, width: 224}   # image AND mask
+```
+
+`int64` is not a knob: a class-id map is integer by definition, and it is what `torch.nn.CrossEntropyLoss` requires (it rejects int32 with *"expected target dtype to be Long or Byte, but got Int"*). Libraries that cast on the way past — albumentations returns int32 — are corrected at the model boundary with `batch_tensor(batch, "mask", dtype=torch.int64)`, where the caller names the contract. An RGB-encoded mask is **refused** rather than collapsed: picking one of three channels is a decision the op must not make silently.
+
 ## Introspection helpers
 
 Pure library functions (not ops) also live here, backing viewer tooling: `select_channel` (reduce an array/tensor to a 2-D float32 map for one channel; negative = mean across channels), `channel_count`, `array_histogram` (finite-only binning + summary stats, JSON-safe), `confusion_matrix_payload` / `confusion_matrices_payload` (render payloads for every confusion-matrix-shaped entry in a metrics result), and `draw_text` (text → `(H, W, 3)` uint8 image with word-wrap and 9-grid anchoring, plus the closed `TextPosition` Literal).

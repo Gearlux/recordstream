@@ -15,7 +15,7 @@ from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
-from recordstream.ops.image import ConvertToImage
+from recordstream.ops.image import ConvertToImage, ConvertToMask
 from recordstream.ops.numpy import ConnectedComponents, Threshold
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
@@ -54,6 +54,7 @@ def test_op_classes_tagged() -> None:
         ConnectedComponents,
         ToTensor,
         ConvertToImage,
+        ConvertToMask,
         Enable,
         Pipeline,
         Parallel,
@@ -91,6 +92,7 @@ def test_op_group_tags() -> None:
     assert ConnectedComponents.__confluid_group__ == "numpy"
     assert ToTensor.__confluid_group__ == "torch"
     assert ConvertToImage.__confluid_group__ == "image"
+    assert ConvertToMask.__confluid_group__ == "image"
     assert SelectFields.__confluid_group__ == "structure"
     assert PrintRecordOp.__confluid_group__ == "debug"
     assert EncodeTarget.__confluid_group__ == "structure"
@@ -119,6 +121,7 @@ def test_categories_enumerable_via_registry() -> None:
         "ConnectedComponents",
         "ToTensor",
         "ConvertToImage",
+        "ConvertToMask",
         "Enable",
         "Pipeline",
         "RecordSinkOp",
@@ -135,7 +138,7 @@ def test_groups_enumerable_via_registry() -> None:
     registry = get_registry()
     assert {"Threshold", "ConnectedComponents"} <= registry.list_classes(group="numpy")
     assert {"ToTensor"} <= registry.list_classes(group="torch")
-    assert {"ConvertToImage"} <= registry.list_classes(group="image")
+    assert {"ConvertToImage", "ConvertToMask"} <= registry.list_classes(group="image")
     assert {"Parallel", "Enable", "Pipeline", "RandomApply", "ConfigureOp", "FormulaOp"} <= registry.list_classes(
         group="compose"
     )
