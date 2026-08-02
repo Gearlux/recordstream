@@ -65,6 +65,7 @@ __all__ = [
     "get_item_type",
     "is_item",
     "item_data",
+    "item_value",
     "with_data",
 ]
 
@@ -282,6 +283,37 @@ def item_data(item: Any) -> Any:
     if is_dataclass(item) and any(f.name == "data" for f in fields(item)):
         return getattr(item, "data")
     return item
+
+
+def item_value(item: Any) -> Any:
+    """The semantic VALUE of a record entry — one step further past a wrapper than :func:`item_data`.
+
+    The difference is the label items, and it is the whole reason this exists beside
+    :func:`item_data`: a :class:`Label`'s payload slot is ``value``, not ``data``, so
+    ``item_data`` hands the ``Label`` itself back. A consumer that wants *the class id* — or
+    *the mask array*, without caring which wrapper carried it — wants this instead.
+
+    The rule: a :class:`MultiLabel` yields its ``.values`` list, a :class:`Label` its
+    ``.value``, any other registered item its payload via :func:`item_data`, and a plain value
+    passes through verbatim.
+
+    It is ONE function because the rule was written out three times —
+    :func:`~recordstream.projection.iter_key` (per record),
+    :func:`~recordstream.batch.batch_values` (per batch) and, the copy that prompted the
+    extraction, an op reading a mask that a source had wrapped in a ``Label``. Those state
+    WHERE they read; the unwrapping itself never differed.
+
+    Example::
+
+        item_value(Label("cat"))                 # 'cat'      (item_data returns the Label)
+        item_value(Mask(np.zeros((4, 4))))       # the ndarray
+        item_value(30.72e6)                      # 30720000.0
+    """
+    if isinstance(item, MultiLabel):
+        return item.values
+    if isinstance(item, Label):
+        return item.value
+    return item_data(item)
 
 
 def with_data(item: _ItemT, new_data: Any) -> _ItemT:

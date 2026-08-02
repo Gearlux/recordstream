@@ -49,6 +49,7 @@ from recordstream.items import (
     item_data,
     item_type_names,
     item_types,
+    item_value,
     register_item,
     with_data,
 )
@@ -63,7 +64,15 @@ from recordstream.outputs import (
 )
 from recordstream.predictions import ClassificationPredictionsSink, PredictionsSink
 from recordstream.processing import DatasetProcessor
-from recordstream.projection import SupportsProjection, class_names, iter_key, num_classes, project
+from recordstream.projection import (
+    SupportsProjection,
+    class_names,
+    first_value,
+    iter_key,
+    num_classes,
+    num_mask_classes,
+    project,
+)
 from recordstream.runnable import (
     ProgressCallback,
     ProgressReporting,
@@ -75,6 +84,7 @@ from recordstream.runnable import (
 )
 from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource, SplitName
 from recordstream.transform import FunctionTransform, Pipeline, Transform, as_transform
+from recordstream.uri import SupportsDatasetIdentity, dataset_uri, dataset_uris, dataset_url
 from recordstream.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
 
 __all__ = [
@@ -93,6 +103,7 @@ __all__ = [
     "get_item_type",
     "is_item",
     "item_data",
+    "item_value",
     "with_data",
     "Transform",
     "Pipeline",
@@ -145,11 +156,18 @@ __all__ = [
     "RangeSource",
     "ConcatSource",
     "SplitName",
+    # ---- dataset identity ----
+    "SupportsDatasetIdentity",
+    "dataset_uri",
+    "dataset_uris",
+    "dataset_url",
     # ---- projection ----
     "SupportsProjection",
+    "first_value",
     "iter_key",
     "class_names",
     "num_classes",
+    "num_mask_classes",
     "project",
     # ---- runnable protocol + orchestration ----
     "TorchRunner",

@@ -2,7 +2,7 @@
 
 A record is a **plain `dict`** of **typed values**. Import the whole surface from the PACKAGE TOP
 LEVEL (`from recordstream import Record, Image, Mask, Regions, Label, Transform, Pipeline,
-as_transform, item_data, with_data, register_item, register_kernel, register_io, collate_records, ...`).
+as_transform, item_data, item_value, with_data, register_item, register_kernel, register_io, collate_records, ...`).
 The design rationale is recorded in
 [architecture.md](architecture.md#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25).
 
@@ -64,10 +64,17 @@ are dataclass wrappers (a bounding-box set is not an array). A uniform payload a
 kernels:
 
 ```python
-from recordstream import item_data, with_data
+from recordstream import item_data, item_value, with_data
 item_data(Image(arr))                  # -> the plain ndarray
 with_data(Image(a, layout="CHW"), b)   # a copy carrying b, layout preserved
 ```
+
+`item_value` is the same question one step further out, and the difference is the label items: a
+`Label`'s payload slot is `value`, not `data`, so `item_data(Label("cat"))` hands the `Label` back
+while `item_value(Label("cat"))` gives you `"cat"` (and a `MultiLabel` its `.values` list). Use
+`item_data` in a kernel, where the item type is already known; use `item_value` when you want *the
+value* whatever wrapper carried it — which is what `iter_key`, `batch_values` and `ConvertToMask` all
+want, and why the rule is one function rather than three copies of it.
 
 `register_item` / `is_item` / `item_types` / `get_item_type` / `item_type_names` are the open item
 registry — the extensibility surface a domain package or user type plugs into (one class + one

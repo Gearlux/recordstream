@@ -5,7 +5,7 @@
 Walking a source for a single record key (the classic case: counting classes from the label key) shouldn't pay to build the values you don't need. `recordstream.projection` adds an opt-in protocol plus lazy helpers, all **key-addressed** — any subset of record keys:
 
 ```python
-from recordstream import project, iter_key, num_classes
+from recordstream import first_value, project, iter_key, num_classes
 
 # A source MAY implement SupportsProjection (`project(keys)`) to skip building
 # unrequested values — e.g. an image dataset reads only the label column for a
@@ -16,10 +16,26 @@ for record in project(my_source, ("class",)):
 labels = list(iter_key(my_source, "class"))   # lazy; a Label unwraps to .value, a MultiLabel to
                                               # its .values LIST, other items to their payload,
                                               # plain values verbatim
+first = first_value(my_source, "class")       # ONE peek — the cheapest question about a column
 n = num_classes(my_source, key="class")       # max(class_id) + 1 — always walks
 ```
 
 A **deferred** source — a `!class:` marker straight out of a config — is materialized first, so a caller never has to know which entry point flows and which doesn't (flowing a live object is a no-op). Sources that don't implement `SupportsProjection` still work via a correct full-iteration fallback (just without the skip-decode speedup); `Stream.project(keys)` is the engine's implementation — it runs the op chain, then keeps only the requested keys. `num_classes` is a free function, not a `Stream` method: integer class-id semantics are classification-specific, so the task-agnostic engine doesn't advertise it.
+
+`first_value` answers what the values in a column *are* without walking the set — one peek is enough to learn a kind. On a label column it decides both questions a consumer has before it can encode anything:
+
+```python
+from recordstream import first_value, is_class_id
+
+target = first_value(train_source, "class")
+multilabel = isinstance(target, (list, tuple, set))   # a MultiLabel arrives as its .values LIST,
+                                                      # so a sequence IS multi-label — the item
+                                                      # type, never a guess about what a list means
+probe = next(iter(target), None) if multilabel else target
+needs_a_label_map = probe is not None and not is_class_id(probe)
+```
+
+It stops at the first hit, so it is one record on a normal source; a missing or all-`None` column costs one full pass and answers `None` rather than raising.
 
 ## `LabelMap` — fittable name↔id encoding
 

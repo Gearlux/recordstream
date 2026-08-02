@@ -23,7 +23,7 @@ Design notes
 
 from typing import Any, Collection, Iterator, List, Optional, Protocol, runtime_checkable
 
-from recordstream.items import Label, MultiLabel, Record, is_item, item_data
+from recordstream.items import Record, item_value
 
 
 @runtime_checkable
@@ -64,21 +64,36 @@ def project(source: Any, keys: Collection[str]) -> Iterator[Record]:
 def iter_key(source: Any, key: str) -> Iterator[Any]:
     """Lazily yield each record's ``key`` VALUE (skipping other-key construction when supported).
 
-    A :class:`~recordstream.items.Label` unwraps to its ``.value`` (the class id / name), a
-    :class:`~recordstream.items.MultiLabel` to its ``.values`` list; any
-    other registered item unwraps to its payload via :func:`~recordstream.items.item_data`; a
-    plain value passes through verbatim. A record without ``key`` yields ``None``.
+    Unwrapping is :func:`~recordstream.items.item_value`'s rule, not a second spelling of it: a
+    :class:`~recordstream.items.Label` yields its ``.value`` (the class id / name), a
+    :class:`~recordstream.items.MultiLabel` its ``.values`` list, any other registered item its
+    payload, and a plain value passes through verbatim. What is THIS function's own is only the
+    projection — a record without ``key`` yields ``None``.
     """
     for record in project(source, (key,)):
-        value = record.get(key)
-        if isinstance(value, MultiLabel):
-            yield value.values
-        elif isinstance(value, Label):
-            yield value.value
-        elif is_item(value):
-            yield item_data(value)
-        else:
-            yield value
+        yield item_value(record.get(key))
+
+
+def first_value(source: Any, key: str) -> Any:
+    """The first non-``None`` value under ``key`` in ``source`` — ``None`` when there is none.
+
+    The cheapest possible question about a column: ONE peek, which is all a consumer needs to
+    learn the KIND of the values without walking the set. The canonical use is a label column,
+    where the peek decides whether the targets are class NAMES needing a
+    :class:`~recordstream.labels.LabelMap` or ids that pass straight through (ask
+    :func:`~recordstream.items.is_class_id` of the answer), and whether the column is
+    multi-label (a :class:`~recordstream.items.MultiLabel` arrives here as its ``values``
+    LIST, so a sequence IS multi-label — the item type, not a guess about what a list means).
+
+    Built on :func:`iter_key`, so all three of its properties carry over: a
+    projection-aware source never builds the values this does not ask for, a deferred source
+    is materialized first, and the walk stops at the first hit — a missing or all-``None``
+    column costs one full pass and answers ``None`` rather than raising.
+    """
+    for value in iter_key(source, key):
+        if value is not None:
+            return value
+    return None
 
 
 def _to_int(value: Any) -> int:
@@ -171,9 +186,43 @@ def num_classes(source: Any, key: str = "class") -> int:
     return highest + 1
 
 
+def num_mask_classes(source: Any, key: str = "mask") -> int:
+    """The per-pixel twin of :func:`num_classes` — walk a MASK column and return ``max + 1``.
+
+    A per-pixel target is an ``[H, W]`` array of class ids rather than one id, so the count is
+    the largest id anywhere in the column plus one. Same contract as :func:`num_classes`
+    otherwise: the walk is key-restricted (a projection-aware source never decodes the image
+    beside the mask), it covers EVERY record so a class appearing only in the last one still
+    sizes the head, and an empty column raises rather than returning a plausible number.
+
+    It is a separate function rather than a widening of :func:`num_classes`, and the reason is
+    that function's strictness: ``_to_int`` REJECTS a non-scalar target on purpose, so a
+    classification run that is accidentally handed arrays fails loudly instead of miscounting.
+    Teaching it to take the max of whatever it gets would trade that guard away for both tasks.
+
+    Args:
+        source: The source to walk (any iterable of records; projection-aware when supported).
+        key: The record key holding the per-pixel mask. Defaults to ``"mask"``.
+    """
+    import numpy as np
+
+    highest = -1
+    for mask in iter_key(source, key):
+        if mask is None:
+            raise ValueError(f"num_mask_classes: a record has no {key!r} value — cannot derive a class count.")
+        arr = np.asarray(mask)
+        if arr.size == 0:
+            continue  # an empty mask constrains nothing; a column of them raises below
+        highest = max(highest, int(arr.max()))
+    if highest < 0:
+        raise ValueError(f"num_mask_classes: source yielded no usable {key!r} masks — cannot derive a class count.")
+    return highest + 1
+
+
 __all__ = [
     "SupportsProjection",
     "project",
     "iter_key",
     "num_classes",
+    "num_mask_classes",
 ]

@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 import numpy as np
 
-from recordstream.items import Label, MultiLabel, Record, item_data
+from recordstream.items import Record, item_value
 
 if TYPE_CHECKING:  # torch is imported lazily at call time — this is annotation-only
     from torch import Tensor
@@ -44,11 +44,12 @@ __all__ = ["batch_metadata", "batch_tensor", "batch_values", "multi_hot"]
 def batch_values(batch: Record, key: str) -> Any:
     """The raw batched values under ``key``, unwrapped from their item type.
 
-    The one place that knows how to get *past* a wrapper item: a :class:`~recordstream.Label`
-    yields its ``.value`` (the collate leaves it a per-record LIST — a wrapper item's payload
-    is not stacked), a :class:`~recordstream.MultiLabel` its ``.values`` (a list OF lists),
-    and anything else goes through :func:`~recordstream.item_data` (an array item yields its
-    stacked payload, a plain value the per-record list the collate gathered).
+    Getting *past* a wrapper item is :func:`~recordstream.item_value`'s rule: a
+    :class:`~recordstream.Label` yields its ``.value`` (the collate leaves it a per-record LIST
+    — a wrapper item's payload is not stacked), a :class:`~recordstream.MultiLabel` its
+    ``.values`` (a list OF lists), and anything else its payload (an array item yields its
+    stacked payload, a plain value the per-record list the collate gathered). What is THIS
+    function's own is the BATCH reading — that the values arrive already collated.
 
     No torch, no stacking, no dtype opinion — just the values. Use :func:`batch_tensor` when
     a tensor is what you need.
@@ -58,12 +59,7 @@ def batch_values(batch: Record, key: str) -> Any:
         batch_values(collate_records([{"class": Label(0)}, {"class": Label(1)}]), "class")
         # [0, 1]
     """
-    item = batch[key]
-    if isinstance(item, MultiLabel):
-        return item.values
-    if isinstance(item, Label):
-        return item.value
-    return item_data(item)
+    return item_value(batch[key])
 
 
 def multi_hot(batch: Record, key: str, num_classes: int, dtype: Any = "float32") -> np.ndarray:
