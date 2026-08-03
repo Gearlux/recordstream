@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterator, List
 import numpy as np
 import torch
 
-from recordstream import Label, Record, Stream, ensure_record_dataset
+from recordstream import Label, Record, Stream, ensure_materialized, ensure_record_dataset
 
 
 class _RowDataset(torch.utils.data.Dataset):
@@ -79,3 +79,78 @@ def test_exported_from_the_package_root() -> None:
 
     assert "ensure_record_dataset" in recordstream.__all__
     assert "RecordSource" in recordstream.__all__
+
+
+# ---------------------------------------------------------------------------
+# ensure_materialized — normalize a source's STATE, not its type
+# ---------------------------------------------------------------------------
+class _LazySource:
+    """A source that does its real work on first read, like every source in this package."""
+
+    def __init__(self, rows: int = 3) -> None:
+        self.rows = rows
+        self.reads = 0
+        self.built = False
+
+    def __len__(self) -> int:
+        return self.rows  # deliberately does NOT build: len() was measured not to be enough
+
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        if index >= self.rows:
+            raise IndexError(index)
+        self.built = True
+        self.reads += 1
+        return {"image": index}
+
+
+def test_ensure_materialized_builds_what_a_read_needs() -> None:
+    """The point: after this, a forked child inherits a source that needs nothing."""
+    source = _LazySource()
+
+    returned = ensure_materialized(source)
+
+    assert source.built, "the source was never actually read"
+    assert returned is source, "it returns the source so it composes"
+
+
+def test_len_is_not_enough_which_is_why_this_reads_a_record() -> None:
+    """Pins the measurement the docstring cites, so the implementation cannot be 'simplified'.
+
+    Loading a dataset object is not the same as building everything a read needs — a real
+    HuggingFaceSource still went to the Hub from inside a worker after `len()` in the parent.
+    """
+    source = _LazySource()
+
+    len(source)
+
+    assert not source.built, "if len() built it, this test's premise is wrong, not the code"
+
+
+def test_it_reads_exactly_one_record() -> None:
+    """One is enough, and more would make warming a large split expensive."""
+    source = _LazySource(rows=100)
+
+    ensure_materialized(source)
+
+    assert source.reads == 1
+
+
+def test_an_empty_source_is_not_an_error() -> None:
+    """A split with no rows has nothing to build, and a caller should need no guard."""
+    assert ensure_materialized(_LazySource(rows=0)) is not None
+
+
+def test_an_iterable_only_source_is_warmed_too() -> None:
+    """Not every source is map-style; the iterable path must build the same way."""
+
+    class _IterableOnly:
+        def __init__(self) -> None:
+            self.built = False
+
+        def __iter__(self) -> Iterator[Dict[str, Any]]:
+            self.built = True
+            yield {"image": 0}
+
+    source = _IterableOnly()
+    ensure_materialized(source)
+    assert source.built

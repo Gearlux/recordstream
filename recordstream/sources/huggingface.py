@@ -89,6 +89,13 @@ class HuggingFaceSource:
         metadata_features: Columns -> per-column ``Label`` entries; ``None``=none, ``"*"``=all-but-i/o, else a list.
         count: Optional cap on the number of records yielded (useful for fast smoke runs).
         name: Optional HF subset/config name (e.g. for multi-config datasets).
+        revision: Optional dataset git revision (branch / tag / commit). Declared rather than
+            left to ``load_kwargs`` because it is part of the source's IDENTITY — ``dataset_uri``
+            reads it.
+        load_kwargs: The remaining ``datasets.load_dataset`` options (``token``, ``cache_dir``,
+            ``trust_remote_code``, …) as an explicit mapping. A dict rather than ``**kwargs``:
+            see the note in ``__init__`` — a ``**kwargs`` constructor accepts every broadcast key
+            there is, and ``load_dataset`` turns an unknown keyword into a builder config name.
     """
 
     def __init__(
@@ -100,7 +107,8 @@ class HuggingFaceSource:
         metadata_features: Optional[List[str] | str] = "*",
         count: Optional[int] = None,
         name: Optional[str] = None,
-        **kwargs: Any,
+        revision: Optional[str] = None,
+        load_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Lazy constructor: store config only — never load here. Real work (the network/disk
         # download) is deferred to the ``dataset`` property so the object is cheap to build and
@@ -114,11 +122,33 @@ class HuggingFaceSource:
         self.metadata_features = metadata_features
         self.count = count
         self.name = name
-        # Extra kwargs forwarded verbatim to ``datasets.load_dataset`` at load time (e.g. ``token``,
-        # ``trust_remote_code``). Captured now, applied lazily in the ``dataset`` property.
-        self._load_kwargs = dict(kwargs)
+        self.revision = revision
+        # The long tail of `datasets.load_dataset` options (``token``, ``cache_dir``,
+        # ``trust_remote_code``), as an EXPLICIT dict rather than the `**kwargs` this took until
+        # 2026-08-02. That `**kwargs` was a live hazard, not merely untidy: confluid/liquifai
+        # broadcast a key into any node whose constructor ACCEPTS it, and a `**kwargs` constructor
+        # accepts every key there is — so unrelated run identity landed in `load_dataset`, which
+        # turns unknown keyword arguments into a builder CONFIG NAME. A single
+        # `sonair train … --run_name my_run` therefore looked for `mnist` under a config named
+        # `default-<hash of the kwargs>`, missed the cache, and went to the Hub. Measured: the same
+        # command passes with no name override and fails with one.
+        self._load_kwargs = dict(load_kwargs or {})
         # Lazy cache for the materialized dataset (see the ``dataset`` property).
         self._dataset: Any = None
+
+    @property
+    def load_options(self) -> Dict[str, Any]:
+        """``load_kwargs`` with the declared ``revision`` folded in — what reaches ``load_dataset``.
+
+        Recomputed on every read rather than merged in ``__init__``, per the workspace
+        derived-state rule: ``revision`` is a DECLARED parameter, so the config layer may set it
+        post-construction (that is how a broadcast key arrives), and a dict assembled once in the
+        constructor would silently keep the value the object was born with.
+        """
+        options = dict(self._load_kwargs)
+        if self.revision is not None:
+            options["revision"] = self.revision
+        return options
 
     @property
     def dataset(self) -> Any:
@@ -139,7 +169,7 @@ class HuggingFaceSource:
             # can tie the run to a specific dataset, and the browsable URL is what makes that
             # tie followable rather than merely recorded.
             logger.info(f"HuggingFaceSource: Loading {self.dataset_url or self.dataset_uri}...")
-            self._dataset = load_dataset(self.path, name=self.name, split=self.split, **self._load_kwargs)
+            self._dataset = load_dataset(self.path, name=self.name, split=self.split, **self.load_options)
         return self._dataset
 
     # -- identity (see recordstream.uri) ------------------------------------------------------
@@ -154,9 +184,8 @@ class HuggingFaceSource:
         parts: Dict[str, str] = {}
         if self.name:
             parts["name"] = str(self.name)
-        revision = self._load_kwargs.get("revision")
-        if revision:
-            parts["revision"] = str(revision)
+        if self.revision:
+            parts["revision"] = str(self.revision)
         if self.split:
             parts["split"] = str(self.split)
         return urlencode(sorted(parts.items()))

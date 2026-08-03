@@ -99,7 +99,7 @@ generated tool schema set the toggle too (see [docs/architecture.md](docs/archit
 | [docs/record-model.md](docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
 | [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
 | [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
-| [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing |
+| [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
@@ -121,7 +121,7 @@ RecordStream deliberately contains **no domain-specific code** — every op, sou
 
 RecordStream is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines:
 
-- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability (see [docs/sources.md](docs/sources.md)).
+- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability, and [names the dataset it reads](docs/sources.md#identifying-a-dataset) so a run record can point at it (see [docs/sources.md](docs/sources.md)).
 - **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node — including bare library transforms — every run reproducible.
 - **PyTorch**: `Stream` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#batching--collate_records--the-collate-registry-recordstreamcollate) (`collate_records` is the default).
 - **Keras 3**: no `DataLoader` exists to do the batching, so [`RecordSequence`](docs/kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you) is the `keras.utils.PyDataset` half — row order, slicing, per-epoch reshuffle, `collate_records` — and a `transform` callable supplies the batch shape, exactly as `collate_fn` does for torch.

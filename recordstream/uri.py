@@ -67,9 +67,7 @@ def _identity(source: Any, attribute: str) -> Optional[str]:
     deferred source, read the handle if it has one, otherwise take one hop into the
     wrapped source and ask again.
     """
-    from confluid import flow
-
-    current = flow(source)
+    current = _materialize(source)
     for _ in range(MAX_WRAPPER_DEPTH):
         if current is None:
             return None
@@ -79,8 +77,21 @@ def _identity(source: Any, attribute: str) -> Optional[str]:
         wrapped = getattr(current, "source", None)
         if wrapped is None or wrapped is current:
             return None
-        current = flow(wrapped)
+        current = _materialize(wrapped)
     return None
+
+
+def _materialize(node: Any) -> Any:
+    """Build ``node`` only if it is a DEFERRED config marker; hand a live object back untouched.
+
+    Narrower than a bare ``flow()``, and the difference is the "asking never loads" property.
+    ``flow()`` on a LIVE object still runs confluid's post-construction ``solidify()`` hook, so a
+    source that grows one would be materialized merely by being asked its name. A marker has
+    nothing to read until it is built, and building one is cheap by the lazy-construction rule.
+    """
+    from confluid import Fluid, flow
+
+    return flow(node) if isinstance(node, Fluid) else node
 
 
 def dataset_uri(source: Any) -> Optional[str]:
@@ -135,14 +146,12 @@ def dataset_uris(source: Any) -> List[str]:
 
         dataset_uris(ConcatSource(sources=[a, b]))   # ['hf://datasets/…', 'file:///…']
     """
-    from confluid import flow
-
     found: List[str] = []
 
     def visit(node: Any, depth: int) -> None:
         if node is None or depth > MAX_WRAPPER_DEPTH:
             return
-        node = flow(node)
+        node = _materialize(node)
         uri = dataset_uri(node)
         if uri:
             if uri not in found:

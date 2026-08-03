@@ -106,6 +106,48 @@ def _is_albumentations(op: Any) -> bool:
     return any(getattr(cls, "__module__", "").startswith("albumentations") for cls in type(op).__mro__)
 
 
+#: Whether :func:`_disable_cv2_threading` has already run. Module-level, so the cost of the
+#: guarantee is one bool check per op application.
+_CV2_THREADING_DISABLED = False
+
+
+def _disable_cv2_threading() -> None:
+    """Turn OpenCV's internal thread pool off, ONCE, the first time albumentations is used.
+
+    **This prevents a SIGSEGV, not a slowdown.** albumentations runs on OpenCV, whose thread pool
+    is not fork-safe: once a parent process has executed a cv2 op, a FORKED child inheriting that
+    pool crashes with *"DataLoader worker ... is killed by signal: Segmentation fault: 11"* — no
+    Python traceback, because the child never gets to raise. Measured on macOS, 2026-08-02, with a
+    ``DataLoader(num_workers=2)`` over a ``Stream`` whose ops list contained ``A.Resize``: it
+    segfaults reliably with the pool on and passes reliably with it off.
+
+    It is the SECOND fork hazard on this path and is independent of the first
+    (:func:`~recordstream.ensure_materialized`, which warms a lazy source so the child does not
+    run a download through the non-fork-safe ``_scproxy``). Neither fixes the other: with the
+    source warmed and the pool ON the worker still dies, and with the pool off a cold source is
+    still built in the child. A consumer that forks needs both.
+
+    Turning the pool off costs nothing where it matters. Inside a ``DataLoader`` worker the
+    WORKER is the parallelism — cv2's own threads oversubscribe the machine rather than help —
+    which is why albumentations' own documentation recommends exactly this for multiprocessing
+    loaders.
+
+    Done HERE, at the one place this package invokes albumentations, rather than at import: a
+    process that never uses albumentations must not have its OpenCV settings changed by importing
+    a data library, and cv2 must not become an import-time dependency of the engine.
+    """
+    global _CV2_THREADING_DISABLED
+    if _CV2_THREADING_DISABLED:
+        return
+    _CV2_THREADING_DISABLED = True  # set FIRST: a cv2-less install must not retry on every record
+    try:
+        import cv2
+
+        cv2.setNumThreads(0)
+    except Exception as exc:  # pragma: no cover - albumentations without cv2 is not a real install
+        logger.debug(f"could not disable OpenCV threading ({exc}); a forked DataLoader worker may crash.")
+
+
 def _invoke_albumentations(record: Record, op: Any) -> Optional[Record]:
     """albumentations dispatches by KWARG NAME: hand the op exactly its own target keys
     present in the record (one call = one joint draw across them); array outputs are
@@ -113,6 +155,7 @@ def _invoke_albumentations(record: Record, op: Any) -> Optional[Record]:
     keep their type and metadata. Box-carrying augmentation belongs in albumentations' own
     ``A.Compose(..., bbox_params=...)`` — format handling is Compose's job in that library.
     """
+    _disable_cv2_threading()
     kwargs = {k: record[k] for k in _ALB_KEYS if k in record}
     if not kwargs:
         logger.debug(

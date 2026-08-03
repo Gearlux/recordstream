@@ -97,4 +97,82 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 
 **HuggingFace native slicing** (alternative, no RecordStream split needed): `split: "train[:90%]"` / `"train[90%:]"` on two `HuggingFaceSource`s.
 
+## Identifying a dataset
+
+A source can name the data it reads, so a run record, a report, or a log line can point at it.
+Two handles, because they answer different questions:
+
+| property | what it is | when it is `None` |
+| --- | --- | --- |
+| `dataset_uri` | the **canonical** identifier — machine-parseable and stable, the string two runs are compared on | the source has no dataset configured |
+| `dataset_url` | a link a **person** can open | the data has no web page (anything local) |
+
+```python
+from recordstream import HuggingFaceSource, dataset_uri, dataset_url
+
+source = HuggingFaceSource(path="ylecun/mnist", split="train")
+source.dataset_uri   # 'hf://datasets/ylecun/mnist?split=train'
+source.dataset_url   # 'https://huggingface.co/datasets/ylecun/mnist/viewer/default/train'
+```
+
+What `HuggingFaceSource` produces, for each way it can be configured:
+
+| configuration | `dataset_uri` | `dataset_url` |
+| --- | --- | --- |
+| `path="ylecun/mnist", split="train"` | `hf://datasets/ylecun/mnist?split=train` | `…/ylecun/mnist/viewer/default/train` |
+| `+ name="fashion", revision="abc123"` | `hf://datasets/ylecun/mnist?name=fashion&revision=abc123&split=train` | `…/ylecun/mnist/viewer/fashion/train` |
+| `path="/data/imagefolder"` | `file:///data/imagefolder?split=train` | `None` |
+| `path=""` | `None` | `None` |
+
+Both read **stored configuration only** — asking never loads, downloads or opens anything, so a
+source that is never iterated still names itself. Whether a `path` is a Hub repo id or a local
+directory is decided by whether it exists on disk, the same question `load_dataset` answers. The
+query parameters are sorted, so one configuration has exactly one URI.
+
+**Use the free functions rather than the attributes when the source may be wrapped or deferred.**
+`dataset_uri(x)` / `dataset_url(x)` materialize a `!class:` marker straight out of a config, and
+follow a view's `.source` to the dataset underneath:
+
+```python
+from recordstream import RangeSource, Stream, dataset_uri
+
+# a view reports the same DATASET — the slice it takes is its own configuration, not identity
+dataset_uri(Stream(source=RangeSource(source=source, stop=100)))
+# 'hf://datasets/ylecun/mnist?split=train'
+```
+
+That verbatim propagation is deliberate: one dataset reached two ways must compare equal. How
+much of it a run consumed is recorded by the wrapper's own settings (`start` / `stop`, the split
+fractions), not by mangling the handle.
+
+A source holding **several** datasets declines to be one of them — `ConcatSource` answers `None`,
+and `dataset_uris` is the plural form:
+
+```python
+from recordstream import ConcatSource, dataset_uri, dataset_uris
+
+dataset_uri(ConcatSource(sources=[a, b]))    # None — a concatenation is not one dataset
+dataset_uris(ConcatSource(sources=[a, b]))   # ['hf://datasets/…', 'file:///…']
+```
+
+**Adding identity to your own source** is defining the two properties — `SupportsDatasetIdentity`
+is a `Protocol`, so there is nothing to register:
+
+```python
+@configurable(category="source")
+class MyStoreSource:
+    def __init__(self, bucket: str = "", prefix: str = "") -> None:
+        self.bucket, self.prefix = bucket, prefix
+
+    @property
+    def dataset_uri(self) -> Optional[str]:
+        return f"s3://{self.bucket}/{self.prefix}" if self.bucket else None
+
+    @property
+    def dataset_url(self) -> Optional[str]:
+        return None   # no web page: honest, and never an error
+```
+
+Rationale: [docs/architecture.md §13](architecture.md#13-dataset-identity-is-a-protocol-and-a-view-propagates-it-verbatim-recordstreamuri-2026-08-02).
+
 > **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key (including attribute refs like `!ref:my_split.train`), so a single `HuggingFaceSource` is loaded once and shared. Use `!clone:` when you want an independent deep copy instead.

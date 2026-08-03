@@ -89,6 +89,42 @@ def test_huggingface_source_satisfies_the_protocol() -> None:
     assert isinstance(HuggingFaceSource(path="a/b"), SupportsDatasetIdentity)
 
 
+# --- the load-option surface `revision` is shared with ----------------------------------------
+
+
+def test_revision_reaches_both_the_uri_and_the_load_options() -> None:
+    source = HuggingFaceSource(path="a/b", revision="v2")
+    assert "revision=v2" in (source.dataset_uri or "")
+    assert source.load_options == {"revision": "v2"}
+
+
+def test_load_options_merges_the_explicit_dict_under_the_declared_revision() -> None:
+    source = HuggingFaceSource(path="a/b", revision="v2", load_kwargs={"token": "t", "cache_dir": "/c"})
+    assert source.load_options == {"token": "t", "cache_dir": "/c", "revision": "v2"}
+
+
+def test_a_revision_set_after_construction_is_not_stale() -> None:
+    """`revision` is a DECLARED param, so the config layer may set it post-construction."""
+    source = HuggingFaceSource(path="a/b")
+    assert source.load_options == {}
+    source.revision = "v3"
+    assert source.load_options == {"revision": "v3"}
+    assert "revision=v3" in (source.dataset_uri or "")
+
+
+def test_the_constructor_does_not_accept_arbitrary_keywords() -> None:
+    """A `**kwargs` constructor accepts every broadcast key there is; this one must not.
+
+    The rejection is what keeps an unrelated broadcast key (a run name) out of
+    ``load_dataset``, which reads an unknown keyword as a builder CONFIG NAME and so misses
+    the cache entirely. The exception type is confluid's validation wrap, not a bare
+    ``TypeError``, so the assertion is on the rejected KEY being named.
+    """
+    with pytest.raises(Exception) as raised:
+        HuggingFaceSource(path="a/b", run_name="my_run")  # type: ignore[call-arg]
+    assert "run_name" in str(raised.value)
+
+
 # --- the free functions ----------------------------------------------------------------------
 
 

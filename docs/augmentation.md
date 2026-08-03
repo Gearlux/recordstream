@@ -112,6 +112,36 @@ Stochasticity lives where each library puts it — the engine adds no seed plumb
 - per-record gating of any op (native or library): `RandomApply(op=..., probability=...,
   random_state=N)`.
 
+## Multiprocessing: two fork hazards, both handled
+
+A `DataLoader` worker is often a **forked** child (torch's default on Linux, and on macOS whenever
+something in the process has set `fork` — `import fastai` does). A fork inherits memory but not
+threads, so two things on this path would otherwise crash the child with a **SIGSEGV and no Python
+traceback**, surfacing only as `DataLoader worker exited unexpectedly`:
+
+| hazard | guard | who calls it |
+|---|---|---|
+| OpenCV's thread pool, inherited across the fork (albumentations runs on cv2) | `cv2.setNumThreads(0)` | the engine, automatically, the first time it invokes an albumentations op |
+| a lazy source first built in the child — the download reaches `_scproxy`, which is not fork-safe | `ensure_materialized(source)` | **you**, in the parent, before building the loader |
+
+The first needs nothing from you. The second does:
+
+```python
+from recordstream import ensure_materialized, ensure_record_dataset
+
+dataset = ensure_materialized(ensure_record_dataset(train_set))   # reads ONE record, in the parent
+loader = DataLoader(dataset, num_workers=4, collate_fn=collate_records)
+```
+
+They are **independent** — neither fixes the other. With the source warmed but the cv2 pool on, the
+worker still dies; with the pool off but the source cold, it is still built in the child. Setting
+`num_workers=0` avoids both by not forking at all, which is why the crash looks intermittent and
+gets misread as a flaky test rather than an ordering bug.
+
+Turning cv2's pool off costs nothing where it matters: inside a worker the *worker* is the
+parallelism, so cv2's own threads oversubscribe rather than help. The engine does it at the point
+of use, never at import — a process that never touches albumentations keeps its OpenCV settings.
+
 ## Other libraries — register an op family
 
 albumentations and torchvision v2 are the built-in families, registered through the same OPEN

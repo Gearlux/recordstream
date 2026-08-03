@@ -48,6 +48,7 @@ from recordstream.core.stream import (  # noqa: F401  — see the internal-surfa
     Stream,
     _check_ops_materialized,
     _worker_task,
+    ensure_materialized,
     ensure_record_dataset,
     linear_steps,
 )
@@ -62,6 +63,7 @@ __all__ = [
     "RecordSource",
     "Stream",
     "WrappedOp",
+    "ensure_materialized",
     "ensure_record_dataset",
     "linear_steps",
     "register_op_family",

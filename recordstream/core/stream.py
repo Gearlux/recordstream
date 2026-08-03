@@ -423,6 +423,45 @@ class Stream:
             yield {k: v for k, v in record.items() if k in want}
 
 
+def ensure_materialized(source: RecordSource) -> RecordSource:
+    """Read ONE whole record, so everything this source builds lazily is built in THIS process.
+
+    The companion to :func:`ensure_record_dataset`: that one normalizes a source's TYPE, this one
+    normalizes its STATE. Returns the source, so it composes.
+
+    A source in this package is lazy on purpose — a constructor does no work, and the download /
+    file open / client construction happens on first read. That is right until the first read
+    happens somewhere it must not, and there is one such place: **a forked child process.**
+
+    Measured, on macOS, 2026-08-02. A ``DataLoader`` worker was the first to touch a
+    ``HuggingFaceSource``, so ``load_dataset`` ran in the child, called ``hf_hub_download`` ->
+    ``httpx.Client()`` -> ``urllib.request.getproxies`` -> ``_scproxy`` -> CoreFoundation, which
+    is not fork-safe: **SIGSEGV**, with no Python traceback, surfacing only as
+    ``DataLoader worker exited unexpectedly``. Calling this in the parent first makes the child
+    inherit a source that needs nothing, and the crash does not happen. The consumer cannot
+    always choose spawn instead — a framework may set the start method globally (fastai sets
+    ``fork`` at import), and spawning has its own cost (a model on Apple's MPS cannot be shared
+    to a spawned worker at all).
+
+    It reads a whole RECORD rather than asking a cheaper question, and that is the point:
+    ``len(source)`` was measured NOT to be enough, because loading the dataset object is not the
+    same as building everything a read needs. :func:`~recordstream.first_value` is no substitute
+    either — it is projection-aware, so it deliberately avoids building the values it was not
+    asked for.
+
+    An empty source is not an error: there is nothing to build, and a caller should not need a
+    guard for a split that happens to have no rows.
+    """
+    try:
+        if hasattr(source, "__getitem__"):
+            source[0]  # type: ignore[index]
+        else:
+            next(iter(source), None)  # type: ignore[call-overload]
+    except (IndexError, StopIteration):
+        pass  # empty source — nothing to warm, and not an error
+    return source
+
+
 def ensure_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]]) -> "Stream":
     """Normalize any wired source into a map-style ``Dataset`` that yields record dicts.
 

@@ -1196,3 +1196,84 @@ monkeypatch.setattr(recordstream.flow, "_result_readers", counting)         # �
   built-ins, and they register through the same public API (§1).
 - **Split `flow/execute.py` further** if a third route appears — but `is_linear` must stay the
   single gate, and the routes must keep agreeing record-for-record (§3).
+
+## 13. Dataset identity is a protocol, and a view propagates it verbatim (`recordstream.uri`, 2026-08-02)
+
+### Context
+
+A source knew what it read; nothing else could ask. `HuggingFaceSource` logged
+`Loading mnist (train)...` and stamped `hf_path` / `hf_split` onto every record, but both are
+per-record payload — a consumer wanting to answer "which data produced this?" for the RUN had to
+reach into a record, or reach into the source's constructor arguments and reassemble an
+identifier by hand. Every such consumer reassembled it differently, so two answers to the same
+question could not be compared.
+
+What the question needs is one string per dataset that is stable across machines and across the
+wrappers a config puts in front of a source — a trainer's `train_set` is typically a stream over
+a split view over the real source, and all three read the same dataset.
+
+### Decision
+
+**A source may expose `dataset_uri` and `dataset_url`; free functions read them, and following
+wrappers happens in the functions rather than in every wrapper.**
+
+Two properties, because they answer different questions. `dataset_uri` is the CANONICAL handle
+— machine-parseable, stable, the string two runs are compared on. `dataset_url` is a link a
+person can open, and `None` whenever the data has no web page. Collapsing them would force a
+choice between a browsable string that lies about local data and a canonical one nobody can
+click.
+
+`dataset_uri(source)` materializes a deferred source (as `project` does), reads the property,
+and — when the object has none — follows a `.source` attribute and asks again, depth-capped and
+cycle-safe. Every view source in this package uses that attribute name, so all of them work with
+no code of their own, and so does any third-party wrapper that follows the convention.
+
+**A wrapper propagates the URI unchanged.** Decorating it with the slice or the split the wrapper
+applies was considered and rejected: the handle identifies the *dataset*, and how much of it a
+run consumed is already recorded by the wrapper's own configuration. Decorating would mean one
+dataset reached two ways no longer compares equal — the single property the handle exists to
+have.
+
+A source holding SEVERAL datasets (`ConcatSource`) answers `None` rather than picking a member;
+`dataset_uris` is the plural form that fans out over them.
+
+### Consequences
+
+- **Asking is free and never loads.** The properties read stored configuration, so a tracking
+  layer can identify a dataset that the run has not touched yet — and a source that is never
+  iterated still names itself.
+- **A new source needs one property, not a registration.** `SupportsDatasetIdentity` is a
+  `Protocol`, so a domain package opts in by defining the members.
+- **A consumer derives the classification from the URI, not from the source.** The scheme is the
+  kind, the path is the name, a `split` parameter is the split — so a consumer recording datasets
+  needs no knowledge of any particular source type, and a new source type needs no change there.
+- **The query string is sorted.** Two identically-configured sources must produce one string;
+  parameter order that depended on insertion would silently break comparison.
+- **`None` is an ordinary answer**, not an error: an unconfigured source, a stream over an
+  in-memory list, and data with no web page all legitimately have nothing to say.
+
+### Example
+
+```python
+from recordstream import HuggingFaceSource, Stream, dataset_uri, dataset_uris, dataset_url
+
+source = HuggingFaceSource(path="ylecun/mnist", split="train")
+source.dataset_uri   # 'hf://datasets/ylecun/mnist?split=train'
+source.dataset_url   # 'https://huggingface.co/datasets/ylecun/mnist/viewer/default/train'
+
+# a view reports the same DATASET — the slice it takes is its own configuration, not identity
+dataset_uri(Stream(source=RangeSource(source=source, stop=100)))
+# 'hf://datasets/ylecun/mnist?split=train'
+
+# several datasets end to end are not one dataset
+dataset_uri(ConcatSource(sources=[a, b]))    # None
+dataset_uris(ConcatSource(sources=[a, b]))   # ['hf://datasets/…', 'file:///…']
+```
+
+### What you may change (and where it's documented)
+
+- **Give a new source an identity**: add the two properties. Keep them cheap and side-effect free
+  — they are asked of sources that may never be read.
+- **Recognise a new wrapper shape**: `recordstream/uri.py` follows `.source`; a wrapper using a
+  different attribute name implements the properties itself instead.
+- **Usage** is [docs/sources.md](sources.md#identifying-a-dataset).
