@@ -7,7 +7,7 @@ label→id ordering. :class:`LabelMap` is the piece that *produces* such a pinne
 
 * :meth:`LabelMap.fit` derives a deterministic name→id mapping from a stream of raw targets
   (backed by scikit-learn's ``LabelEncoder``) — the one-time fit that happens at **train** time.
-* :meth:`LabelMap.save` / :meth:`LabelMap.load` persist it (in marainer's ``class_names.json``
+* :meth:`LabelMap.save` / :meth:`LabelMap.load` persist it (in matrainer's ``class_names.json``
   format) so **eval / predict** reload the *same* mapping rather than refitting on a subset.
 * :meth:`LabelMap.encode_op` / :meth:`LabelMap.decode_op` hand back the recordstream ops that apply it.
 
@@ -62,7 +62,7 @@ class LabelMap:
     Holds an explicit name→id ``mapping`` (pinned in config), or one fitted from a target stream
     via :meth:`fit`. Exposes :attr:`num_classes` / :attr:`class_names`, builds the
     :class:`~recordstream.ops.target.EncodeTarget` / :class:`~recordstream.ops.target.DecodeTarget`
-    that apply it, and round-trips to disk in marainer's ``class_names.json`` format.
+    that apply it, and round-trips to disk in matrainer's ``class_names.json`` format.
 
     Args:
         mapping: Explicit name→id lookup, e.g. ``{"cat": 0, "dog": 1}``. ``None`` (default) builds an
@@ -219,7 +219,7 @@ class LabelMap:
         return ids
 
     def save(self, path: Union[str, Path]) -> None:
-        """Persist as ``{"class_names": [...], "num_classes": N}`` — marainer's ``class_names.json`` format.
+        """Persist as ``{"class_names": [...], "num_classes": N}`` — matrainer's ``class_names.json`` format.
 
         Args:
             path: Destination file. Parent directories are created as needed.
@@ -231,7 +231,7 @@ class LabelMap:
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "LabelMap":
-        """Restore from a ``class_names.json``-shaped file written by :meth:`save` or marainer.
+        """Restore from a ``class_names.json``-shaped file written by :meth:`save` or matrainer.
 
         Args:
             path: Source file shaped ``{"class_names": [...]}`` (the ``num_classes`` key is optional;

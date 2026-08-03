@@ -79,7 +79,7 @@ def multi_hot(batch: Record, key: str, num_classes: int, dtype: Any = "float32")
         key: The record key holding the multi-label target.
         num_classes: Matrix width. Ids outside ``[0, num_classes)`` are IGNORED rather than
             raising — a stray label must not abort a training run (the same rule
-            ``marainer.torch.inverse_frequency_weights`` applies to class counting).
+            ``matrainer.torch.inverse_frequency_weights`` applies to class counting).
         dtype: Result dtype, default ``"float32"`` — the multi-label losses
             (``BCEWithLogitsLoss`` and friends) want float targets shaped like the logits, not
             integer class ids.

@@ -108,7 +108,7 @@ def test_encode_op_ignore_unknown() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Persistence — same format as marainer's class_names.json
+# Persistence — same format as matrainer's class_names.json
 # ---------------------------------------------------------------------------
 
 
@@ -129,8 +129,8 @@ def test_save_writes_class_names_payload(tmp_path: object) -> None:
     assert data == {"class_names": ["a", "b", "c"], "num_classes": 3}
 
 
-def test_load_reads_marainer_written_file(tmp_path: object) -> None:
-    # A class_names.json written by marainer's _write_class_names is byte-compatible.
+def test_load_reads_matrainer_written_file(tmp_path: object) -> None:
+    # A class_names.json written by matrainer's _write_class_names is byte-compatible.
     path = tmp_path / "class_names.json"  # type: ignore[operator]
     path.write_text(json.dumps({"class_names": ["x", "y"], "num_classes": 2}))  # type: ignore[attr-defined]
     lm = LabelMap.load(path)
