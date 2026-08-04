@@ -97,7 +97,7 @@ model.fit(train, epochs=3)                                   # reshuffles betwee
 
 `transform` is the whole task-facing surface: it maps one collated record to what the model consumes, so the shape decision stays in your code exactly as it does with a `DataLoader`. Omit it and `__getitem__` hands over the batched record itself — which is also what `seq.batches()` yields, the pairing half of prediction (a model emits `[N, ...]` while a [`PredictionsSink`](predictions.md) writes per record, so you need the batch its output came from to read that batch's [`batch_metadata`](#reading-a-batch-back-recordstreambatch)).
 
-Needs the extra — `pip install "recordstream[keras]"`. Importing `recordstream.keras` is also what sets `KERAS_BACKEND` (Keras reads it at import time and would otherwise default to TensorFlow, which this extra does not install), so it must be the first keras-touching import in a process; never `import keras` ahead of it. Why the adapter lives here rather than in a training project is recorded in [architecture.md](architecture.md#10-the-frameworks-batching-half-lives-beside-the-collate-2026-07-30).
+Needs the extra — `pip install "recordstream[keras]"`. Importing `recordstream.keras` is also what sets `KERAS_BACKEND` (Keras reads it at import time and would otherwise default to TensorFlow, which this extra does not install), so it must be the first keras-touching import in a process; never `import keras` ahead of it. Why the adapter lives here rather than in a training project is recorded in [architecture.md](architecture.md#10-the-frameworks-batching-half-lives-beside-the-collate-recordstreamkeras-2026-07-30).
 
 
 ## 1→N expanding ops (iterable-only pipelines)
