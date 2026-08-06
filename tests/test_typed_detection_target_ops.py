@@ -193,3 +193,59 @@ def test_discovery_tags(name: str, cls: type) -> None:
     registry = get_registry()
     assert name in registry.list_classes(category="op")
     assert name in registry.list_classes(group="structure")
+
+
+# --------------------------------------------------------------------------- #
+# ResizeDetection — the coupled image+boxes resize
+# --------------------------------------------------------------------------- #
+class TestResizeDetection:
+    def _record(self) -> dict:
+        import torch
+
+        from recordstream import Image, Regions
+
+        image = Image((np.arange(40 * 20 * 3) % 256).reshape(40, 20, 3).astype(np.uint8))  # H=40, W=20
+        target = Regions(boxes=torch.tensor([[5.0, 10.0, 15.0, 30.0]]), labels=torch.tensor([1]))
+        return {"image": image, "target": target}
+
+    def test_image_and_boxes_move_together(self) -> None:
+        import torch
+
+        from recordstream.ops.target import ResizeDetection
+
+        out = ResizeDetection(width=40, height=80)(self._record())  # 2x on both axes
+        assert np.asarray(out["image"]).shape[:2] == (80, 40)
+        assert torch.allclose(out["target"].boxes, torch.tensor([[10.0, 20.0, 30.0, 60.0]]))
+        assert out["target"].canvas == (80, 40)
+        assert out["target"].labels.tolist() == [1]
+
+    def test_boxes_stay_in_their_framework(self) -> None:
+        from recordstream import Image, Regions
+        from recordstream.ops.target import ResizeDetection
+
+        record = {
+            "image": Image(np.zeros((10, 10, 3), dtype=np.uint8)),
+            "target": Regions(boxes=np.array([[1.0, 1.0, 5.0, 5.0]]), labels=np.array([0])),
+        }
+        out = ResizeDetection(width=20, height=20)(record)
+        assert isinstance(out["target"].boxes, np.ndarray)
+        assert out["target"].boxes.tolist() == [[2.0, 2.0, 10.0, 10.0]]
+
+    def test_zero_arg_construction_validates_lazily(self) -> None:
+        import pytest
+
+        from recordstream.ops.target import ResizeDetection
+
+        op = ResizeDetection()  # zero-arg per the lazy-construction mandate
+        with pytest.raises(ValueError, match="width/height"):
+            op(self._record())
+
+    def test_a_float_image_is_rejected_with_the_ordering_hint(self) -> None:
+        import pytest
+
+        from recordstream import Image
+        from recordstream.ops.target import ResizeDetection
+
+        record = {"image": Image(np.zeros((8, 8, 3), dtype=np.float32))}
+        with pytest.raises(TypeError, match="before ToTensor"):
+            ResizeDetection(width=4, height=4)(record)

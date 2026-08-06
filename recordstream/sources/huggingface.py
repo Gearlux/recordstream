@@ -300,4 +300,10 @@ class HuggingFaceSource:
         # would report 0 for the common "0 == unlimited" case, making the source
         # look empty (e.g. a downstream len()-based stepper raising ``len == 0``)
         # even though iteration yields every record.
-        return self.count or len(self.dataset)
+        #
+        # A ``count`` LARGER than the split is clamped, never reported verbatim: a map-style
+        # consumer trusts ``len()`` for its index space, so a lying length surfaces as an
+        # ``IndexError`` deep inside a DataLoader worker, one epoch in. (Found the hard way:
+        # ``count: 32`` over cppe-5's 29-row test split killed the first validation pass.)
+        n = len(self.dataset)
+        return min(self.count, n) if self.count else n

@@ -14,7 +14,7 @@ waivefront's signal-domain region ops. The encoded target value is written verba
 it into a framework tensor downstream (e.g. a collate function) when a loss needs one.
 """
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Tuple
 
 import numpy as np
 from confluid import configurable
@@ -25,6 +25,37 @@ from recordstream.transform import Transform
 #: COCO / HuggingFace bounding-box layouts (all in absolute pixels). Closed set so a typo
 #: fails at the call site and UIs / form-specs enumerate the choices.
 BBoxFormat = Literal["xywh", "xyxy", "cxcywh"]
+
+
+def _source_frame(record: Record) -> Optional[Tuple[int, int]]:
+    """The ``(H, W)`` raster a record's boxes are stated in, or ``None`` when it cannot be read.
+
+    An annotation gives coordinates in the pixel space of the image it annotates, so the frame
+    is the IMAGE's — which the record carries but the annotation does not. It is looked up under
+    the ``"image"`` key first (this engine's declared key vocabulary — what the op-family
+    dispatch hands to a library, what the coupled resize defaults to, what the dataset sources
+    yield), then as the first :class:`~recordstream.Image` item.
+
+    It is deliberately narrow: only a declared image is trusted. A generic "first array with two
+    dimensions" search would happily read a ``Regions``' own ``[N, 4]`` box array as an ``N x 4``
+    raster and record a confident lie. ``None`` is an ordinary answer — it leaves ``canvas``
+    exactly as it was before this was recorded at all, so nothing depends on the lookup
+    succeeding.
+    """
+    from recordstream.items import Image as ImageItem
+    from recordstream.ops.image import image_frame
+
+    candidate = record.get("image")
+    if candidate is not None:
+        frame = image_frame(candidate)
+        if frame is not None:
+            return frame
+    for value in record.values():
+        if isinstance(value, ImageItem):
+            frame = image_frame(value)
+            if frame is not None:
+                return frame
+    return None
 
 
 def _lookup(value: Any, mapping: Dict[Any, Any], ignore_unknown: bool, default: Any, op_name: str) -> Any:
@@ -335,7 +366,13 @@ class CocoToTorchVisionDetection(Transform):
         item = record[key]
         objects = item.value if isinstance(item, Label) else item_data(item)
         target = coco_to_detection(objects, self.bbox_key, self.category_key, self.bbox_format, self.label_offset)
-        return {**record, self.output: Regions(boxes=target["boxes"], labels=target["labels"])}
+        # `canvas` IS the frame the boxes are stated in — a COCO box is in the source image's
+        # pixel space, so it is knowable here and recording it costs one lookup. Left None when
+        # no image is in the record, which is what every Regions carried before this.
+        return {
+            **record,
+            self.output: Regions(boxes=target["boxes"], labels=target["labels"], canvas=_source_frame(record)),
+        }
 
 
 @configurable(category="op", group="structure")
@@ -405,7 +442,109 @@ class MasksToDetectionBoxes(Transform):
     def __call__(self, record: Record) -> Record:
         mask = self._find_mask(record)
         target = masks_to_detection(mask, self.label, self.connected, self.min_area, self.connectivity)
-        return {**record, self.output: Regions(boxes=target["boxes"], labels=target["labels"])}
+        # The boxes were derived FROM this mask, so its shape is the frame exactly — no lookup,
+        # no fallback, nothing to be wrong about.
+        height, width = int(mask.shape[0]), int(mask.shape[1])
+        return {
+            **record,
+            self.output: Regions(boxes=target["boxes"], labels=target["labels"], canvas=(height, width)),
+        }
+
+
+@configurable(category="op", group="structure")
+class ResizeDetection(Transform):
+    """Resize an image AND scale its detection-target boxes in ONE coupled step.
+
+    The detection twin of the joint image+mask draw: a fixed-input-size detector needs the image
+    resized, and a resize that moved the pixels without moving the boxes would silently train on
+    misplaced targets. Reads the image under ``input_key`` (PIL or a uint8 HWC/2-D array),
+    resizes it to ``(height, width)`` (bilinear, PIL), and scales the
+    :class:`~recordstream.Regions` boxes under ``target_key`` by the same factors — torch boxes
+    stay torch, numpy stays numpy. The resized ``Regions`` records the new frame in ``canvas``.
+
+    Ops that need no fixed size (torchvision detectors resize internally) simply omit this op —
+    it exists for the detectors that require pre-sized square inputs.
+
+    Args:
+        width: Target width in pixels; required at use (validated lazily, ``0`` = unset).
+        height: Target height in pixels; required at use (validated lazily, ``0`` = unset).
+        input_key: Record key carrying the image (default ``"image"``).
+        target_key: Record key carrying the target ``Regions``; a record without it resizes the image alone.
+    """
+
+    consumes = (Regions,)
+    produces = (Regions,)
+
+    def __init__(
+        self,
+        width: int = 0,
+        height: int = 0,
+        input_key: str = "image",
+        target_key: str = "target",
+    ) -> None:
+        super().__init__()
+        self.width = int(width)
+        self.height = int(height)
+        self.input_key = str(input_key)
+        self.target_key = str(target_key)
+
+    def _resize_image(self, payload: Any) -> Any:
+        from PIL import Image as PILImage
+
+        if hasattr(payload, "convert"):  # PIL
+            return payload.resize((self.width, self.height), PILImage.Resampling.BILINEAR)
+        array = np.asarray(payload)
+        if array.dtype != np.uint8:
+            raise TypeError(
+                f"ResizeDetection: expected a PIL image or a uint8 array under {self.input_key!r}; "
+                f"got dtype {array.dtype}. Run it BEFORE any float conversion (e.g. before ToTensor)."
+            )
+        resized = PILImage.fromarray(array).resize((self.width, self.height), PILImage.Resampling.BILINEAR)
+        return np.array(resized)
+
+    @staticmethod
+    def _scale_boxes(boxes: Any, sx: float, sy: float) -> Any:
+        """Scale ``[N, 4]`` xyxy boxes by per-axis factors, preserving the array framework."""
+        from recordstream._compat import is_torch_tensor
+
+        if is_torch_tensor(boxes):
+            import torch
+
+            return boxes * torch.tensor([sx, sy, sx, sy], dtype=boxes.dtype)
+        return np.asarray(boxes, dtype=np.float64).reshape(-1, 4) * np.array([sx, sy, sx, sy])
+
+    def __call__(self, record: Record) -> Record:
+        if self.width < 1 or self.height < 1:
+            raise ValueError(f"ResizeDetection needs positive width/height (got {self.width}x{self.height}).")
+        if self.input_key not in record:
+            raise ValueError(f"ResizeDetection: field {self.input_key!r} not in record (keys: {list(record)})")
+        item = record[self.input_key]
+        payload = item_data(item)
+        frame = _source_frame({"image": item})
+        if frame is None:
+            raise ValueError(
+                f"ResizeDetection: the value under {self.input_key!r} is not an image "
+                f"(got {type(payload).__name__}) — it has no raster to resize."
+            )
+        orig_h, orig_w = frame
+        resized = self._resize_image(payload)
+        merged = dict(record)
+        from recordstream.items import NDArrayItem, with_data
+
+        merged[self.input_key] = with_data(item, resized) if isinstance(item, NDArrayItem) else resized
+
+        target = record.get(self.target_key)
+        if isinstance(target, Regions):
+            import dataclasses
+
+            # An EMPTY target is re-framed too. Scaling no boxes is a no-op, but leaving the
+            # canvas behind would make a negative example the ONE record in a set whose frame is
+            # unknown — and a frame check that silently skips exactly the records with nothing
+            # to check is a check that reports a clean bill for the wrong reason.
+            sx, sy = float(self.width) / float(orig_w), float(self.height) / float(orig_h)
+            boxes = self._scale_boxes(target.boxes, sx, sy) if len(target.boxes) else target.boxes
+            merged[self.target_key] = dataclasses.replace(target, boxes=boxes, canvas=(self.height, self.width))
+        return merged
 
 
 __all__ = [
@@ -413,6 +552,7 @@ __all__ = [
     "DecodeTarget",
     "CocoToTorchVisionDetection",
     "MasksToDetectionBoxes",
+    "ResizeDetection",
     "coco_to_detection",
     "masks_to_detection",
 ]

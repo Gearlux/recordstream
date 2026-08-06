@@ -51,10 +51,36 @@ batch = collate_records(list(stream))          # ONE batched record: payloads st
 loader = DataLoader(stream, collate_fn=collate_records)
 ```
 
-Collation is a pluggable registry keyed by name, so a task can register its own convention additively:
+### The batch SHAPE is a choice — `"record"` vs `"list"`
+
+Whether a column is STACKED is a requirement of the **model**, not a property of the data: a
+torchvision detector takes `List[Tensor]` (its images differ in size), a classifier takes one
+`[N, C, H, W]` tensor. Two collates ship, differing in exactly that:
 
 ```python
-from recordstream import register_collate, get_collate
+from recordstream import collate_list, collate_records
+
+collate_records(records)["image"]   # Image (2, 3, 8, 8) — stacked
+collate_list(records)["image"]      # [Image (3, 8, 8), Image (3, 12, 12)] — per record, items kept
+```
+
+Declare it where the batch is built — `DataLoader(stream, collate_fn=collate_list)` on torch,
+`RecordSequence(source, collate="list")` on Keras. Left implicit, the shape is decided by
+accident: under the default collate a column stacks if it holds array *items* and stays a list if
+it holds *plain* values, so whether an op like `ToTensor` ran ends up choosing for you.
+
+Two things make the choice free:
+
+* **every read-back helper accepts both shapes** — `batch_values` unwraps a list-of-items
+  element-wise, `batch_regions` reads a batched `Regions` or a list of them, `batch_metadata`
+  transposes either — so a consumer never branches on which collate ran;
+* **a stack failure explains itself**, naming the key, the differing shapes and the `"list"` way
+  out, rather than surfacing numpy's bare *"all input arrays must have the same shape"*.
+
+The registry is additive, so a task can register its own convention too:
+
+```python
+from recordstream import get_collate, register_collate
 
 @register_collate("yolo")                    # task aliases are additive
 def yolo_collate(items): ...

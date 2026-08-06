@@ -7,11 +7,11 @@ The bottom of the op-facing layer: every composing op in :mod:`recordstream.ops`
 is the same question as "how do I apply this op" — the graph kernel asks all three together.
 """
 
-from typing import Any, Callable, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, cast
 
 from loggair import get_logger
 
-from recordstream.items import NDArrayItem, Record, with_data
+from recordstream.items import NDArrayItem, Record, Regions, with_data
 
 logger = get_logger(__name__)
 
@@ -148,6 +148,73 @@ def _disable_cv2_threading() -> None:
         logger.debug(f"could not disable OpenCV threading ({exc}); a forked DataLoader worker may crash.")
 
 
+#: Transform classes already warned about (see :func:`_warn_if_regions_are_left_behind`). Keyed
+#: by CLASS, not instance: the message describes a configuration pattern, and two `Resize`s in
+#: one chain have the same thing wrong with them.
+_WARNED_SPATIAL: Set[type] = set()
+
+
+def _has_spatial_transform(op: Any, depth: int = 0) -> bool:
+    """True when ``op`` contains a transform that would MOVE boxes, per albumentations' own taxonomy.
+
+    The library already draws this line: a ``DualTransform`` is defined as one that applies to
+    boxes and masks as well as the image (``Resize``, ``HorizontalFlip``, ``RandomCrop``), while
+    an ``ImageOnlyTransform`` cannot touch geometry (``Normalize``, ``ColorJitter``). Reading THAT
+    distinction is why this needs no list of transform names to drift out of date, and no guess
+    about what a given transform does.
+
+    Matched by MRO class NAME rather than `isinstance`, for the same reason
+    :func:`_is_albumentations` matches by module name: recognising a library must never import
+    one. A ``Compose`` is recursed through its ``transforms``, depth-capped against a cycle.
+    """
+    if any(cls.__name__ == "DualTransform" for cls in type(op).__mro__):
+        return True
+    if depth >= 4:
+        return False
+    children = getattr(op, "transforms", None)
+    if not children:
+        return False
+    return any(_has_spatial_transform(child, depth + 1) for child in children)
+
+
+def _warn_if_regions_are_left_behind(record: Record, op: Any, passed: Dict[str, Any]) -> None:
+    """Warn once when a geometry-changing transform ran while a ``Regions`` sat out the call.
+
+    This family passes the op EXACTLY the keys of albumentations' own vocabulary, which is what
+    lets a bare library transform work unmodified — but a detection target rides as a ``Regions``
+    item under a key of the pipeline's choosing, so it is not in that vocabulary and does not get
+    passed. Measured: a bare ``A.Resize`` moves a 200x200 image to 64x64 and leaves the boxes on
+    ``[10, 10, 100, 100]``; a bare ``A.HorizontalFlip`` mirrors the pixels and leaves the boxes
+    where they were WITHOUT changing the raster at all — which is why the condition here is the
+    library's spatial/photometric taxonomy and not "did the image size change".
+
+    Nothing errors either way: the shapes stay valid and only the coordinates become wrong, so a
+    model trains against misplaced targets and reports nothing. It stays a WARNING rather than an
+    error because a record may legitimately carry regions describing something other than the
+    image being augmented — this family cannot know, and refusing the call would break a pipeline
+    that is right.
+
+    The fix is to speak the library's vocabulary: put boxes under ``bboxes`` with their
+    ``labels`` and declare ``bbox_params`` on the ``Compose``, and the library moves them in the
+    same joint draw. For a plain deterministic resize, ``ops.target.ResizeDetection`` does the
+    coupled step over the ``Regions`` form directly.
+    """
+    if "bboxes" in passed or type(op) in _WARNED_SPATIAL:
+        return
+    keys = [key for key, value in record.items() if isinstance(value, Regions)]
+    if not keys or not _has_spatial_transform(op):
+        return
+    _WARNED_SPATIAL.add(type(op))
+    logger.warning(
+        f"albumentations {type(op).__name__} changes GEOMETRY, but this record's detection "
+        f"boxes ({keys}) ride as a Regions item, which is not in the library's key vocabulary "
+        f"({', '.join(_ALB_KEYS)}) — so the pixels moved and the boxes did not. Put boxes under "
+        f"'bboxes' + 'labels' with A.Compose(..., bbox_params=A.BboxParams(...)) so the library "
+        f"moves them in the same draw, or use recordstream.ops.target.ResizeDetection for a "
+        f"plain coupled resize. (Warned once per transform type.)"
+    )
+
+
 def _invoke_albumentations(record: Record, op: Any) -> Optional[Record]:
     """albumentations dispatches by KWARG NAME: hand the op exactly its own target keys
     present in the record (one call = one joint draw across them); array outputs are
@@ -163,6 +230,7 @@ def _invoke_albumentations(record: Record, op: Any) -> Optional[Record]:
             f"({', '.join(_ALB_KEYS)}) — record keys: {list(record)}; passing through."
         )
         return record
+    _warn_if_regions_are_left_behind(record, op, kwargs)
     out = op(**kwargs)
     merged = dict(record)
     for key, value in out.items():
@@ -178,10 +246,63 @@ def _is_torchvision_v2(op: Any) -> bool:
     return any(getattr(cls, "__module__", "").startswith("torchvision.transforms.v2") for cls in type(op).__mro__)
 
 
+#: torchvision v2's geometric transforms all live in ONE private module — the closest thing the
+#: library has to albumentations' `DualTransform` marker. Private, so this can go stale across a
+#: torchvision release; it FAILS OPEN (no warning, nothing else changes), which is the right
+#: direction for a diagnostic.
+_V2_GEOMETRY_MODULE = "torchvision.transforms.v2._geometry"
+
+
+def _is_v2_geometry(op: Any, depth: int = 0) -> bool:
+    """True when a v2 transform (or one nested in a ``Compose``) changes GEOMETRY.
+
+    The behavioural test — apply it to a throwaway ``BoundingBoxes`` and see whether they move —
+    would be authoritative and is deliberately NOT used: running a transform speculatively draws
+    from the RNG, which would change the augmentation stream of the run being diagnosed. A
+    diagnostic must not alter what it observes.
+    """
+    if any(getattr(cls, "__module__", "") == _V2_GEOMETRY_MODULE for cls in type(op).__mro__):
+        return True
+    if depth >= 4:
+        return False
+    children = getattr(op, "transforms", None)
+    if not children:
+        return False
+    return any(_is_v2_geometry(child, depth + 1) for child in children)
+
+
 def _invoke_torchvision_v2(record: Record, op: Any) -> Optional[Record]:
     """torchvision v2 natively walks a dict: params sampled once, tensor/tv_tensor/PIL
-    leaves transformed, everything else passed through — called as-is."""
+    leaves transformed, everything else passed through — called as-is.
+
+    "Everything else passed through" is where detection boxes fall: v2 recognises its OWN
+    ``tv_tensors`` types, and a :class:`~recordstream.Regions` is not one, so a geometric
+    transform moves the pixels and leaves the boxes — the same silent desync the albumentations
+    family has, reached by a different route (there the boxes are not in the key vocabulary; here
+    they are not in the TYPE vocabulary). Measured: ``v2.Resize((64, 64))`` takes a 200x200 image
+    to 64x64 with the boxes still on ``[10, 10, 100, 100]``, while the same transform over a
+    ``tv_tensors.BoundingBoxes`` correctly rescales them to ``[3.2, 3.2, 32, 32]``.
+    """
+    _warn_if_v2_leaves_regions_behind(record, op)
     return cast(Record, op(record))
+
+
+def _warn_if_v2_leaves_regions_behind(record: Record, op: Any) -> None:
+    """The v2 twin of :func:`_warn_if_regions_are_left_behind` — once per transform type."""
+    if type(op) in _WARNED_SPATIAL:
+        return
+    keys = [key for key, value in record.items() if isinstance(value, Regions)]
+    if not keys or not _is_v2_geometry(op):
+        return
+    _WARNED_SPATIAL.add(type(op))
+    logger.warning(
+        f"torchvision v2 {type(op).__name__} changes GEOMETRY, but this record's detection boxes "
+        f"({keys}) ride as a Regions item, which is not one of v2's tv_tensors types — so v2 "
+        f"passes them through untouched while the pixels move. Carry boxes as "
+        f"torchvision.tv_tensors.BoundingBoxes(..., format=…, canvas_size=…) so v2 transforms "
+        f"them in the same call, or use recordstream.ops.target.ResizeDetection for a plain "
+        f"coupled resize. (Warned once per transform type.)"
+    )
 
 
 # The built-in families register through the SAME open registry third parties use —

@@ -39,8 +39,10 @@ __all__ = [
     "ClassificationOutput",
     "DetectionOutput",
     "DetectionPredictions",
+    "RestorationOutput",
     "SegmentationOutput",
     "classification_output",
+    "restoration_output",
     "segmentation_output",
 ]
 
@@ -88,6 +90,27 @@ class SegmentationOutput(TypedDict, Generic[ArrayT]):
     mask: ArrayT
 
 
+class RestorationOutput(TypedDict, Generic[ArrayT]):
+    """Per-record image-to-image restoration prediction.
+
+    Keys:
+        image: ``[B, C, H, W]`` float — the restored image, in the SAME value range as the
+            model's input (``[0, 1]`` for a pipeline that ends in ``ToTensor(normalize=True)``).
+
+    **One key, and that is the whole point of the contract.** The other tasks here carry three
+    because their raw output needs interpreting — ``logits`` are not ``probs`` are not
+    ``class_idx``. A restoration model emits the answer directly, so what a consumer needs told
+    is precisely that: the array under ``image`` is a picture in the input's units, NOT logits
+    to be softmaxed and NOT a residual to be added back. A sink that writes a PNG, a PSNR metric
+    and a viewer all read it the same way because this says so.
+
+    The residual (what the model removed) is deliberately absent: it is ``input - image``, and a
+    contract key that a consumer can compute is a second place for the two to disagree.
+    """
+
+    image: ArrayT
+
+
 #: A detector's per-image results — one :class:`DetectionOutput` per image in the batch.
 DetectionPredictions = List[DetectionOutput]
 
@@ -116,6 +139,24 @@ def segmentation_output(logits: "Tensor") -> "SegmentationOutput[Tensor]":
     probs = F.softmax(logits, dim=1)
     mask = torch.argmax(logits, dim=1).to(torch.int64)
     return SegmentationOutput(logits=logits, probs=probs, mask=mask)
+
+
+def restoration_output(image: "Tensor") -> "RestorationOutput[Tensor]":
+    """Build a :class:`RestorationOutput` from a restored ``[B, C, H, W]`` image.
+
+    It transforms nothing — unlike its two siblings, which softmax and argmax — because a
+    restoration model's output already IS the contract's one key. The builder exists anyway so
+    every backend spells the wrapping identically and a reader of ``predict_step`` sees the same
+    shape of line in all four tasks::
+
+        def predict_step(self, batch, batch_idx):
+            return restoration_output(self(x))    # what a predictions sink reads
+
+    Clamping is deliberately NOT done here: whether a restored image may leave ``[0, 1]`` is the
+    model's business (a residual denoiser can legitimately overshoot, and a metric computed on
+    clamped values is a different number), so a run that wants it wires it where it decides that.
+    """
+    return RestorationOutput(image=image)
 
 
 # Detection deliberately has NO builder: boxes come from the detector's own interface, so the

@@ -42,11 +42,11 @@ discovery scan of a torch-only install::
 
 import importlib.util
 import os
-from typing import Any, Callable, Iterator, Optional, cast
+from typing import Any, Callable, Iterator, Optional, Union, cast
 
 import numpy as np
 
-from recordstream.collate import collate_records
+from recordstream.collate import CollateFn, get_collate
 from recordstream.core import MapStyle
 from recordstream.items import Record
 
@@ -96,8 +96,8 @@ class RecordSequence(keras.utils.PyDataset):
     """A map-style record source as a ``keras.utils.PyDataset`` of collated batches.
 
     The DataLoader half of Keras batching: row order, batch slicing, per-epoch reshuffle, and
-    :func:`~recordstream.collate.collate_records`. It is deliberately task-blind — ``transform``
-    is the caller's ``collate_fn``-equivalent and decides what the model actually receives.
+    the collate. It is deliberately task-blind — ``transform`` is the caller's
+    ``collate_fn``-equivalent and decides what the model actually receives.
 
     Args:
         source: Any map-style record source (a ``Stream`` is one).
@@ -106,6 +106,11 @@ class RecordSequence(keras.utils.PyDataset):
         seed: Shuffle seed, so a shuffled run is reproducible.
         transform: Maps one collated record batch to what the model consumes. ``None`` hands
             over the batched record itself.
+        collate: Which batch shape to build — a registered KEY (``"record"`` stacks what can
+            stack; ``"list"`` keeps every column as a per-record list) or a collate function.
+            The torch half takes this choice as ``DataLoader(collate_fn=…)``; this is the same
+            choice on the Keras side, so an engine that needs ``List[Tensor]`` inputs is not
+            forced to the stacking default. See :mod:`recordstream.collate`.
         workers: ``PyDataset`` prefetch workers. ``1`` (Keras's own default) loads batches on
             the calling thread; higher values overlap the record walk with the training step,
             which is what a slow source (decode, resize, remote read) needs.
@@ -125,6 +130,7 @@ class RecordSequence(keras.utils.PyDataset):
         shuffle: bool = False,
         seed: int = 0,
         transform: Optional[Callable[[Record], Any]] = None,
+        collate: Union[str, CollateFn] = "record",
         workers: int = 1,
         use_multiprocessing: bool = False,
         max_queue_size: int = 10,
@@ -139,6 +145,9 @@ class RecordSequence(keras.utils.PyDataset):
         self.shuffle = bool(shuffle)
         self.seed = int(seed)
         self.transform = transform
+        # Stored VERBATIM (a key or a function); resolved per batch by `_collate`, so a key
+        # registered AFTER this object was built still resolves.
+        self.collate: Union[str, CollateFn] = collate
         self._rng = np.random.default_rng(seed)
         self._indices: Optional[np.ndarray] = None
 
@@ -160,6 +169,11 @@ class RecordSequence(keras.utils.PyDataset):
             self._indices = order
         return self._indices
 
+    @property
+    def _collate(self) -> CollateFn:
+        """The chosen collate — a registered key resolved on use, or the function as given."""
+        return get_collate(self.collate) if isinstance(self.collate, str) else self.collate
+
     def __len__(self) -> int:
         """Number of batches — Keras asks once per epoch."""
         return int(np.ceil(len(self.indices) / self.batch_size))
@@ -172,7 +186,7 @@ class RecordSequence(keras.utils.PyDataset):
         # as `CollateFn = Callable[[Sequence[Any]], Any]` — deliberately loose, because the
         # registry holds task collates with divergent conventions — which erases
         # `collate_records`' own `-> Record` at the call site.
-        collated: Record = collate_records([source[int(i)] for i in rows])
+        collated: Record = self._collate([source[int(i)] for i in rows])
         return collated
 
     def batches(self) -> Iterator[Record]:

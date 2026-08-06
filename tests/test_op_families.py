@@ -7,6 +7,7 @@ plus the family classifiers, YAML mapping-form ops docs, spawn-parallel with a b
 op, ``field=`` targeting, and the ``WrappedOp``/``FilterOp`` raw-callable routes.
 """
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
@@ -17,7 +18,7 @@ import torch
 from confluid import configurable
 from torchvision.transforms import v2
 
-from recordstream import FilterOp, Image, Label, Mask, Pipeline, Record, Transform, WrappedOp
+from recordstream import FilterOp, Image, Label, Mask, Pipeline, Record, Regions, Transform, WrappedOp
 from recordstream.core import Stream, _apply_op, _is_albumentations, _is_torchvision_v2
 
 
@@ -376,3 +377,210 @@ class TestFormulaReducers:
         from recordstream.ops.formula import _FORMULA_NAMESPACE
 
         assert {"amax", "amin", "mean", "std", "median"} <= set(_FORMULA_NAMESPACE)
+
+
+@contextmanager
+def _captured_warnings() -> Iterator[List[str]]:
+    """Collect loggair WARNING records emitted inside the block.
+
+    `caplog` cannot see these — loggair is loguru, which does not propagate to stdlib logging —
+    and its sink is ENQUEUED, so reading a captured stream races the writer. `logger.complete()`
+    is the deterministic flush (the workspace forbids sleeping for one).
+    """
+    from loguru import logger
+
+    collected: List[str] = []
+    sink_id = logger.add(lambda message: collected.append(str(message)), level="WARNING")
+    try:
+        yield collected
+        logger.complete()
+    finally:
+        logger.remove(sink_id)
+
+
+class TestGeometryLeavingRegionsBehind:
+    """A `Regions` is not in albumentations' key vocabulary, so it never reaches the library.
+
+    That is correct for the dispatch — passing a foreign item would break the call — but it
+    means a geometry-changing transform moves the pixels while the boxes stay put, with no
+    error of its own. Measured: `A.Resize` takes a 200x200 image to 64x64 and leaves the boxes
+    on `[10, 10, 100, 100]`; `A.HorizontalFlip` mirrors the pixels while changing NO shape at
+    all, which is why the condition is the library's spatial/photometric taxonomy rather than
+    "did the raster change".
+    """
+
+    @staticmethod
+    def _record() -> Record:
+        return {
+            "image": Image(np.zeros((200, 200, 3), dtype="uint8")),
+            "target": Regions(boxes=np.array([[10.0, 10.0, 100.0, 100.0]]), labels=np.array([1])),
+        }
+
+    @pytest.fixture(autouse=True)
+    def _forget_previous_warnings(self) -> Iterator[None]:
+        """The once-per-type memo is module state — clear it so tests do not shadow each other."""
+        from recordstream.core.families import _WARNED_SPATIAL
+
+        snapshot = set(_WARNED_SPATIAL)
+        _WARNED_SPATIAL.clear()
+        yield
+        _WARNED_SPATIAL.clear()
+        _WARNED_SPATIAL.update(snapshot)
+
+    def test_the_desync_is_real_and_silent_without_the_guard(self) -> None:
+        """The premise, asserted rather than assumed: pixels move, boxes do not."""
+        out = _apply_op(self._record(), A.Resize(height=64, width=64))
+        assert out is not None
+        assert out["image"].shape[:2] == (64, 64)
+        assert out["target"].boxes.tolist() == [[10.0, 10.0, 100.0, 100.0]], "boxes stayed behind"
+
+    def test_a_resize_warns_naming_both_ways_out(self) -> None:
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), A.Resize(height=64, width=64))
+        assert len(warnings) == 1
+        assert "bbox_params" in warnings[0] and "ResizeDetection" in warnings[0]
+
+    def test_a_flip_warns_though_NO_shape_changes(self) -> None:
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), A.HorizontalFlip(p=1.0))
+        assert len(warnings) == 1, "a raster-change test would miss this one entirely"
+
+    def test_an_image_only_transform_stays_silent(self) -> None:
+        """`Normalize` is an `ImageOnlyTransform` — it cannot touch geometry, so there is
+        nothing to warn about. Reading the library's own taxonomy is what makes this exact."""
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), A.Normalize())
+        assert warnings == []
+
+    def test_a_compose_is_recursed(self) -> None:
+        composed = A.Compose([A.Normalize(), A.RandomCrop(height=8, width=8)])
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), composed)
+        assert len(warnings) == 1, "the spatial transform is nested one level down"
+
+    def test_it_warns_once_per_transform_type(self) -> None:
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), A.Resize(height=64, width=64))
+            _apply_op(self._record(), A.Resize(height=32, width=32))
+        assert len(warnings) == 1, "the message is about the configuration, not the record"
+
+    def test_the_DOCUMENTED_yaml_way_out_actually_runs(self) -> None:
+        """The warning names a fix, so the fix has to work — this is that exact YAML.
+
+        Note it must go through a `Stream`: deferred `!class:` markers are flowed at route
+        entry, so applying them straight out of `confluid.load` hands `_apply_op` a marker.
+        """
+        import confluid
+
+        document = """
+ops:
+  - !class:recordstream.ops.structure.RenameField { src: my_boxes, dst: bboxes }
+  - !class:albumentations.Compose
+    transforms: [!class:albumentations.HorizontalFlip { p: 1.0 }]
+    bbox_params: !class:albumentations.BboxParams { format: pascal_voc, label_fields: [labels] }
+"""
+        record = {
+            "image": np.zeros((100, 100, 3), dtype="uint8"),
+            "my_boxes": [[10.0, 10.0, 40.0, 40.0]],
+            "labels": [1],
+        }
+        with _captured_warnings() as warnings:
+            out = list(Stream(source=[record], ops=confluid.load(document, flow=True)["ops"]))[0]
+        assert warnings == []
+        assert [round(v, 1) for v in out["bboxes"][0]] == [60.0, 10.0, 90.0, 40.0], "mirrored across x"
+
+    def test_the_correct_spelling_is_NOT_warned_about_and_moves_the_boxes(self) -> None:
+        """Boxes in the library's own vocabulary: it moves them in the same joint draw."""
+        composed = A.Compose(
+            [A.Resize(height=64, width=64)],
+            bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+        )
+        record = {
+            "image": np.zeros((200, 200, 3), dtype="uint8"),
+            "bboxes": [[10.0, 10.0, 100.0, 100.0]],
+            "labels": [1],
+        }
+        with _captured_warnings() as warnings:
+            out = _apply_op(record, composed)
+        assert warnings == []
+        assert out is not None
+        assert [round(v, 1) for v in out["bboxes"][0]] == [3.2, 3.2, 32.0, 32.0], "boxes scaled with the image"
+
+
+class TestV2GeometryLeavingRegionsBehind:
+    """The same gap in the OTHER family, reached by a different route.
+
+    albumentations misses a `Regions` because it is not in the KEY vocabulary; torchvision v2
+    misses it because it is not one of v2's tv_tensor TYPES. Measured: `v2.Resize((64, 64))`
+    takes a 200x200 image to 64x64 with the boxes still on `[10, 10, 100, 100]`, while the same
+    transform over a `tv_tensors.BoundingBoxes` rescales them to `[3.2, 3.2, 32, 32]`.
+    """
+
+    @staticmethod
+    def _record() -> Record:
+        return {
+            "image": Image(np.zeros((200, 200, 3), dtype="uint8")),
+            "target": Regions(boxes=torch.tensor([[10.0, 10.0, 100.0, 100.0]]), labels=torch.tensor([1])),
+        }
+
+    @pytest.fixture(autouse=True)
+    def _forget_previous_warnings(self) -> Iterator[None]:
+        from recordstream.core.families import _WARNED_SPATIAL
+
+        snapshot = set(_WARNED_SPATIAL)
+        _WARNED_SPATIAL.clear()
+        yield
+        _WARNED_SPATIAL.clear()
+        _WARNED_SPATIAL.update(snapshot)
+
+    def test_the_desync_is_real(self) -> None:
+        out = _apply_op(self._record(), v2.Compose([v2.ToImage(), v2.Resize((64, 64))]))
+        assert out is not None
+        assert tuple(out["image"].shape[-2:]) == (64, 64)
+        assert out["target"].boxes.tolist() == [[10.0, 10.0, 100.0, 100.0]], "boxes stayed behind"
+
+    def test_a_geometric_transform_warns_naming_the_way_out(self) -> None:
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), v2.RandomHorizontalFlip(p=1.0))
+        assert len(warnings) == 1
+        assert "BoundingBoxes" in warnings[0] and "ResizeDetection" in warnings[0]
+
+    def test_a_non_geometric_transform_stays_silent(self) -> None:
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), v2.ColorJitter(brightness=0.5))
+        assert warnings == []
+
+    def test_a_compose_is_recursed(self) -> None:
+        with _captured_warnings() as warnings:
+            _apply_op(self._record(), v2.Compose([v2.ToImage(), v2.Resize((32, 32))]))
+        assert len(warnings) == 1
+
+    def test_v2s_OWN_box_type_is_transformed_and_not_warned_about(self) -> None:
+        from torchvision import tv_tensors
+
+        record = {
+            "image": tv_tensors.Image(torch.zeros(3, 200, 200, dtype=torch.uint8)),
+            "boxes": tv_tensors.BoundingBoxes(
+                torch.tensor([[10.0, 10.0, 100.0, 100.0]]), format="XYXY", canvas_size=(200, 200)
+            ),
+        }
+        with _captured_warnings() as warnings:
+            out = _apply_op(record, v2.Resize((64, 64)))
+        assert warnings == []
+        assert out is not None
+        assert [round(v, 1) for v in out["boxes"].tolist()[0]] == [3.2, 3.2, 32.0, 32.0]
+
+    def test_the_geometry_signal_still_matches_this_torchvision(self) -> None:
+        """The signal is a PRIVATE module path, so it can go stale on a torchvision upgrade.
+
+        It fails OPEN (no warning, nothing else changes), which is the right direction for a
+        diagnostic but also the direction that rots unnoticed — so assert the classification
+        directly rather than only through a warning that would silently stop appearing.
+        """
+        from recordstream.core.families import _is_v2_geometry
+
+        assert _is_v2_geometry(v2.Resize((8, 8)))
+        assert _is_v2_geometry(v2.RandomHorizontalFlip())
+        assert _is_v2_geometry(v2.RandomCrop(8))
+        assert not _is_v2_geometry(v2.ColorJitter())
+        assert not _is_v2_geometry(v2.Normalize(mean=[0.0], std=[1.0]))

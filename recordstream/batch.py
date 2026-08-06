@@ -12,6 +12,8 @@ the dtype its contract requires:
 * :func:`batch_values` — the raw values, past the wrapper item. Framework-free.
 * :func:`multi_hot` — a :class:`~recordstream.MultiLabel` column as an ``[N, C]`` matrix.
   Framework-free (numpy).
+* :func:`batch_regions` — a :class:`~recordstream.Regions` column as per-record
+  ``{boxes, labels}`` dicts. Framework-free.
 * :func:`batch_tensor` — the torch adapter: stack, optional dtype, optional device.
 * :func:`batch_metadata` — the collate's transpose, for prediction sinks. Framework-free.
 
@@ -33,12 +35,18 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 import numpy as np
 
-from recordstream.items import Record, item_value
+from recordstream.items import Record, Regions, is_item, item_value
 
 if TYPE_CHECKING:  # torch is imported lazily at call time — this is annotation-only
     from torch import Tensor
 
-__all__ = ["batch_metadata", "batch_tensor", "batch_values", "multi_hot"]
+__all__ = ["batch_metadata", "batch_regions", "batch_tensor", "batch_values", "multi_hot"]
+
+#: The per-box PARALLEL ARRAY fields of a :class:`~recordstream.Regions`, in the order a
+#: per-record dict presents them. ``canvas`` and ``extras`` are deliberately absent: the first is
+#: per-IMAGE frame metadata and the second an open dict, neither of which is a per-box column —
+#: read them off the batched item itself (``batch[key].canvas`` is the per-record list).
+_REGION_FIELDS = ("boxes", "labels", "scores")
 
 
 def batch_values(batch: Record, key: str) -> Any:
@@ -54,12 +62,21 @@ def batch_values(batch: Record, key: str) -> Any:
     No torch, no stacking, no dtype opinion — just the values. Use :func:`batch_tensor` when
     a tensor is what you need.
 
+    **Both collates read the same here.** Under ``"record"`` a wrapper item's column arrives as
+    ONE batched item; under ``"list"`` (:func:`~recordstream.collate_list`) it arrives as a LIST
+    of per-record items. The second shape is unwrapped ELEMENT-WISE, so a caller gets
+    ``[0, 1]`` either way and never branches on which collate ran — the property that makes the
+    collate a free choice rather than a fork in every consumer.
+
     Example::
 
         batch_values(collate_records([{"class": Label(0)}, {"class": Label(1)}]), "class")
         # [0, 1]
     """
-    return item_value(batch[key])
+    value = batch[key]
+    if isinstance(value, list) and any(is_item(entry) for entry in value):
+        return [item_value(entry) for entry in value]
+    return item_value(value)
 
 
 def multi_hot(batch: Record, key: str, num_classes: int, dtype: Any = "float32") -> np.ndarray:
@@ -103,6 +120,72 @@ def multi_hot(batch: Record, key: str, num_classes: int, dtype: Any = "float32")
             if 0 <= index < num_classes:
                 out[row, index] = 1
     return out
+
+
+def batch_regions(batch: Record, key: str) -> List[Dict[str, Any]]:
+    """A collated :class:`~recordstream.Regions` column back into PER-RECORD dicts.
+
+    The collate cannot stack a region set — every record has its own N — so it leaves each
+    declared attr as a per-record LIST (``boxes`` = ``[[N0, 4], [N1, 4], …]``). That is the
+    right batch, and it is also not what a model takes: every detection interface in use wants
+    ONE dict per image. This is that transpose, and it belongs beside :func:`batch_metadata`
+    (which transposes the same way for the remaining columns) rather than in whichever consumer
+    needed it first — a consumer re-deriving it is re-deriving the collate.
+
+    **Framework-free, deliberately.** The values are handed back EXACTLY as the record carried
+    them — torch stays torch, numpy stays numpy — because a detection target's dtype and device
+    are the caller's contract, not this module's (the same rule that keeps
+    :func:`batch_values` framework-free and confines torch to :func:`batch_tensor`). A torch
+    backend moves the dicts to its device in one comprehension; a numpy one uses them as they
+    are.
+
+    Args:
+        batch: A batched record — from EITHER collate (``"record"`` leaves one batched
+            :class:`~recordstream.Regions` with per-record columns; ``"list"`` leaves a list of
+            per-record ``Regions``; both are read here).
+        key: The record key holding the collated :class:`~recordstream.Regions`.
+
+    Returns:
+        One dict per record, carrying whichever of ``boxes`` / ``labels`` / ``scores`` that
+        record actually has — a field left ``None`` on the item is OMITTED rather than handed
+        over as ``None``, so a prediction-free training target is exactly ``{boxes, labels}``.
+        ``canvas`` and ``extras`` stay on the batched item (per-image frame metadata and an
+        open dict are not per-box columns); read them off ``batch[key]``.
+
+    Raises:
+        TypeError: when ``key`` does not hold a :class:`~recordstream.Regions`.
+        ValueError: when the item is not COLLATED (its ``boxes`` is not a per-record list) —
+            passing a single record's ``Regions`` here is the mistake the message names.
+
+    Example::
+
+        targets = batch_regions(batch, "target")     # [{"boxes": [N0, 4], "labels": [N0]}, …]
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]   # a torch caller
+    """
+    item = batch[key]
+    # The "list" collate leaves a LIST of per-record Regions; the default leaves ONE batched
+    # Regions whose attrs are per-record lists. Both mean the same thing, so both read the same
+    # — a consumer never branches on which collate ran.
+    if isinstance(item, list):
+        if not all(isinstance(entry, Regions) for entry in item):
+            raise TypeError(f"batch_regions: {key!r} holds a list whose entries are not all Regions.")
+        return [
+            {name: getattr(entry, name) for name in _REGION_FIELDS if getattr(entry, name, None) is not None}
+            for entry in item
+        ]
+    if not isinstance(item, Regions):
+        raise TypeError(f"batch_regions: {key!r} holds {type(item).__name__}, not a Regions.")
+    if not isinstance(item.boxes, list):
+        raise ValueError(
+            f"batch_regions: {key!r} is not a COLLATED Regions — its `boxes` is "
+            f"{type(item.boxes).__name__}, not the per-record list collate_records leaves. "
+            "Pass the batched record, not a single record's Regions."
+        )
+    columns = {name: getattr(item, name) for name in _REGION_FIELDS if isinstance(getattr(item, name, None), list)}
+    return [
+        {name: values[index] for name, values in columns.items() if values[index] is not None}
+        for index in range(len(item.boxes))
+    ]
 
 
 def batch_tensor(batch: Record, key: str, device: Any = None, dtype: Any = None) -> "Tensor":

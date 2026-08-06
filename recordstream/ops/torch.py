@@ -11,14 +11,27 @@ from recordstream.transform import Transform
 def to_tensor(img: Any, normalize: bool = True, mode: Optional[str] = None) -> torch.Tensor:
     """Convert a PIL image / NumPy array to a CHW ``torch.Tensor``.
 
-    A PIL image is optionally mode-coerced (``mode="RGB"`` forces 3 channels) then arrayed;
-    an ``[H, W, C]`` array is transposed to ``[C, H, W]`` (a 2-D array gets a leading channel
+    ``mode`` (e.g. ``"RGB"``, forcing 3 channels) coerces a PIL payload directly — and a
+    ``uint8`` ARRAY payload through a PIL round-trip, because a decoding source may hand over
+    the already-arrayed pixels: a mixed-mode dataset (RGB + RGBA + grayscale rows) then reaches
+    the model with ragged channel counts unless the coercion applies to arrays too. (Found the
+    hard way: cppe-5 ships 3-, 4- and 1-channel images, and a ``mode="RGB"`` that silently
+    skipped arrays crashed torchvision's normalize mid-epoch with a channel mismatch.) A
+    non-``uint8`` array with ``mode`` set is left as-is — PIL cannot represent it faithfully.
+
+    An ``[H, W, C]`` array is transposed to ``[C, H, W]`` (a 2-D array gets a leading channel
     axis). With ``normalize`` an integer / 0-255-float payload is scaled into ``[0, 1]``.
     """
     if hasattr(img, "convert"):
         if mode is not None:
             img = img.convert(mode)
         img = np.array(img)
+    elif mode is not None and isinstance(img, np.ndarray) and img.dtype == np.uint8:
+        from PIL import Image as PILImage
+
+        # A trailing singleton channel axis defeats `fromarray` — squeeze it to the 2-D form.
+        arr = img[..., 0] if (img.ndim == 3 and img.shape[2] == 1) else img
+        img = np.array(PILImage.fromarray(arr).convert(mode))
 
     if isinstance(img, np.ndarray):
         if img.ndim == 3:

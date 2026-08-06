@@ -251,3 +251,46 @@ def test_with_no_engine_installed_it_defers_to_keras_own_default(monkeypatch: py
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --------------------------------------------------------------------------- #
+# The collate is selectable here too — the torch half's `collate_fn`, on the Keras side
+# --------------------------------------------------------------------------- #
+def test_the_collate_defaults_to_the_record_key() -> None:
+    from recordstream.keras import RecordSequence
+
+    assert RecordSequence().collate == "record"
+
+
+def test_a_registered_key_selects_the_batch_shape() -> None:
+    """A `PyDataset` had no way to say "don't stack" — that made the collate a torch-only
+    choice, which is the gap `register_collate` existed for and nothing used."""
+    import numpy as np
+
+    from recordstream import Image
+    from recordstream.keras import RecordSequence
+
+    records = [{"image": Image(np.zeros((3, 8, 8), dtype="float32"), layout="CHW")} for _ in range(2)]
+
+    stacked = RecordSequence(records, batch_size=2, collate="record").batch(0)["image"]
+    listed = RecordSequence(records, batch_size=2, collate="list").batch(0)["image"]
+    assert getattr(stacked, "shape", None) == (2, 3, 8, 8)
+    assert isinstance(listed, list) and len(listed) == 2
+
+
+def test_a_collate_FUNCTION_is_accepted_too() -> None:
+    """Keys serve JSON-carrying tool surfaces; a function stays the normal Python path."""
+    from recordstream import collate_list
+    from recordstream.keras import RecordSequence
+
+    seq = RecordSequence([{"x": 1}, {"x": 2}], batch_size=2, collate=collate_list)
+    assert seq.batch(0) == {"x": [1, 2]}
+
+
+def test_an_unknown_key_names_the_registered_ones() -> None:
+    import pytest
+
+    from recordstream.keras import RecordSequence
+
+    with pytest.raises(KeyError, match="known:"):
+        RecordSequence([{"x": 1}], batch_size=1, collate="nope").batch(0)

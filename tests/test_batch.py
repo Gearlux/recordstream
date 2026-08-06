@@ -5,6 +5,8 @@ key?" and hand back values / one tensor / per-record dicts. Shaping for a partic
 the caller's job, so there is deliberately no dtype promotion or multi-hot test here.
 """
 
+from typing import Any
+
 import numpy as np
 import pytest
 import torch
@@ -202,3 +204,151 @@ def test_a_label_column_contributes_its_values() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --------------------------------------------------------------------------- #
+# batch_regions — the collate's transpose for a region-set column
+# --------------------------------------------------------------------------- #
+class TestBatchRegions:
+    """A collated `Regions` back into the per-record dicts every detection interface takes."""
+
+    def _batch(self, counts: tuple = (1, 3), scores: bool = False) -> Any:
+        import torch
+
+        from recordstream import Regions, collate_records
+
+        records = [
+            {
+                "target": Regions(
+                    boxes=torch.rand(n, 4),
+                    labels=torch.zeros(n, dtype=torch.int64),
+                    scores=torch.ones(n) if scores else None,
+                )
+            }
+            for n in counts
+        ]
+        return collate_records(records)
+
+    def test_it_transposes_a_variable_n_column_into_per_record_dicts(self) -> None:
+        from recordstream import batch_regions
+
+        targets = batch_regions(self._batch(counts=(1, 3)), "target")
+        assert len(targets) == 2
+        assert [tuple(t["boxes"].shape) for t in targets] == [(1, 4), (3, 4)]
+        assert [tuple(t["labels"].shape) for t in targets] == [(1,), (3,)]
+
+    def test_an_absent_field_is_OMITTED_not_handed_over_as_none(self) -> None:
+        """A training target is exactly {boxes, labels} — a `None` scores key would reach a model."""
+        from recordstream import batch_regions
+
+        assert set(batch_regions(self._batch(), "target")[0]) == {"boxes", "labels"}
+        assert set(batch_regions(self._batch(scores=True), "target")[0]) == {"boxes", "labels", "scores"}
+
+    def test_values_keep_their_framework(self) -> None:
+        """Framework-free by rule: the caller owns dtype and device, as with `batch_values`."""
+        import torch
+
+        from recordstream import batch_regions
+
+        assert isinstance(batch_regions(self._batch(), "target")[0]["boxes"], torch.Tensor)
+
+    def test_numpy_boxes_stay_numpy(self) -> None:
+        import numpy as np
+
+        from recordstream import Regions, batch_regions, collate_records
+
+        batch = collate_records([{"target": Regions(boxes=np.zeros((2, 4)), labels=np.zeros(2))}])
+        assert isinstance(batch_regions(batch, "target")[0]["boxes"], np.ndarray)
+
+    def test_a_wrong_type_raises_naming_it(self) -> None:
+        import pytest
+
+        from recordstream import Label, batch_regions, collate_records
+
+        with pytest.raises(TypeError, match="not a Regions"):
+            batch_regions(collate_records([{"target": Label(0)}]), "target")
+
+    def test_an_uncollated_regions_raises_naming_the_mistake(self) -> None:
+        import numpy as np
+        import pytest
+
+        from recordstream import Regions, batch_regions
+
+        with pytest.raises(ValueError, match="not a COLLATED Regions"):
+            batch_regions({"target": Regions(boxes=np.zeros((2, 4)))}, "target")
+
+
+# --------------------------------------------------------------------------- #
+# The collate is a CHOICE — and both choices read back the same
+# --------------------------------------------------------------------------- #
+class TestCollateIsAChoice:
+    """`"record"` stacks, `"list"` does not — and every read-back helper accepts both.
+
+    That last property is what makes the choice free rather than a fork in every consumer: a
+    trainer picks the batch shape its MODEL needs and reads the batch the same way either way.
+    """
+
+    def _records(self, sizes: tuple = (8, 8)) -> Any:
+        import torch
+
+        from recordstream import Image, Label, Regions
+
+        return [
+            {
+                "image": Image(np.zeros((3, s, s), dtype="float32"), layout="CHW"),
+                "target": Regions(boxes=torch.rand(n, 4), labels=torch.zeros(n, dtype=torch.int64)),
+                "class": Label(i),
+            }
+            for i, (s, n) in enumerate(zip(sizes, (1, 3)))
+        ]
+
+    def test_both_keys_are_registered(self) -> None:
+        from recordstream import registered_collates
+
+        assert {"record", "list"} <= set(registered_collates())
+
+    def test_record_stacks_and_list_does_not(self) -> None:
+        from recordstream import Image, collate_list, collate_records
+
+        stacked = collate_records(self._records())["image"]
+        listed = collate_list(self._records())["image"]
+        assert isinstance(stacked, Image) and stacked.shape == (2, 3, 8, 8)
+        assert isinstance(listed, list) and [v.shape for v in listed] == [(3, 8, 8), (3, 8, 8)]
+
+    def test_the_list_collate_keeps_items_as_items(self) -> None:
+        """Per-record metadata survives — a list of bare arrays would drop every `layout`."""
+        from recordstream import Image, collate_list
+
+        column = collate_list(self._records())["image"]
+        assert all(isinstance(v, Image) for v in column)
+        assert [v.layout for v in column] == ["CHW", "CHW"]
+
+    def test_a_variable_size_column_is_a_CHOICE_not_a_crash(self) -> None:
+        """The whole point: ragged is fine when you asked for lists, and the default explains
+        itself instead of raising numpy's shape error from three frames down."""
+        from recordstream import collate_list, collate_records
+
+        ragged = self._records(sizes=(8, 12))
+        with pytest.raises(ValueError, match=r"cannot stack the 'image' column"):
+            collate_records(ragged)
+        assert len(collate_list(ragged)["image"]) == 2
+
+    def test_the_stack_error_names_the_shapes_and_the_way_out(self) -> None:
+        from recordstream import collate_records
+
+        with pytest.raises(ValueError) as excinfo:
+            collate_records(self._records(sizes=(8, 12)))
+        message = str(excinfo.value)
+        assert "(3, 8, 8)" in message and "(3, 12, 12)" in message
+        assert '"list"' in message, "the message must name the collate that CAN batch this"
+
+    @pytest.mark.parametrize("collate_key", ["record", "list"])
+    def test_every_read_back_helper_accepts_both_collates(self, collate_key: str) -> None:
+        """`batch_values` / `batch_regions` / `batch_metadata` give the SAME answer either way."""
+        from recordstream import batch_metadata, batch_regions, batch_values, collate
+
+        batch = collate(self._records(), key=collate_key)
+        assert batch_values(batch, "class") == [0, 1]
+        targets = batch_regions(batch, "target")
+        assert [t["boxes"].shape[0] for t in targets] == [1, 3]
+        assert batch_metadata(batch, exclude=("image", "target")) == [{"class": 0}, {"class": 1}]

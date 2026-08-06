@@ -54,6 +54,40 @@ class TestToTensor:
         expected = to_tensor(arr, normalize=False).numpy()
         assert np.array_equal(np.asarray(out["image"]), expected)
 
+    # `mode=` must coerce ARRAY payloads too, not only PIL ones: a decoding source hands over
+    # already-arrayed pixels, and a mixed-mode dataset (cppe-5 ships RGB + RGBA + grayscale rows)
+    # then reaches the model with ragged channel counts — a channel-mismatch crash MID-EPOCH,
+    # after the 3-channel rows trained fine. Found the hard way; these pin the array path.
+    def test_mode_rgb_coerces_a_4_channel_uint8_array(self) -> None:
+        rgba = (np.arange(4 * 5 * 4).reshape(4, 5, 4) % 256).astype(np.uint8)
+        tensor = to_tensor(rgba, mode="RGB")
+        assert tuple(tensor.shape) == (3, 4, 5)
+
+    def test_mode_rgb_coerces_a_2d_grayscale_uint8_array(self) -> None:
+        gray = (np.arange(4 * 5).reshape(4, 5) % 256).astype(np.uint8)
+        tensor = to_tensor(gray, mode="RGB")
+        assert tuple(tensor.shape) == (3, 4, 5)
+
+    def test_mode_rgb_coerces_a_singleton_channel_uint8_array(self) -> None:
+        gray1 = (np.arange(4 * 5).reshape(4, 5, 1) % 256).astype(np.uint8)
+        tensor = to_tensor(gray1, mode="RGB")
+        assert tuple(tensor.shape) == (3, 4, 5)
+
+    def test_mode_rgb_leaves_a_3_channel_array_byte_identical(self) -> None:
+        arr = _hwc_uint8()
+        assert np.array_equal(to_tensor(arr, mode="RGB").numpy(), to_tensor(arr).numpy())
+
+    def test_mode_is_left_alone_for_a_non_uint8_array(self) -> None:
+        # PIL cannot represent a float RGBA faithfully — the coercion is deliberately uint8-only.
+        rgba = np.random.rand(4, 5, 4).astype(np.float32)
+        tensor = to_tensor(rgba, mode="RGB", normalize=False)
+        assert tuple(tensor.shape) == (4, 4, 5)
+
+    def test_op_mode_reaches_the_array_path(self) -> None:
+        rgba = (np.arange(4 * 5 * 4).reshape(4, 5, 4) % 256).astype(np.uint8)
+        out = ToTensor(mode="RGB")({"image": Image(rgba)})
+        assert tuple(out["image"].shape) == (3, 4, 5)
+
     def test_output_is_a_plain_live_tensor(self) -> None:
         # The record model holds arbitrary values: the tensor rides AS-IS (no Image wrap — an
         # NDArrayItem coerces via np.asarray and cannot hold a live tensor). item_data passes

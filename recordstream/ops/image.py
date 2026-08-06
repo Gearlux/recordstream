@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 from recordstream._compat import is_torch_tensor
 from recordstream.items import Image as ImageItem
 from recordstream.items import Mask as MaskItem
-from recordstream.items import NDArrayItem, Record, item_data, item_value
+from recordstream.items import NDArrayItem, Record, Regions, is_item, item_data, item_value
 from recordstream.transform import Transform
 
 logger = get_logger("recordstream.ops.image")
@@ -109,6 +109,35 @@ def _text_to_image(text: str, width: int = 512, height: int = 160) -> np.ndarray
     lines = [text[i : i + max_chars] for i in range(0, min(len(text), max_chars * 8), max_chars)]
     draw.multiline_text((6, 6), "\n".join(lines) or "<empty>", fill=(220, 220, 220))
     return np.array(img)
+
+
+def image_frame(value: Any) -> Optional[Tuple[int, int]]:
+    """The ``(H, W)`` raster of an image-bearing value, or ``None`` when it is not one.
+
+    The reference frame a :class:`~recordstream.Regions`' boxes are stated in is a raster, so
+    "what raster is this?" is asked wherever boxes and pixels have to agree — the coupled
+    image+boxes resize reads it to derive its scale factors, the ops that CREATE a target read
+    it to record the frame on the item, and any consumer comparing the two reads it to notice a
+    desync. It was written out per call site before it was extracted.
+
+    It reads the DECLARED layout and does not guess: an :class:`~recordstream.Image` item is
+    trusted for its ``layout``, a PIL image for its ``size`` (which is ``(W, H)`` — the one
+    transposed convention here), and a bare array is read as ``HWC``, the layout ``Image``
+    documents and the one every pre-tensor path in this package produces. It deliberately does
+    NOT sniff a channel axis: this package already carries three separate, deliberately
+    divergent channels-first heuristics, and a fourth guessing one HERE would silently mislabel
+    the frame that box coordinates are validated against.
+    """
+    payload = item_data(value) if is_item(value) else value
+    if hasattr(payload, "size") and hasattr(payload, "convert"):  # PIL: size is (W, H)
+        width, height = payload.size
+        return int(height), int(width)
+    shape = getattr(payload, "shape", None)
+    if shape is None or len(shape) not in (2, 3):
+        return None
+    if isinstance(value, ImageItem) and getattr(value, "layout", "HWC") == "CHW" and len(shape) == 3:
+        return int(shape[1]), int(shape[2])
+    return int(shape[0]), int(shape[1])
 
 
 def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
@@ -651,6 +680,9 @@ class ConvertToImage(Transform):
         self.flip_vertical = bool(flip_vertical)
         self.field = field
         self.output = output
+        # Private, so it stays out of the config surface (it is not a knob) — see
+        # `_warn_if_it_desyncs_regions`, which reports the configuration once, not per record.
+        self._warned_about_regions = False
 
     def _find_source(self, record: Record) -> Any:
         """Resolve the payload to render (``self.field`` or the first array-bearing item)."""
@@ -664,6 +696,33 @@ class ConvertToImage(Transform):
                 return item_data(item)
         raise ValueError(f"ConvertToImage: no array-bearing field in record (keys: {list(record)})")
 
+    def _warn_if_it_desyncs_regions(self, record: Record, before: Tuple[int, int], after: Tuple[int, int]) -> None:
+        """Warn ONCE when this op resized the pixels of a record whose boxes describe them.
+
+        This op resizes the IMAGE and nothing else, which is correct for what it is — but a
+        record carrying a :class:`~recordstream.Regions` states its boxes in a raster, and moving
+        the pixels out from under them leaves the two disagreeing with no error of its own: every
+        shape stays valid and only the coordinates become wrong. Downstream that surfaces as a
+        model quietly training against misplaced targets, which is the expensive way to find out.
+
+        It is a WARNING and not an error because this op cannot know what the boxes describe — a
+        record may legitimately carry regions belonging to a different key than the field being
+        rendered — so the condition is likely, not certain. It fires once per op instance: the
+        message is about the CONFIGURATION, so a second copy per record only buries it.
+        """
+        if self._warned_about_regions or before == after:
+            return
+        keys = [key for key, value in record.items() if isinstance(value, Regions)]
+        if not keys:
+            return
+        self._warned_about_regions = True
+        logger.warning(
+            f"ConvertToImage resized {before} -> {after} (H, W) on a record whose {keys} "
+            f"carries detection boxes — this op moves PIXELS ONLY, so those boxes now describe "
+            f"a raster that no longer exists. Use recordstream.ops.target.ResizeDetection, which "
+            f"moves the image and its boxes in one coupled step. (Warned once per op.)"
+        )
+
     def __call__(self, record: Record) -> Record:
         rgb = _render_rgb(self._find_source(record), self.colormap)
         if self.flip_vertical:
@@ -674,6 +733,7 @@ class ConvertToImage(Transform):
             )
         else:
             out_arr = _bound_longest_side(rgb, self.max_size)
+        self._warn_if_it_desyncs_regions(record, rgb.shape[:2], out_arr.shape[:2])
         return {**record, self.output: ImageItem(out_arr, layout="HWC")}
 
 

@@ -173,9 +173,11 @@ class Regions:
     """A set of rectangular regions / bounding boxes with optional labels and scores.
 
     Attributes:
-        boxes: A list of boxes — pixel ``[x0, y0, x1, y1]`` or signal ``[f0, f1, t0, t1]``.
-        labels: Optional per-box class labels.
-        scores: Optional per-box confidence scores.
+        boxes: The boxes — pixel ``[x0, y0, x1, y1]`` or signal ``[f0, f1, t0, t1]`` rows, as a
+            list OR an ``[N, 4]`` array/tensor (a detection pipeline keeps its framework's type;
+            annotated ``Any`` because list, ndarray and tensor share no useful protocol).
+        labels: Optional per-box class labels (list or ``[N]`` array/tensor, like ``boxes``).
+        scores: Optional per-box confidence scores (list or ``[N]`` array/tensor).
         canvas: Optional ``(H, W)`` reference frame — the coordinate system boxes live in,
             so a geometric transform (flip / resize) has a self-contained frame.
         extras: Auxiliary PER-BOX parallel arrays and region-set measurements keyed by name
@@ -183,9 +185,9 @@ class Regions:
             travels WITH the boxes it describes.
     """
 
-    boxes: List[Any] = field(default_factory=list)
-    labels: Optional[List[Any]] = None
-    scores: Optional[List[Any]] = None
+    boxes: Any = field(default_factory=list)
+    labels: Optional[Any] = None
+    scores: Optional[Any] = None
     canvas: Optional[Tuple[int, int]] = None
     extras: Dict[str, Any] = field(default_factory=dict)
 

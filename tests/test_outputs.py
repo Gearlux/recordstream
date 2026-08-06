@@ -5,8 +5,10 @@ import torch
 from recordstream.outputs import (
     ClassificationOutput,
     DetectionOutput,
+    RestorationOutput,
     SegmentationOutput,
     classification_output,
+    restoration_output,
     segmentation_output,
 )
 
@@ -36,6 +38,39 @@ def test_segmentation_output_per_pixel_argmax() -> None:
     assert out["mask"].dtype == torch.int64
     assert out["mask"].shape == (2, 8, 8)
     assert torch.equal(out["mask"], logits.argmax(dim=1).to(torch.int64))
+
+
+def test_restoration_output_carries_the_image_unchanged() -> None:
+    """The builder transforms NOTHING — a restored image already IS the contract's one key."""
+    image = torch.rand(2, 3, 8, 8)
+    out = restoration_output(image)
+
+    assert set(out.keys()) == {"image"}
+    assert out["image"] is image
+    assert out["image"].shape == (2, 3, 8, 8)
+
+
+def test_restoration_output_does_not_clamp_the_range() -> None:
+    """A residual denoiser can legitimately overshoot [0, 1], and clamping would change the score.
+
+    Whether the output is clipped is the RUN's decision (a metric on clamped values is a
+    different number), so the contract carries what the model produced.
+    """
+    out = restoration_output(torch.tensor([[[[-0.25, 1.5]]]]))
+
+    assert float(out["image"].min()) == -0.25
+    assert float(out["image"].max()) == 1.5
+
+
+def test_restoration_output_has_no_residual_key() -> None:
+    """``input - image`` is derivable, and a derivable key is a second place for the two to disagree."""
+    assert "residual" not in restoration_output(torch.zeros(1, 3, 4, 4))
+
+
+def test_restoration_output_is_typed_dict_instance() -> None:
+    out: RestorationOutput = restoration_output(torch.zeros(1, 3, 4, 4))
+    assert isinstance(out, dict)
+    assert set(out.keys()) == {"image"}
 
 
 def test_detection_output_typed_dict_construction() -> None:
@@ -104,8 +139,10 @@ def test_the_package_root_exports_the_contracts_and_builders() -> None:
         "ClassificationOutput",
         "DetectionOutput",
         "DetectionPredictions",
+        "RestorationOutput",
         "SegmentationOutput",
         "classification_output",
+        "restoration_output",
         "segmentation_output",
     ):
         assert name in recordstream.__all__ and hasattr(recordstream, name)

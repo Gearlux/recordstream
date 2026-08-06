@@ -33,9 +33,19 @@ argmax'd class ids:
 | `ClassificationOutput` | `logits` `[B, C]`, `probs` `[B, C]`, `class_idx` `[B]` |
 | `DetectionOutput` | `boxes` `[N, 4]` xyxy absolute pixels, `scores` `[N]`, `labels` `[N]` |
 | `SegmentationOutput` | `logits` `[B, C, H, W]`, `probs` `[B, C, H, W]`, `mask` `[B, H, W]` |
+| `RestorationOutput` | `image` `[B, C, H, W]` — the restored image, in the input's value range |
 
 That guess is not hypothetical: two independently-written detector wrappers agree that `boxes` is
 xyxy in absolute pixels only because `DetectionOutput` says so.
+
+`RestorationOutput` carries **one** key while the others carry three, and that asymmetry is the
+contract doing its job rather than an unfinished row. The other tasks emit something that needs
+interpreting — `logits` are not `probs` are not `class_idx` — whereas an image-to-image model emits
+the answer directly, so the thing a consumer needs told is exactly that: the array under `image` is
+a picture in the input's units, not logits to be softmaxed and not a residual to be added back.
+`restoration_output()` therefore transforms nothing; it exists so every backend spells the wrapping
+identically. The residual is deliberately absent — it is `input - image`, and a key a consumer can
+compute is a second place for the two to disagree.
 
 Each contract is **generic in the array type**, so the same declaration describes a torch run and a
 numpy/TF/JAX one:

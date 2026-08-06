@@ -10,8 +10,15 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 """
 
 # --- shared infrastructure -----------------------------------------------------------------
-from recordstream.batch import batch_metadata, batch_tensor, batch_values, multi_hot
-from recordstream.collate import collate, collate_records, get_collate, register_collate, registered_collates
+from recordstream.batch import batch_metadata, batch_regions, batch_tensor, batch_values, multi_hot
+from recordstream.collate import (
+    collate,
+    collate_list,
+    collate_records,
+    get_collate,
+    register_collate,
+    registered_collates,
+)
 from recordstream.core import (
     FilterOp,
     JointStream,
@@ -59,8 +66,10 @@ from recordstream.outputs import (
     ClassificationOutput,
     DetectionOutput,
     DetectionPredictions,
+    RestorationOutput,
     SegmentationOutput,
     classification_output,
+    restoration_output,
     segmentation_output,
 )
 from recordstream.predictions import ClassificationPredictionsSink, PredictionsSink
@@ -133,9 +142,11 @@ __all__ = [
     "FlowGraph",
     "collate",
     "batch_metadata",
+    "batch_regions",
     "batch_tensor",
     "batch_values",
     "multi_hot",
+    "collate_list",
     "collate_records",
     "get_collate",
     "register_collate",
@@ -147,8 +158,10 @@ __all__ = [
     "ClassificationOutput",
     "DetectionOutput",
     "DetectionPredictions",
+    "RestorationOutput",
     "SegmentationOutput",
     "classification_output",
+    "restoration_output",
     "segmentation_output",
     "PredictionsSink",
     "ClassificationPredictionsSink",

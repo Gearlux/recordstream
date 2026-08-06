@@ -10,13 +10,14 @@ Also pins :func:`recordstream.item_value`, extracted here because the op needed 
 "get past a wrapper item" rule ``iter_key`` and ``batch_values`` already had.
 """
 
-from typing import Any, Dict, Tuple
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Tuple
 
 import numpy as np
 import pytest
 from PIL import Image as PILImage
 
-from recordstream import Image, Label, Mask, MultiLabel, collate_records, item_data, item_value
+from recordstream import Image, Label, Mask, MultiLabel, Regions, collate_records, item_data, item_value
 from recordstream.core import _apply_op
 from recordstream.ops import ConvertToMask, DropField, FormulaOp
 
@@ -237,3 +238,110 @@ class TestNumMaskClasses:
 
         with pytest.raises((TypeError, ValueError)):
             num_classes([{"class": Mask(np.array([[0, 1], [1, 0]], dtype=np.int64))}])
+
+
+@contextmanager
+def _captured_warnings() -> Iterator[List[str]]:
+    """Collect loggair WARNING records emitted inside the block.
+
+    `caplog` cannot see these: loggair is loguru, which does not propagate to stdlib logging.
+    Neither can `capfd` alone — the sink is ENQUEUED, so the write lands on another thread after
+    the assertion runs (this looked exactly like "the warning never fired"). `logger.complete()`
+    is the deterministic flush the workspace mandates instead of sleeping.
+    """
+    from loguru import logger
+
+    collected: List[str] = []
+    sink_id = logger.add(lambda message: collected.append(str(message)), level="WARNING")
+    try:
+        yield collected
+        logger.complete()
+    finally:
+        logger.remove(sink_id)
+
+
+class TestBoxesKnowTheirFrame:
+    """`canvas` is the raster a `Regions`' boxes are stated in — so every op that makes or
+    re-frames one records it, and the op that moves pixels ALONE says so.
+
+    Before this, only the coupled resize set `canvas`, which meant the frame was knowable
+    exactly when it was least needed (a resize that already moved the boxes correctly) and
+    unknown in the chain where boxes and pixels can actually drift apart.
+    """
+
+    def test_coco_boxes_record_the_image_they_annotate(self) -> None:
+        from recordstream.ops.target import CocoToTorchVisionDetection
+
+        record = {
+            "image": Image(np.zeros((300, 400, 3), dtype="uint8")),
+            "objects": Label({"bbox": [[10.0, 10.0, 20.0, 20.0]], "category": [1]}),
+        }
+        out = CocoToTorchVisionDetection(field="objects")(record)
+        assert out["target"].canvas == (300, 400), "the annotation's frame is the image's"
+
+    def test_mask_derived_boxes_record_the_mask(self) -> None:
+        from recordstream.ops.target import MasksToDetectionBoxes
+
+        mask = np.zeros((64, 96), dtype="int64")
+        mask[10:20, 30:40] = 1
+        out = MasksToDetectionBoxes()({"mask": Mask(mask)})
+        assert out["target"].canvas == (64, 96), "the boxes were derived FROM this raster"
+
+    def test_a_record_with_no_image_still_works(self) -> None:
+        """`None` is an ordinary answer — the lookup failing must not fail the op."""
+        from recordstream.ops.target import CocoToTorchVisionDetection
+
+        out = CocoToTorchVisionDetection(field="objects")(
+            {"objects": Label({"bbox": [[1.0, 2.0, 3.0, 4.0]], "category": [0]})}
+        )
+        assert out["target"].canvas is None
+
+    def test_a_regions_box_array_is_never_mistaken_for_a_raster(self) -> None:
+        """The narrow lookup's whole point: an `[N, 4]` box array is 2-D and must not be read
+        as an N x 4 image, which a generic first-array search would do confidently."""
+        from recordstream.ops.target import CocoToTorchVisionDetection
+
+        record = {
+            "objects": Label({"bbox": [[1.0, 2.0, 3.0, 4.0]], "category": [0]}),
+            "other": Regions(boxes=np.zeros((7, 4), dtype="float32"), labels=np.zeros((7,), dtype="int64")),
+        }
+        assert CocoToTorchVisionDetection(field="objects")(record)["target"].canvas is None
+
+    def test_an_EMPTY_target_is_re_framed_too(self) -> None:
+        """A negative example must not be the one record whose frame is unknown."""
+        from recordstream.ops.target import ResizeDetection
+
+        record = {
+            "image": Image(np.zeros((100, 100, 3), dtype="uint8")),
+            "target": Regions(boxes=np.zeros((0, 4), dtype="float32"), labels=np.zeros((0,), dtype="int64")),
+        }
+        out = ResizeDetection(width=64, height=32)(record)
+        assert out["target"].canvas == (32, 64)
+
+    def test_an_image_only_resize_WARNS_when_it_desyncs_boxes(self) -> None:
+        from recordstream.ops.image import ConvertToImage
+
+        record = {
+            "image": Image(np.zeros((200, 200, 3), dtype="uint8")),
+            "target": Regions(boxes=np.array([[10.0, 10.0, 50.0, 50.0]]), labels=np.array([1])),
+        }
+        op = ConvertToImage(field="image", width=64, height=64)
+        with _captured_warnings() as warnings:
+            op(record)
+        assert len(warnings) == 1
+        assert "ResizeDetection" in warnings[0] and "PIXELS ONLY" in warnings[0]
+        assert "(200, 200) -> (64, 64)" in warnings[0], "the message states both rasters"
+        # Once per op instance: the message is about the CONFIGURATION, not about this record.
+        with _captured_warnings() as second:
+            op(record)
+        assert second == []
+
+    def test_no_warning_without_boxes_or_without_a_resize(self) -> None:
+        from recordstream.ops.image import ConvertToImage
+
+        image = Image(np.zeros((200, 200, 3), dtype="uint8"))
+        boxes = Regions(boxes=np.array([[1.0, 2.0, 3.0, 4.0]]), labels=np.array([1]))
+        with _captured_warnings() as warnings:
+            ConvertToImage(field="image", width=64, height=64)({"image": image})  # resized, no boxes
+            ConvertToImage(field="image", max_size=999)({"image": image, "target": boxes})  # boxes, no resize
+        assert warnings == []
