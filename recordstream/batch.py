@@ -40,7 +40,7 @@ from recordstream.items import Record, Regions, is_item, item_value
 if TYPE_CHECKING:  # torch is imported lazily at call time — this is annotation-only
     from torch import Tensor
 
-__all__ = ["batch_metadata", "batch_regions", "batch_tensor", "batch_values", "multi_hot"]
+__all__ = ["batch_metadata", "batch_regions", "batch_tensor", "batch_values", "multi_hot", "per_record_predictions"]
 
 #: The per-box PARALLEL ARRAY fields of a :class:`~recordstream.Regions`, in the order a
 #: per-record dict presents them. ``canvas`` and ``extras`` are deliberately absent: the first is
@@ -232,6 +232,39 @@ def batch_tensor(batch: Record, key: str, device: Any = None, dtype: Any = None)
     if dtype is not None and tensor.dtype != dtype:
         tensor = tensor.to(dtype)
     return tensor if device is None else tensor.to(device)
+
+
+def per_record_predictions(preds: Any) -> List[Any]:
+    """Split a model's BATCHED prediction output into ONE entry per record.
+
+    The sink contract (``write(prediction, metadata)``) is per-record, but a model emits the
+    whole batch at once — a classifier's ``probs`` ``[N, C]``, a restorer's ``image``
+    ``[N, C, H, W]``. This is the pairing half of prediction, the same transpose
+    :func:`batch_metadata` performs for the metadata columns, which is why it lives beside it:
+    a consumer re-deriving the slicing re-derives what a batched output IS. It was extracted
+    from three byte-identical private copies in the training projects (2026-08-06).
+
+    Handled shapes, in order:
+
+    * a **list** — already per-record (a detector's per-image dicts), returned as-is;
+    * a ``{"predictions": [...]}`` **wrapper** — that list (a detection convention);
+    * a **batched mapping** whose values agree on one length ``N`` (a
+      :class:`~recordstream.ClassificationOutput` and friends) — sliced row-wise into ``N``
+      mappings;
+    * anything else — treated as ONE prediction, wrapped in a singleton list. Handing an
+      unrecognised batch over whole (the pre-extraction bug) wrote ONE entry for an N-record
+      batch, with the sink reading row 0 as if it were the whole prediction.
+    """
+    if isinstance(preds, list):
+        return preds
+    if isinstance(preds, dict):
+        if "predictions" in preds:
+            return list(preds["predictions"])
+        lengths = {len(v) for v in preds.values() if hasattr(v, "__len__")}
+        if len(lengths) == 1:
+            n = lengths.pop()
+            return [{k: v[i] for k, v in preds.items()} for i in range(n)]
+    return [preds]
 
 
 def batch_metadata(batch: Record, exclude: Iterable[str] = ()) -> Optional[List[Dict[str, Any]]]:

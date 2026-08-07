@@ -2,14 +2,11 @@
 
 Batching in recordstream is two-stage: the engine groups carriers (``Stream.batch`` /
 ``FlowGraph.batch`` yield ``list``\\ s of N items) and a COLLATE function stacks a group
-into one batched carrier. This registry gives consumer packages ONE addressable home for
-their task collates — consumers ``register_collate`` their task collates additively, and
-callers dispatch by key or by the default record collate.
-
-The string keys primarily serve AI-callable (MCP) tool surfaces, which pass
-JSON-serializable names — never function objects — and enumerate the legal values via
-:func:`registered_collates`; in Python (and in YAML via a dotted ``!ref:`` to the
-function), passing a collate function directly remains the normal path.
+into one batched carrier. The registry keys serve surfaces that pass JSON-serializable
+NAMES rather than function objects (an AI-callable tool, ``RecordSequence``'s ``collate=``
+string form), enumerating the legal values via :func:`registered_collates`; in Python (and
+in YAML via a dotted ``!ref:`` to the function), passing a collate function directly is the
+normal path.
 
 TWO collates are registered here, and they differ in ONE decision — whether array payloads
 are STACKED — because that decision belongs to the model, not to the data:
@@ -19,7 +16,15 @@ are STACKED — because that decision belongs to the model, not to the data:
 * ``"list"`` — nothing stacked; every key becomes a per-record list, items kept as items.
   What a model taking variable-size inputs wants (a torchvision detector's ``List[Tensor]``).
 
-Consumer conventions beyond that are deliberately NOT unified here; the registry is additive.
+**The registry is engine-internal — only shape-generic, parameter-free collates register
+(decided 2026-08-06, closing the open question).** A TASK's batch shape (a fastai
+``(x, y)`` tuple, a keras ``(inputs, targets)`` array pair) is parameterized by task-decided
+state — which keys are input and target, an int-id vs multi-hot target, a channels-last
+transpose — that a bare registry string cannot carry: a registered ``"tuple"`` with baked
+default keys would be the silent-wrong-keys trap. Consumers therefore pass their callable
+straight to the slot that takes one (``DataLoader(collate_fn=...)``,
+``RecordSequence(transform=...)``) and never register it. Measured before deciding: no
+workspace consumer had ever registered one.
 """
 
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TypeVar
@@ -53,15 +58,17 @@ __all__ = [
 
 
 def register_collate(key: str) -> Callable[[F], F]:
-    """Register a collate function under ``key`` (a task alias).
+    """Register a collate function under ``key``.
 
-    Usable as a decorator::
+    For SHAPE-GENERIC, parameter-free collates only (see the module docstring) — a
+    task-shaped collate carries task state a key cannot, and is passed as a callable to
+    the slot that takes one instead of being registered. Usable as a decorator::
 
-        @register_collate("yolo")
-        def yolo_collate(items): ...
+        @register_collate("record")
+        def collate_records(items): ...
 
-    Re-registering a key overwrites it (logged at debug — consumers may deliberately
-    replace a default).
+    Re-registering a key overwrites it (logged at debug — a deliberate replacement of a
+    default is legal).
     """
 
     def _register(fn: F) -> F:

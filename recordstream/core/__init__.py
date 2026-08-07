@@ -51,6 +51,7 @@ from recordstream.core.stream import (  # noqa: F401  — see the internal-surfa
     ensure_materialized,
     ensure_record_dataset,
     linear_steps,
+    prepare_record_dataset,
 )
 from recordstream.core.wrappers import FilterOp, WrappedOp
 
@@ -66,6 +67,7 @@ __all__ = [
     "ensure_materialized",
     "ensure_record_dataset",
     "linear_steps",
+    "prepare_record_dataset",
     "register_op_family",
     "registered_op_families",
 ]

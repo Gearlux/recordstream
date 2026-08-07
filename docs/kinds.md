@@ -101,6 +101,7 @@ batch_tensor(batch, "image", device=model.device)        # ONE torch tensor, sta
 batch_tensor(batch, "class", dev, dtype=torch.int64)     # ...with the dtype your loss requires
 multi_hot(batch, "class", num_classes)                   # a MultiLabel column as an [N, C] numpy matrix
 batch_metadata(batch, exclude=("image", "class"))        # the remaining columns transposed into N dicts
+per_record_predictions(model_output)                     # a BATCHED model output sliced into one entry per record
 ```
 
 Only `batch_tensor` is torch; the rest return plain values or numpy, so a non-torch backend reuses them and converts in one line. `dtype` is a parameter, not an opinion — the same knob as `device`. What stays task-side is only WHICH call a trainer makes.
@@ -149,3 +150,23 @@ class SlidingWindow:
 Expansion is flattened in every iteration route — sequential, spawn-parallel, and streamed — depth-first, so sibling order matches the nested-loop intuition. Each child continues through the remaining ops with its own (shallow-copied) Context; a child filtered to `None` just drops.
 
 A pipeline containing an expanding op is **ITERABLE-ONLY**: `len(stream)` / `stream[i]` raise a clear `TypeError` (the expanded length is unknowable up front). Iterate it, wrap it in a torch `IterableDataset`, window at the source for random access, or materialize with `list(stream)`. `FlowGraph` steps are strictly 1→1 (a named step has one result) — expanding pipelines belong to the `Stream` engine.
+
+## The training-side data helpers (`prepare_record_dataset`, `recordstream.loaders`)
+
+Two helpers every training runnable composes, written once here:
+
+```python
+from recordstream import prepare_record_dataset
+from recordstream.loaders import loader_slots            # torch-only module, not in the package root
+
+dataset = prepare_record_dataset(source)   # ensure_record_dataset + ensure_materialized; None passes through
+slots = loader_slots(batch_size=32, num_workers=0)       # deferred DataLoader triple (train shuffled)
+loader = flow(slots.train, dataset=dataset)              # the dataset arrives at run time
+```
+
+`prepare_record_dataset` normalizes a wired source's TYPE and its STATE in the calling process
+(the fork-safety pair — see the `ensure_materialized` docs). `loader_slots` returns the
+train/val/test `LazyClass(DataLoader, ...)` markers as a named tuple; further `DataLoader`
+kwargs pass through to all three, and a config can still replace any individual loader slot
+wholesale. The module imports torch, so it is deliberately NOT re-exported from the package
+root — `import recordstream` stays framework-free.

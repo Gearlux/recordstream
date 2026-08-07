@@ -352,3 +352,49 @@ class TestCollateIsAChoice:
         targets = batch_regions(batch, "target")
         assert [t["boxes"].shape[0] for t in targets] == [1, 3]
         assert batch_metadata(batch, exclude=("image", "target")) == [{"class": 0}, {"class": 1}]
+
+
+# --------------------------------------------------------------------------- #
+# per_record_predictions — the prediction-side transpose
+# --------------------------------------------------------------------------- #
+
+
+class TestPerRecordPredictions:
+    """Batched model output -> one entry per record, for the per-record sink contract.
+
+    Ported from the consumer suites when the three byte-identical private copies were
+    extracted (2026-08-06) — these are the cases those copies exercised.
+    """
+
+    def test_a_list_is_already_per_record(self) -> None:
+        from recordstream import per_record_predictions
+
+        items = [{"boxes": [1]}, {"boxes": [2]}]
+        assert per_record_predictions(items) is items
+
+    def test_a_predictions_wrapper_is_unwrapped(self) -> None:
+        from recordstream import per_record_predictions
+
+        assert per_record_predictions({"predictions": [1, 2, 3]}) == [1, 2, 3]
+
+    def test_a_batched_mapping_is_sliced_row_wise(self) -> None:
+        """A ClassificationOutput-shaped batch becomes N per-record mappings."""
+        from recordstream import per_record_predictions
+
+        batch = {"probs": np.eye(3, dtype="float32"), "class_idx": np.array([0, 1, 2])}
+        rows = per_record_predictions(batch)
+        assert len(rows) == 3
+        assert rows[1]["class_idx"] == 1
+        assert np.allclose(rows[2]["probs"], [0.0, 0.0, 1.0])
+
+    def test_a_mapping_with_disagreeing_lengths_is_one_prediction(self) -> None:
+        """Row-slicing is only safe when every column agrees on N."""
+        from recordstream import per_record_predictions
+
+        batch = {"a": np.zeros(2), "b": np.zeros(3)}
+        assert per_record_predictions(batch) == [batch]
+
+    def test_anything_else_is_one_prediction(self) -> None:
+        from recordstream import per_record_predictions
+
+        assert per_record_predictions(1.5) == [1.5]

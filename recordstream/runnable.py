@@ -35,7 +35,7 @@ table rather than a description of one kept in sync by hand. Straightforward wor
 example (the class + the exact introspector outputs): ``docs/runnable.md``.
 """
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 from loggair import get_logger
 
@@ -43,6 +43,14 @@ logger = get_logger(__name__)
 
 #: Attribute stamped on a method by :func:`entrypoint`.
 _ENTRYPOINT_ATTR = "__runnable_entrypoint__"
+
+#: The four standard tasks of a merged train+eval runnable — the ``task`` values its
+#: ``@entrypoint`` markers declare and its ``run()`` dispatches on. Declared HERE because they are
+#: this module's vocabulary (the markers/dispatch above speak them); a consumer's own task alias
+#: is typically ``MyTask = RunnableTask`` so the closed set is written exactly once. A runnable
+#: with a narrower or wider capability set declares its own Literal instead — the type names the
+#: CONVENTION, it does not gate dispatch (``run_entrypoint`` reads the markers, not this).
+RunnableTask = Literal["fit", "evaluate", "test", "predict"]
 
 #: A progress sink: ``(value, total, description) -> None``. ``value`` / ``total`` are
 #: floats in the same unit (optimizer steps, records); ``description`` is a short stage label.
@@ -211,6 +219,7 @@ def run_entrypoint(runnable: object, task: str) -> Any:
 __all__ = [
     "ProgressCallback",
     "ProgressReporting",
+    "RunnableTask",
     "TorchRunner",
     "entrypoint",
     "entrypoint_tasks",

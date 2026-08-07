@@ -10,7 +10,14 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 """
 
 # --- shared infrastructure -----------------------------------------------------------------
-from recordstream.batch import batch_metadata, batch_regions, batch_tensor, batch_values, multi_hot
+from recordstream.batch import (
+    batch_metadata,
+    batch_regions,
+    batch_tensor,
+    batch_values,
+    multi_hot,
+    per_record_predictions,
+)
 from recordstream.collate import (
     collate,
     collate_list,
@@ -27,6 +34,7 @@ from recordstream.core import (
     WrappedOp,
     ensure_materialized,
     ensure_record_dataset,
+    prepare_record_dataset,
     register_op_family,
     registered_op_families,
 )
@@ -86,6 +94,7 @@ from recordstream.projection import (
 from recordstream.runnable import (
     ProgressCallback,
     ProgressReporting,
+    RunnableTask,
     TorchRunner,
     entrypoint,
     entrypoint_tasks,
@@ -135,6 +144,7 @@ __all__ = [
     "RecordSource",
     "ensure_materialized",
     "ensure_record_dataset",
+    "prepare_record_dataset",
     "FilterOp",
     "WrappedOp",
     "register_op_family",
@@ -146,6 +156,7 @@ __all__ = [
     "batch_tensor",
     "batch_values",
     "multi_hot",
+    "per_record_predictions",
     "collate_list",
     "collate_records",
     "get_collate",
@@ -188,6 +199,7 @@ __all__ = [
     "TorchRunner",
     "ProgressReporting",
     "ProgressCallback",
+    "RunnableTask",
     "entrypoint",
     "entrypoint_tasks",
     "run_entrypoint",

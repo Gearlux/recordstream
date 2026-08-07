@@ -154,3 +154,40 @@ def test_an_iterable_only_source_is_warmed_too() -> None:
     source = _IterableOnly()
     ensure_materialized(source)
     assert source.built
+
+
+# --------------------------------------------------------------------------- #
+# prepare_record_dataset — the TYPE + STATE composition
+# --------------------------------------------------------------------------- #
+
+
+def test_prepare_none_passes_through() -> None:
+    """An unwired optional split needs no guard at the call site."""
+    from recordstream import prepare_record_dataset
+
+    assert prepare_record_dataset(None) is None
+
+
+def test_prepare_wraps_and_warms_in_one_call() -> None:
+    """The composition IS ensure_record_dataset + ensure_materialized: a lazy source comes
+    back as a record Stream whose build already happened in THIS process."""
+    from recordstream import Stream, prepare_record_dataset
+
+    source = _LazySource(rows=2)
+    prepared = prepare_record_dataset(source)
+    assert isinstance(prepared, Stream)
+    assert source.built, "the lazy build must happen here, not in a forked worker"
+
+
+def test_prepare_returns_a_stream_as_the_same_stream() -> None:
+    """Identity matters: a label-encoding Stream keeps its class_names."""
+    from recordstream import Stream, prepare_record_dataset
+
+    stream = Stream(source=[{"class": 1}])
+    assert prepare_record_dataset(stream) is stream
+
+
+def test_prepare_is_exported_from_the_package_root() -> None:
+    import recordstream
+
+    assert "prepare_record_dataset" in recordstream.__all__

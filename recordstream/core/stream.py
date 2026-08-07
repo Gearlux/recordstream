@@ -500,3 +500,23 @@ def ensure_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]])
     # dataset"). Widening that annotation with a Protocol breaks `to_pydantic` for every
     # Stream, so the exception is documented here instead. See TASKS.md.
     return Stream(source=cast(Iterable[Any], source))
+
+
+def prepare_record_dataset(source: Optional[Union[_ConfluidFluid, RecordSource]]) -> Optional["Stream"]:
+    """Normalize a wired dataset slot's TYPE and its STATE, in THIS process.
+
+    The composition every forking consumer writes:
+    :func:`ensure_record_dataset` normalizes the TYPE (any wired source into a record-yielding
+    map-style ``Stream``) and :func:`ensure_materialized` normalizes the STATE (one whole record
+    read here, so a lazy source is built in the CALLING process rather than in a forked
+    ``DataLoader`` worker — where a first read SIGSEGVs through ``_scproxy`` / CoreFoundation on
+    macOS with no Python traceback; the full account lives on :func:`ensure_materialized`).
+
+    ``None`` passes through, so an unwired optional split (``val_set``) needs no guard at the
+    call site. This function exists because the pair was re-composed identically in every
+    training runnable across the workspace ("``_prepare``"); a consumer needing only one half
+    still calls that half directly.
+    """
+    if source is None:
+        return None
+    return cast("Stream", ensure_materialized(ensure_record_dataset(source)))
