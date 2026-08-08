@@ -81,7 +81,7 @@ too.
 from recordstream import FlowGraph, Stream
 from recordstream.sources import HuggingFaceSource
 
-graph = FlowGraph.from_yaml("graph.yaml", source=HuggingFaceSource(path="mnist"))
+graph = FlowGraph.from_yaml("graph.yaml", source=HuggingFaceSource(path="ylecun/mnist"))
 for record in graph:
     ...
 
@@ -116,7 +116,7 @@ source:
 from recordstream import Stream
 from recordstream.sources import HuggingFaceSource
 
-stream = Stream.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="mnist"))
+stream = Stream.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="ylecun/mnist"))
 ```
 
 The helper **materializes** the deferred `!class:` markers eagerly (via `confluid.materialize`) so

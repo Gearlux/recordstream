@@ -25,11 +25,13 @@ but a generated one will use the submodule spelling. Rationale:
 
 ```yaml
 hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
-  path: mnist
+  path: ylecun/mnist
   input_feature: image
   target_feature: label
   metadata_features: ["*"]   # keep every other column as its own record entry (the default)
 ```
+
+> **Use the namespaced repo id** (`ylecun/mnist`, never the legacy bare `mnist`): current `huggingface_hub` rejects namespace-less ids (`HfUriError: Repository id must be 'namespace/name'`, measured 2026-08-06). Worse than the hard failure is the soft one — with a stale local cache present, `datasets` logs "couldn't be found on the Hugging Face Hub" and silently loads the cached copy, so a bare id can appear to work on one machine and fail on a fresh one.
 
 > **Lazy & zero-arg construction** — `HuggingFaceSource` follows the workspace lazy-init convention: the constructor does no work (no network), so `HuggingFaceSource()` is valid and building one is free. The dataset is downloaded only on first access to the read-only `.dataset` property (cached thereafter; reset `_dataset` to reload), and `.resolved_metadata_features` (the `"*"` expansion) is derived lazily from the loaded columns. `path` is therefore optional at construction and validated lazily — accessing `.dataset` with an empty `path` raises a clear `ValueError`.
 
@@ -49,7 +51,7 @@ The views are disjoint and complementary, computed once over a single determinis
 
 ```yaml
 hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
-  path: mnist
+  path: ylecun/mnist
   split: train
 
 my_split: !class:recordstream.sources.split.DatasetSplit()

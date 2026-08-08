@@ -1084,7 +1084,7 @@ searches `__init__.py` and raises `OSError: could not find class definition`.
 ```yaml
 # canonical — what a generator emits, matching cls.__module__
 train_set: !class:recordstream.sources.huggingface.HuggingFaceSource
-  path: mnist
+  path: ylecun/mnist
   split: train
 
 my_split: !class:recordstream.sources.split.DatasetSplit()
