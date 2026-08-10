@@ -80,6 +80,20 @@ want, and why the rule is one function rather than three copies of it.
 registry — the extensibility surface a domain package or user type plugs into (one class + one
 decorator, no core edit).
 
+An op with a `field=`-style knob resolves the entry it reads with `resolve_item` (or
+`resolve_entry` when it also needs the key back) — an explicit field must exist and hold the
+expected item type (each miss raises a `ValueError` naming the op, the parameter and the record's
+keys), while a blank field falls back to the first value of that type:
+
+```python
+from recordstream import Image, resolve_item
+image = resolve_item(record, self.image_field, Image, owner="SaveImage", param="image_field")
+```
+
+`fallback=False` makes a blank field an error too (for ops whose key is mandatory config);
+`required=False` turns every miss into `None` (the probe form). Twelve per-class `_find_*`
+copies in one consumer package predated the extraction — don't re-derive the branch.
+
 ### Ops — type dispatch with once-per-record parameters
 
 A `Transform` (`recordstream.transform`) samples its parameters ONCE per record

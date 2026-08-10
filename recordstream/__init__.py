@@ -67,6 +67,8 @@ from recordstream.items import (
     item_types,
     item_value,
     register_item,
+    resolve_entry,
+    resolve_item,
     with_data,
 )
 from recordstream.labels import LabelMap, class_counts, inverse_frequency_weights
@@ -123,6 +125,8 @@ __all__ = [
     "is_item",
     "item_data",
     "item_value",
+    "resolve_entry",
+    "resolve_item",
     "with_data",
     "Transform",
     "Pipeline",

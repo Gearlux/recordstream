@@ -134,3 +134,67 @@ class TestRegistry:
                 self.points = points
 
         assert "Keypoints" in item_type_names() and get_item_type("Keypoints") is Keypoints
+
+
+class TestResolveEntry:
+    """resolve_entry/resolve_item — THE field-or-first record-key resolution."""
+
+    def _record(self) -> dict:
+        import numpy as np
+
+        from recordstream import Image, Label
+
+        return {"class": Label("cat"), "picture": Image(np.zeros((4, 6, 3), dtype=np.uint8)), "samplerate": 1.0}
+
+    def test_explicit_field_returns_key_and_value(self) -> None:
+        from recordstream import Image, resolve_entry
+
+        key, item = resolve_entry(self._record(), "picture", Image, owner="Op", param="image_field")
+        assert key == "picture" and isinstance(item, Image)
+
+    def test_blank_field_falls_back_to_first_of_type(self) -> None:
+        from recordstream import Image, resolve_item
+
+        item = resolve_item(self._record(), "", Image, owner="Op")
+        assert isinstance(item, Image)
+
+    def test_missing_explicit_field_raises_naming_owner_param_and_keys(self) -> None:
+        import pytest
+
+        from recordstream import Image, resolve_item
+
+        with pytest.raises(ValueError, match=r"Op: image_field 'nope' not in record \(keys: .*picture"):
+            resolve_item(self._record(), "nope", Image, owner="Op", param="image_field")
+
+    def test_wrong_type_raises_naming_actual_and_expected(self) -> None:
+        import pytest
+
+        from recordstream import Image, resolve_item
+
+        with pytest.raises(ValueError, match="Op: field 'class' is Label, expected Image"):
+            resolve_item(self._record(), "class", Image, owner="Op")
+
+    def test_no_match_raises_naming_the_type(self) -> None:
+        import pytest
+
+        from recordstream import Mask, resolve_item
+
+        with pytest.raises(ValueError, match=r"Op: no Mask entry in record"):
+            resolve_item(self._record(), "", Mask, owner="Op")
+
+    def test_fallback_false_makes_blank_field_an_error(self) -> None:
+        import pytest
+
+        from recordstream import Image, resolve_item
+
+        with pytest.raises(ValueError, match="Op: image_field '' not in record"):
+            resolve_item(self._record(), "", Image, owner="Op", param="image_field", fallback=False)
+
+    def test_required_false_turns_every_miss_into_none(self) -> None:
+        from recordstream import Image, Mask, resolve_item
+
+        record = self._record()
+        assert resolve_item(record, "nope", Image, owner="Op", required=False) is None
+        assert resolve_item(record, "class", Image, owner="Op", required=False) is None
+        assert resolve_item(record, "", Mask, owner="Op", required=False) is None
+        assert resolve_item(record, "", Image, owner="Op", required=False) is not None

@@ -39,7 +39,7 @@ through ``__new__``, which fights confluid's ``__init__`` validation wrap).
 """
 
 from dataclasses import dataclass, field, fields, is_dataclass, replace
-from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, cast
+from typing import Any, Dict, List, Literal, Optional, Tuple, Type, TypeVar, cast, overload
 
 import numpy as np
 
@@ -66,6 +66,8 @@ __all__ = [
     "is_item",
     "item_data",
     "item_value",
+    "resolve_entry",
+    "resolve_item",
     "with_data",
 ]
 
@@ -334,3 +336,129 @@ def with_data(item: _ItemT, new_data: Any) -> _ItemT:
     if is_dataclass(item) and not isinstance(item, type) and any(f.name == "data" for f in fields(item)):
         return cast(_ItemT, replace(cast(Any, item), data=new_data))
     raise TypeError(f"with_data: {type(item).__name__} has no payload slot to replace")
+
+
+_ResolvedT = TypeVar("_ResolvedT")
+
+
+@overload
+def resolve_entry(
+    record: Record,
+    field: Optional[str],
+    item_type: Type[_ResolvedT],
+    *,
+    owner: str,
+    param: str = ...,
+    fallback: bool = ...,
+    required: Literal[True] = ...,
+) -> Tuple[str, _ResolvedT]: ...
+
+
+@overload
+def resolve_entry(
+    record: Record,
+    field: Optional[str],
+    item_type: Type[_ResolvedT],
+    *,
+    owner: str,
+    param: str = ...,
+    fallback: bool = ...,
+    required: Literal[False] = ...,
+) -> Optional[Tuple[str, _ResolvedT]]: ...
+
+
+def resolve_entry(
+    record: Record,
+    field: Optional[str],
+    item_type: Type[_ResolvedT],
+    *,
+    owner: str,
+    param: str = "field",
+    fallback: bool = True,
+    required: bool = True,
+) -> Optional[Tuple[str, _ResolvedT]]:
+    """Resolve the ``(key, value)`` entry of ``item_type`` a field-pinned op reads.
+
+    THE record-key resolution every ``field=``-style op used to re-derive per class
+    (twelve byte-parallel private ``_find_*`` copies in one consumer package before the
+    extraction — the same story as :func:`item_value` and ``first_value``): an explicit
+    ``field`` must exist and hold an ``item_type`` value — each miss raises a
+    ``ValueError`` naming ``owner``, ``param`` and the record's keys — while a blank
+    ``field`` falls back to the FIRST ``item_type`` value in record order.
+
+    Args:
+        record: The record dict being resolved against.
+        field: The configured record key; blank/``None`` engages the first-of-type fallback.
+        item_type: The item class the entry must be an instance of.
+        owner: The op/class name error messages lead with (e.g. ``"SaveImage"``).
+        param: The ctor-param name error messages cite (e.g. ``"image_field"``).
+        fallback: When False, a blank ``field`` is an error like any other missing key —
+            for ops whose key is mandatory config rather than a convenience default.
+        required: When False, every miss returns ``None`` instead of raising (the probe
+            form — "use it if the record has one").
+
+    Returns:
+        ``(key, value)`` — the resolved record key and its typed value; ``None`` only
+        when ``required=False`` missed.
+    """
+    type_name = item_type.__name__
+    if field or not fallback:
+        if field not in record:
+            if not required:
+                return None
+            raise ValueError(f"{owner}: {param} {field!r} not in record (keys: {list(record)})")
+        value = record[field]
+        if not isinstance(value, item_type):
+            if not required:
+                return None
+            raise ValueError(f"{owner}: {param} {field!r} is {type(value).__name__}, expected {type_name}")
+        return field, value
+    for key, value in record.items():
+        if isinstance(value, item_type):
+            return key, value
+    if not required:
+        return None
+    raise ValueError(f"{owner}: no {type_name} entry in record (keys: {list(record)})")
+
+
+@overload
+def resolve_item(
+    record: Record,
+    field: Optional[str],
+    item_type: Type[_ResolvedT],
+    *,
+    owner: str,
+    param: str = ...,
+    fallback: bool = ...,
+    required: Literal[True] = ...,
+) -> _ResolvedT: ...
+
+
+@overload
+def resolve_item(
+    record: Record,
+    field: Optional[str],
+    item_type: Type[_ResolvedT],
+    *,
+    owner: str,
+    param: str = ...,
+    fallback: bool = ...,
+    required: Literal[False] = ...,
+) -> Optional[_ResolvedT]: ...
+
+
+def resolve_item(
+    record: Record,
+    field: Optional[str],
+    item_type: Type[_ResolvedT],
+    *,
+    owner: str,
+    param: str = "field",
+    fallback: bool = True,
+    required: bool = True,
+) -> Optional[_ResolvedT]:
+    """The value half of :func:`resolve_entry` — the common case when the key is not needed."""
+    entry = resolve_entry(
+        record, field, item_type, owner=owner, param=param, fallback=fallback, required=cast(Any, required)
+    )
+    return None if entry is None else entry[1]
