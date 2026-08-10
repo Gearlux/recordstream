@@ -28,20 +28,32 @@ _TYPE_ATTR = "__item_type__"
 _ORDER_ATTR = "__field_order__"
 
 
-def _read_record(group: h5py.Group) -> Record:
-    """Decode one ``sNNNNNN`` record group of the record key-group layout."""
+def read_record_group(group: h5py.Group, slices: Optional[Dict[str, slice]] = None) -> Record:
+    """Decode one ``sNNNNNN`` record group of the record key-group layout.
+
+    ``slices`` maps a record KEY to a slice applied to that field's ``data`` dataset at
+    read time — an h5py partial read, so only the requested span of the payload ever
+    leaves the file. This is what lets a windowing source slice one window out of a
+    large stored row (e.g. a whole-capture IQ array) without materializing the row:
+    the decoded item is identical to reading the full payload and slicing in memory
+    (pinned by the storage tests). Keys absent from ``slices`` (and every attr) are
+    read in full; a sliced key whose group has no ``data`` dataset raises ``KeyError``.
+    """
     order = json.loads(group.attrs[_ORDER_ATTR])
     record: Record = {}
     payload: Any
     for name in order:
         fgrp = group[name]
         type_name = str(fgrp.attrs[_TYPE_ATTR])
+        window = (slices or {}).get(name)
         if type_name == PLAIN_TYPE:
             # A plain value: array payload as the ``data`` dataset, scalar payload as the
             # ``value`` attr (JSON-marked when structured) — see HDF5Sink._write_record.
             if "data" in fgrp:
-                payload = fgrp["data"][()]
+                payload = fgrp["data"][window] if window is not None else fgrp["data"][()]
             else:
+                if window is not None:
+                    raise KeyError(f"read_record_group: field {name!r} has no 'data' dataset to slice")
                 payload = restore_attrs({PLAIN_VALUE: fgrp.attrs[PLAIN_VALUE]}, {})[PLAIN_VALUE]
             record[name] = decode_item(EncodedItem(type_name=type_name, payload=payload, attrs={}))
             continue
@@ -51,7 +63,12 @@ def _read_record(group: h5py.Group) -> Record:
         if isinstance(agrp, h5py.Group):
             for key, dset in agrp.items():
                 arrays[key] = dset[()]
-        payload = fgrp["data"][()] if "data" in fgrp else None
+        if window is not None:
+            if "data" not in fgrp:
+                raise KeyError(f"read_record_group: field {name!r} has no 'data' dataset to slice")
+            payload = fgrp["data"][window]
+        else:
+            payload = fgrp["data"][()] if "data" in fgrp else None
         attrs = restore_attrs(dict(plain), arrays)
         record[name] = decode_item(EncodedItem(type_name=type_name, payload=payload, attrs=attrs))
     return record
@@ -91,7 +108,7 @@ class HDF5Source(Storage, DataSource):
         if self._file is None:
             return
         for name in sorted(k for k in self._file.keys() if k.startswith("s")):
-            yield _read_record(self._file[name])
+            yield read_record_group(self._file[name])
 
     def __len__(self) -> int:
         self.open()

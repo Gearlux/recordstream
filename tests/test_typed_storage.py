@@ -10,7 +10,7 @@ import pytest
 from recordstream import Boxes, Image, Label, register_item
 from recordstream.storage.base import TYPED_FORMAT, require_record_format, restore_attrs, split_attrs
 from recordstream.storage.directory import DirectorySink, DirectorySource
-from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
+from recordstream.storage.hdf5 import HDF5Sink, HDF5Source, read_record_group
 from recordstream.storage.query import MetadataFilterSource, record_metadata, scan_hdf5_metadata, scan_zarr_metadata
 from recordstream.storage.zarr import ZarrBatchSink, ZarrBatchSource, ZarrGroupSink, ZarrGroupSource
 
@@ -156,6 +156,44 @@ class TestHDF5:
             sink.write(_records()[0])
             with pytest.raises(TypeError, match="expected a record dict"):
                 sink.write(np.zeros(3))
+
+
+class TestReadRecordGroupSlices:
+    """``read_record_group(group, slices=...)`` — the partial-payload read a windowing source uses."""
+
+    def _first_group(self, path: Path) -> "h5py.Group":
+        handle = h5py.File(path, "r")
+        return handle["s000000"]
+
+    def _write_one(self, tmp_path: Path) -> Path:
+        path = tmp_path / "t.h5"
+        with HDF5Sink(path=path, overwrite=True) as sink:
+            sink.write(_records()[0])
+        return path
+
+    def test_sliced_read_equals_full_read_then_slice(self, tmp_path: Path) -> None:
+        group = self._first_group(self._write_one(tmp_path))
+        full = read_record_group(group)
+        part = read_record_group(group, slices={"sig": slice(2, 6)})
+        # The sliced field: identical item type + attrs, payload = the full payload's slice.
+        assert type(part["sig"]) is type(full["sig"])
+        assert part["sig"].samplerate == full["sig"].samplerate
+        assert np.array_equal(np.asarray(part["sig"].data), np.asarray(full["sig"].data)[2:6])
+        # Attrs (incl. array-valued ones) are never sliced.
+        assert np.array_equal(np.asarray(part["sig"].mask), np.asarray(full["sig"].mask))
+        # Every other field is byte-identical to the full read.
+        assert np.array_equal(np.asarray(part["image"]), np.asarray(full["image"]))
+        assert part["gain_db"] == full["gain_db"]
+
+    def test_plain_array_field_slices_too(self, tmp_path: Path) -> None:
+        group = self._first_group(self._write_one(tmp_path))
+        part = read_record_group(group, slices={"window": slice(1, 3)})
+        assert np.array_equal(part["window"], np.hanning(4)[1:3])
+
+    def test_slicing_a_payload_free_field_raises(self, tmp_path: Path) -> None:
+        group = self._first_group(self._write_one(tmp_path))
+        with pytest.raises(KeyError, match="no 'data' dataset"):
+            read_record_group(group, slices={"gain_db": slice(0, 1)})
 
 
 class TestZarr:

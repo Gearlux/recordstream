@@ -71,6 +71,24 @@ item_data(loaded["mask"])   # the full mask array, byte-exact (not a truncated r
 loaded["image"].layout      # item attrs round-trip too
 ```
 
+## Partial payload reads (`read_record_group`)
+
+`recordstream.storage.hdf5.read_record_group(group, slices=...)` is the public form of the
+HDF5 row decoder `HDF5Source` iterates through. `slices` maps a record KEY to a slice applied
+to that field's `data` dataset **at read time** — an h5py partial read, so only the requested
+span of the payload ever leaves the file. A consumer windowing large stored rows (e.g. a
+whole-capture signal archived once, re-windowed onto many grids at read time) decodes each
+window without materializing the row; the decoded item is identical to a full read followed by
+an in-memory slice, and attrs are never sliced:
+
+```python
+import h5py
+from recordstream.storage.hdf5 import read_record_group
+
+with h5py.File("ds.h5", "r") as handle:
+    window = read_record_group(handle["s000000"], slices={"signal": slice(1000, 2000)})
+```
+
 ## Queryable metadata (`recordstream.storage.query`)
 
 Filter stored records by metadata predicates *without loading arrays*: sources implementing the
