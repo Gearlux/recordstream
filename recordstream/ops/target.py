@@ -19,7 +19,7 @@ from typing import Any, Dict, Literal, Optional, Tuple
 import numpy as np
 from confluid import configurable
 
-from recordstream.items import Boxes, Label, Mask, MultiLabel, Record, item_data
+from recordstream.items import Boxes, Label, Mask, MultiLabel, Record, item_data, resolve_item
 from recordstream.transform import Transform
 
 #: COCO / HuggingFace bounding-box layouts (all in absolute pixels). Closed set so a typo
@@ -73,6 +73,28 @@ def _lookup(value: Any, mapping: Dict[Any, Any], ignore_unknown: bool, default: 
         f"{op_name}: value {value!r} not in mapping (keys: {record_keys}{suffix}). "
         "Pass ignore_unknown=True to substitute `default` instead."
     )
+
+
+def _find_label_key(record: Record, field: Optional[str], op_name: str) -> str:
+    """Resolve the KEY of the label field to shape (``field`` or the first label item).
+
+    Matches a :class:`~recordstream.Label` OR a :class:`~recordstream.MultiLabel` — both are
+    label items, and a multi-label target must be shaped through the same op. Shared by
+    :class:`EncodeTarget` / :class:`DecodeTarget`, which carried byte-parallel copies.
+    Deliberately NOT :func:`~recordstream.resolve_entry`: the gate is a type TUPLE and the
+    wrong-type miss is a ``TypeError`` (the callers' pinned API contract), both outside the
+    one-type/``ValueError`` shape the shared resolver pins.
+    """
+    if field:
+        if field not in record:
+            raise ValueError(f"{op_name}: field {field!r} not in record (keys: {list(record)})")
+        item = record[field]
+        if not isinstance(item, (Label, MultiLabel)):
+            raise TypeError(f"{op_name}: field {field!r} is {type(item).__name__}, expected a Label or MultiLabel")
+        return field
+    for key, _item in ((k, v) for k, v in record.items() if isinstance(v, (Label, MultiLabel))):
+        return key
+    raise ValueError(f"{op_name}: no Label/MultiLabel field in record (keys: {list(record)})")
 
 
 def coco_to_detection(
@@ -205,23 +227,8 @@ class EncodeTarget(Transform):
         self.output = str(output)
 
     def _find_label(self, record: Record) -> str:
-        """Resolve the KEY of the label field to encode (``self.field`` or the first label item).
-
-        Matches a :class:`~recordstream.Label` OR a :class:`~recordstream.MultiLabel` — both are
-        label items, and a multi-label target must be encodeable through the same op.
-        """
-        if self.field:
-            if self.field not in record:
-                raise ValueError(f"EncodeTarget: field {self.field!r} not in record (keys: {list(record)})")
-            item = record[self.field]
-            if not isinstance(item, (Label, MultiLabel)):
-                raise TypeError(
-                    f"EncodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label or MultiLabel"
-                )
-            return self.field
-        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, (Label, MultiLabel))):
-            return key
-        raise ValueError(f"EncodeTarget: no Label/MultiLabel field in record (keys: {list(record)})")
+        """Resolve the KEY of the label field to encode (via the shared :func:`_find_label_key`)."""
+        return _find_label_key(record, self.field, "EncodeTarget")
 
     def __call__(self, record: Record) -> Record:
         if not self.mapping:
@@ -275,23 +282,8 @@ class DecodeTarget(Transform):
         self.output = str(output)
 
     def _find_label(self, record: Record) -> str:
-        """Resolve the KEY of the label field to decode (``self.field`` or the first label item).
-
-        Matches a :class:`~recordstream.Label` OR a :class:`~recordstream.MultiLabel` — both are
-        label items, and a multi-label target must be decodeable through the same op.
-        """
-        if self.field:
-            if self.field not in record:
-                raise ValueError(f"DecodeTarget: field {self.field!r} not in record (keys: {list(record)})")
-            item = record[self.field]
-            if not isinstance(item, (Label, MultiLabel)):
-                raise TypeError(
-                    f"DecodeTarget: field {self.field!r} is {type(item).__name__}, expected a Label or MultiLabel"
-                )
-            return self.field
-        for key, _item in ((k, v) for k, v in record.items() if isinstance(v, (Label, MultiLabel))):
-            return key
-        raise ValueError(f"DecodeTarget: no Label/MultiLabel field in record (keys: {list(record)})")
+        """Resolve the KEY of the label field to decode (via the shared :func:`_find_label_key`)."""
+        return _find_label_key(record, self.field, "DecodeTarget")
 
     def __call__(self, record: Record) -> Record:
         if not self.mapping:
@@ -533,8 +525,10 @@ class ResizeDetection(Transform):
 
         merged[self.input_key] = with_data(item, resized) if isinstance(item, NDArrayItem) else resized
 
-        target = record.get(self.target_key)
-        if isinstance(target, Boxes):
+        target = resolve_item(
+            record, self.target_key, Boxes, owner="ResizeDetection", param="target_key", fallback=False, required=False
+        )
+        if target is not None:
             import dataclasses
 
             # An EMPTY target is re-framed too. Scaling no boxes is a no-op, but leaving the
