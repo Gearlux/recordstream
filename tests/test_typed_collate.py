@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from recordstream import Image, Label, Mask, Record, Regions, collate, collate_records, get_collate, register_item
+from recordstream import Boxes, Image, Label, Mask, Record, collate, collate_records, get_collate, register_item
 
 
 @register_item
@@ -90,12 +90,12 @@ def _ragged_detection_records() -> List[Record]:
     return [
         {
             "image": Image(np.zeros((4, 4, 3), dtype=np.float32)),
-            "target": Regions(boxes=[[0, 0, 2, 2]], labels=[1]),
+            "target": Boxes(boxes=[[0, 0, 2, 2]], labels=[1]),
             "pack": "a",
         },
         {
             "image": Image(np.zeros((4, 4, 3), dtype=np.float32)),
-            "target": Regions(boxes=[[0, 0, 1, 1], [1, 1, 3, 3], [0, 2, 2, 4]], labels=[0, 1, 0]),
+            "target": Boxes(boxes=[[0, 0, 1, 1], [1, 1, 3, 3], [0, 2, 2, 4]], labels=[0, 1, 0]),
             "pack": "b",
         },
     ]
@@ -105,7 +105,7 @@ def test_generic_collate_leaves_ragged_regions_as_lists() -> None:
     # Rule 2: the generic fold can only give per-record lists for a wrapper item —
     # exactly why detection registers its own collate.
     batch = collate_records(_ragged_detection_records())
-    assert isinstance(batch["target"], Regions)
+    assert isinstance(batch["target"], Boxes)
     assert [len(b) for b in batch["target"].boxes] == [1, 3]
 
 

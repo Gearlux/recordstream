@@ -7,7 +7,7 @@ import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
-from recordstream.items import Mask, NDArrayItem, Record, Regions, item_data
+from recordstream.items import Boxes, Mask, NDArrayItem, Record, item_data
 from recordstream.transform import Transform
 
 logger = get_logger(__name__)
@@ -187,10 +187,16 @@ class Threshold(Transform):
         return {**record, self.output: Mask(mask)}
 
 
-def connected_component_bboxes(
+def connected_component_boxes(
     mask: np.ndarray, min_area_bins: int = 1, connectivity: int = 4
 ) -> List[Tuple[int, int, int, int]]:
-    """Label connected ``True`` regions of a 2-D bool mask → ``(row_min, row_max, col_min, col_max)`` inclusive tuples.
+    """Label connected ``True`` regions of a 2-D bool mask → HALF-OPEN xyxy ``(x0, y0, x1, y1)`` tuples.
+
+    The pixel-box convention every :class:`~recordstream.Boxes` producer emits: x = column,
+    y = row, far edges EXCLUSIVE — ``mask[y0:y1, x0:x1]`` covers the component exactly.
+    (Renamed from ``connected_component_bboxes``, which returned INCLUSIVE
+    ``(row_min, row_max, col_min, col_max)`` tuples — the rename makes a stale caller fail
+    loudly instead of silently mis-reading axes.)
 
     Components smaller than ``min_area_bins`` are dropped. ``connectivity`` is ``4``
     (orthogonal neighbors) or ``8`` (orthogonal + diagonal). Shared by :class:`ConnectedComponents`
@@ -222,10 +228,10 @@ def connected_component_bboxes(
                 continue
             bboxes.append(
                 (
-                    int(row_slice.start),
-                    int(row_slice.stop) - 1,
                     int(col_slice.start),
-                    int(col_slice.stop) - 1,
+                    int(row_slice.start),
+                    int(col_slice.stop),
+                    int(row_slice.stop),
                 )
             )
     return bboxes
@@ -233,13 +239,13 @@ def connected_component_bboxes(
 
 @configurable(category="op", group="numpy")
 class ConnectedComponents(Transform):
-    """A boolean ``Mask`` → a ``Regions`` item.
+    """A boolean ``Mask`` → a ``Boxes`` item.
 
     Reads the :class:`~recordstream.Mask` at ``field`` (blank = the first ``Mask`` in the record, else the
     first array-bearing item) as a 2-D boolean array and labels its connected ``True`` regions into
-    ``(row_min, row_max, col_min, col_max)`` inclusive bin-box tuples via
-    :func:`connected_component_bboxes`, writing them as a :class:`~recordstream.Regions` item under
-    ``output`` (RAW detections, not model predictions). Any other key passes through.
+    HALF-OPEN pixel xyxy ``(x0, y0, x1, y1)`` tuples via :func:`connected_component_boxes`,
+    writing them as a :class:`~recordstream.Boxes` item under ``output`` with ``canvas`` set to
+    the mask's shape (RAW detections, not model predictions). Any other key passes through.
 
     Components smaller than ``min_area_bins`` are dropped; ``connectivity`` selects the 4- or
     8-neighborhood. Requires ``scipy`` (``pip install recordstream[vision]``).
@@ -248,12 +254,12 @@ class ConnectedComponents(Transform):
         min_area_bins: Minimum component area in bins; smaller connected regions are dropped (``>= 1``).
         connectivity: Pixel neighborhood — ``4`` (orthogonal only) or ``8`` (orthogonal + diagonal).
         field: Name of the ``Mask`` field to label; blank (default) picks the first ``Mask`` (else first array).
-        output: Name of the key the ``Regions`` item is written to (added if new).
+        output: Name of the key the ``Boxes`` item is written to (added if new).
     """
 
     handles = (Mask,)
     consumes = (Mask,)
-    produces = (Regions,)
+    produces = (Boxes,)
 
     def __init__(
         self,
@@ -298,14 +304,16 @@ class ConnectedComponents(Transform):
 
     def __call__(self, record: Record) -> Record:
         mask = self._find_mask(record)
-        bboxes = connected_component_bboxes(mask, self.min_area_bins, self.connectivity)
-        return {**record, self.output: Regions(boxes=list(bboxes))}
+        boxes = connected_component_boxes(mask, self.min_area_bins, self.connectivity)
+        # canvas is filled in even for an EMPTY box set — a frame check that silently skips
+        # exactly the records with nothing to check reports a clean bill for the wrong reason.
+        return {**record, self.output: Boxes(boxes=list(boxes), canvas=(mask.shape[0], mask.shape[1]))}
 
 
 __all__ = [
     "resolve_expression",
     "threshold_array",
-    "connected_component_bboxes",
+    "connected_component_boxes",
     "LowComparison",
     "HighComparison",
     "Threshold",

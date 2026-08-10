@@ -2,7 +2,7 @@
 
 ## What an op processes — dispatch on value type
 
-A **record** is a plain dict of typed values (`Image`, `Mask`, `Regions`, `Label`, … — see [record-model.md](record-model.md)). A native op is a `Transform`: it declares which value TYPES it handles and registers a per-type **kernel**; it samples its parameters ONCE per record (`get_params`), then applies the matching kernel to every value whose type it handles, passing untouched values through:
+A **record** is a plain dict of typed values (`Image`, `Mask`, `Boxes`, `Label`, … — see [record-model.md](record-model.md)). A native op is a `Transform`: it declares which value TYPES it handles and registers a per-type **kernel**; it samples its parameters ONCE per record (`get_params`), then applies the matching kernel to every value whose type it handles, passing untouched values through:
 
 ```python
 from recordstream import Record, Transform, Image
@@ -23,7 +23,7 @@ Because the parameters are sampled once and shared, an op that handles several t
 Two smaller shapes round it out:
 
 - **A plain function** becomes an op via `as_transform(fn, handles=(Image,), field="image")` — `field=` pins the op to one named key (still type-gated).
-- **A type-changing op** — read one key, write a differently-typed item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `ConnectedComponents`: `Mask` → `Regions`) — subclasses `Transform` and overrides `__call__` instead of registering a same-type kernel.
+- **A type-changing op** — read one key, write a differently-typed item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `ConnectedComponents`: `Mask` → `Boxes`) — subclasses `Transform` and overrides `__call__` instead of registering a same-type kernel.
 
 Bare library transforms (torchvision `transforms.v2` walking the dict natively, albumentations dispatching by keyword name) drop straight into any ops list **as-is** — the engine's op-family dispatch invokes each one the way its own library expects. See [record-model.md](record-model.md#mixing-libraries--as-is-no-adapters) and [augmentation.md](augmentation.md).
 
@@ -72,7 +72,7 @@ it holds *plain* values, so whether an op like `ToTensor` ran ends up choosing f
 Two things make the choice free:
 
 * **every read-back helper accepts both shapes** — `batch_values` unwraps a list-of-items
-  element-wise, `batch_regions` reads a batched `Regions` or a list of them, `batch_metadata`
+  element-wise, `batch_boxes` reads a batched `Boxes` or a list of them, `batch_metadata`
   transposes either — so a consumer never branches on which collate ran;
 * **a stack failure explains itself**, naming the key, the differing shapes and the `"list"` way
   out, rather than surfacing numpy's bare *"all input arrays must have the same shape"*.

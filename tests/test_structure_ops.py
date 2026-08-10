@@ -3,18 +3,18 @@
 import numpy as np
 import pytest
 
-from recordstream import Image, Label, Record, Regions
+from recordstream import Boxes, Image, Label, Record
 from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
 
 
 def _record() -> Record:
-    return {"image": Image(np.zeros((2, 2, 3))), "regions": Regions(boxes=[[0, 0, 1, 1]]), "class": Label("x")}
+    return {"image": Image(np.zeros((2, 2, 3))), "regions": Boxes(boxes=[[0, 0, 1, 1]]), "class": Label("x")}
 
 
 class TestRenameField:
     def test_renames_preserving_order(self) -> None:
         out = RenameField(src="regions", dst="boxes")(_record())
-        assert "regions" not in out and isinstance(out["boxes"], Regions)
+        assert "regions" not in out and isinstance(out["boxes"], Boxes)
         assert list(out.keys()) == ["image", "boxes", "class"]  # renamed in place
 
     def test_rename_onto_existing_replaces(self) -> None:

@@ -18,7 +18,7 @@ import torch
 from confluid import configurable
 from torchvision.transforms import v2
 
-from recordstream import FilterOp, Image, Label, Mask, Pipeline, Record, Regions, Transform, WrappedOp
+from recordstream import Boxes, FilterOp, Image, Label, Mask, Pipeline, Record, Transform, WrappedOp
 from recordstream.core import Stream, _apply_op, _is_albumentations, _is_torchvision_v2
 
 
@@ -398,8 +398,8 @@ def _captured_warnings() -> Iterator[List[str]]:
         logger.remove(sink_id)
 
 
-class TestGeometryLeavingRegionsBehind:
-    """A `Regions` is not in albumentations' key vocabulary, so it never reaches the library.
+class TestGeometryLeavingBoxesBehind:
+    """A `Boxes` is not in albumentations' key vocabulary, so it never reaches the library.
 
     That is correct for the dispatch — passing a foreign item would break the call — but it
     means a geometry-changing transform moves the pixels while the boxes stay put, with no
@@ -413,7 +413,7 @@ class TestGeometryLeavingRegionsBehind:
     def _record() -> Record:
         return {
             "image": Image(np.zeros((200, 200, 3), dtype="uint8")),
-            "target": Regions(boxes=np.array([[10.0, 10.0, 100.0, 100.0]]), labels=np.array([1])),
+            "target": Boxes(boxes=np.array([[10.0, 10.0, 100.0, 100.0]]), labels=np.array([1])),
         }
 
     @pytest.fixture(autouse=True)
@@ -507,10 +507,10 @@ ops:
         assert [round(v, 1) for v in out["bboxes"][0]] == [3.2, 3.2, 32.0, 32.0], "boxes scaled with the image"
 
 
-class TestV2GeometryLeavingRegionsBehind:
+class TestV2GeometryLeavingBoxesBehind:
     """The same gap in the OTHER family, reached by a different route.
 
-    albumentations misses a `Regions` because it is not in the KEY vocabulary; torchvision v2
+    albumentations misses a `Boxes` because it is not in the KEY vocabulary; torchvision v2
     misses it because it is not one of v2's tv_tensor TYPES. Measured: `v2.Resize((64, 64))`
     takes a 200x200 image to 64x64 with the boxes still on `[10, 10, 100, 100]`, while the same
     transform over a `tv_tensors.BoundingBoxes` rescales them to `[3.2, 3.2, 32, 32]`.
@@ -520,7 +520,7 @@ class TestV2GeometryLeavingRegionsBehind:
     def _record() -> Record:
         return {
             "image": Image(np.zeros((200, 200, 3), dtype="uint8")),
-            "target": Regions(boxes=torch.tensor([[10.0, 10.0, 100.0, 100.0]]), labels=torch.tensor([1])),
+            "target": Boxes(boxes=torch.tensor([[10.0, 10.0, 100.0, 100.0]]), labels=torch.tensor([1])),
         }
 
     @pytest.fixture(autouse=True)

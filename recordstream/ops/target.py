@@ -6,11 +6,11 @@
   train / eval / predict share one identical ordering.
 * :class:`CocoToTorchVisionDetection` turns a HuggingFace / COCO ``objects`` annotation
   (``{bbox, category}``) into a torchvision detection target rendered as a
-  :class:`~recordstream.Regions` item.
+  :class:`~recordstream.Boxes` item.
 * :class:`MasksToDetectionBoxes` derives detection boxes from a segmentation ``Mask``.
 
 The detection conversions are the modality-neutral, image-detection counterparts of
-waivefront's signal-domain region ops. The encoded target value is written verbatim; wrap
+a signal package's domain-specific region ops. The encoded target value is written verbatim; wrap
 it into a framework tensor downstream (e.g. a collate function) when a loss needs one.
 """
 
@@ -19,7 +19,7 @@ from typing import Any, Dict, Literal, Optional, Tuple
 import numpy as np
 from confluid import configurable
 
-from recordstream.items import Label, Mask, MultiLabel, Record, Regions, item_data
+from recordstream.items import Boxes, Label, Mask, MultiLabel, Record, item_data
 from recordstream.transform import Transform
 
 #: COCO / HuggingFace bounding-box layouts (all in absolute pixels). Closed set so a typo
@@ -37,7 +37,7 @@ def _source_frame(record: Record) -> Optional[Tuple[int, int]]:
     yield), then as the first :class:`~recordstream.Image` item.
 
     It is deliberately narrow: only a declared image is trusted. A generic "first array with two
-    dimensions" search would happily read a ``Regions``' own ``[N, 4]`` box array as an ``N x 4``
+    dimensions" search would happily read a ``Boxes``' own ``[N, 4]`` box array as an ``N x 4``
     raster and record a confident lie. ``None`` is an ordinary answer — it leaves ``canvas``
     exactly as it was before this was recorded at all, so nothing depends on the lookup
     succeeding.
@@ -143,10 +143,10 @@ def masks_to_detection(
 
     boxes: list = []
     if connected:
-        from recordstream.ops.numpy import connected_component_bboxes
+        from recordstream.ops.numpy import connected_component_boxes
 
-        for r0, r1, c0, c1 in connected_component_bboxes(mask != 0, min_area, connectivity):
-            boxes.append((float(c0), float(r0), float(c1 + 1), float(r1 + 1)))
+        for x0, y0, x1, y1 in connected_component_boxes(mask != 0, min_area, connectivity):
+            boxes.append((float(x0), float(y0), float(x1), float(y1)))
     else:
         for value in np.unique(mask):
             if int(value) == 0:
@@ -308,11 +308,11 @@ class DecodeTarget(Transform):
 
 @configurable(category="op", group="structure")
 class CocoToTorchVisionDetection(Transform):
-    """A COCO / HF ``objects`` annotation → a target ``Regions``.
+    """A COCO / HF ``objects`` annotation → a target ``Boxes``.
 
     Reads a source field (``field``; blank picks the first :class:`~recordstream.Label`, else the
     first field) carrying a HuggingFace / COCO ``objects`` mapping and rewrites it to the
-    torchvision detection target, riding as a :class:`~recordstream.Regions` item under
+    torchvision detection target, riding as a :class:`~recordstream.Boxes` item under
     ``output`` (``boxes`` = the ``[N, 4]`` float32 xyxy tensor, ``labels`` = the ``[N]`` int64
     class-id tensor). An empty annotation yields empty ``[0,4]`` / ``[0]``
     tensors (the negative-example contract).
@@ -323,12 +323,12 @@ class CocoToTorchVisionDetection(Transform):
         bbox_format: Box layout in pixels — ``xywh`` (COCO, default), ``xyxy``, or ``cxcywh``; output is xyxy.
         label_offset: Added to each class id (default ``0``). Set ``1`` to reserve class ``0`` for background.
         field: Source field with the objects mapping; blank (default) picks the first ``Label``, else the first field.
-        output: Key the target ``Regions`` is written to (added if new).
+        output: Key the target ``Boxes`` is written to (added if new).
     """
 
     handles = (Label,)
     consumes = (Label,)
-    produces = (Regions,)
+    produces = (Boxes,)
 
     def __init__(
         self,
@@ -368,20 +368,20 @@ class CocoToTorchVisionDetection(Transform):
         target = coco_to_detection(objects, self.bbox_key, self.category_key, self.bbox_format, self.label_offset)
         # `canvas` IS the frame the boxes are stated in — a COCO box is in the source image's
         # pixel space, so it is knowable here and recording it costs one lookup. Left None when
-        # no image is in the record, which is what every Regions carried before this.
+        # no image is in the record, which is what every Boxes carried before this.
         return {
             **record,
-            self.output: Regions(boxes=target["boxes"], labels=target["labels"], canvas=_source_frame(record)),
+            self.output: Boxes(boxes=target["boxes"], labels=target["labels"], canvas=_source_frame(record)),
         }
 
 
 @configurable(category="op", group="structure")
 class MasksToDetectionBoxes(Transform):
-    """A segmentation ``Mask`` → a target ``Regions``.
+    """A segmentation ``Mask`` → a target ``Boxes``.
 
     Reads the :class:`~recordstream.Mask` at ``field`` (blank = the first ``Mask`` in the record,
     else the first array-bearing item) as a 2-D integer mask and derives one tight
-    ``[x0,y0,x1,y1]`` box per object. The target rides as a :class:`~recordstream.Regions` item
+    ``[x0,y0,x1,y1]`` box per object. The target rides as a :class:`~recordstream.Boxes` item
     under ``output``. An empty mask yields empty ``[0,4]`` / ``[0]`` tensors.
 
     Args:
@@ -390,12 +390,12 @@ class MasksToDetectionBoxes(Transform):
         min_area: Drop objects whose mask area (in pixels) is below this (default ``1``).
         connectivity: Connected-components neighborhood when ``connected=True`` — ``4`` or ``8`` (default ``4``).
         field: Name of the ``Mask`` field to read; blank (default) picks the first ``Mask`` (else the first array).
-        output: Key the target ``Regions`` is written to (added if new).
+        output: Key the target ``Boxes`` is written to (added if new).
     """
 
     handles = (Mask,)
     consumes = (Mask,)
-    produces = (Regions,)
+    produces = (Boxes,)
 
     def __init__(
         self,
@@ -447,7 +447,7 @@ class MasksToDetectionBoxes(Transform):
         height, width = int(mask.shape[0]), int(mask.shape[1])
         return {
             **record,
-            self.output: Regions(boxes=target["boxes"], labels=target["labels"], canvas=(height, width)),
+            self.output: Boxes(boxes=target["boxes"], labels=target["labels"], canvas=(height, width)),
         }
 
 
@@ -459,8 +459,8 @@ class ResizeDetection(Transform):
     resized, and a resize that moved the pixels without moving the boxes would silently train on
     misplaced targets. Reads the image under ``input_key`` (PIL or a uint8 HWC/2-D array),
     resizes it to ``(height, width)`` (bilinear, PIL), and scales the
-    :class:`~recordstream.Regions` boxes under ``target_key`` by the same factors — torch boxes
-    stay torch, numpy stays numpy. The resized ``Regions`` records the new frame in ``canvas``.
+    :class:`~recordstream.Boxes` under ``target_key`` by the same factors — torch boxes
+    stay torch, numpy stays numpy. The resized ``Boxes`` records the new frame in ``canvas``.
 
     Ops that need no fixed size (torchvision detectors resize internally) simply omit this op —
     it exists for the detectors that require pre-sized square inputs.
@@ -469,11 +469,11 @@ class ResizeDetection(Transform):
         width: Target width in pixels; required at use (validated lazily, ``0`` = unset).
         height: Target height in pixels; required at use (validated lazily, ``0`` = unset).
         input_key: Record key carrying the image (default ``"image"``).
-        target_key: Record key carrying the target ``Regions``; a record without it resizes the image alone.
+        target_key: Record key carrying the target ``Boxes``; a record without it resizes the image alone.
     """
 
-    consumes = (Regions,)
-    produces = (Regions,)
+    consumes = (Boxes,)
+    produces = (Boxes,)
 
     def __init__(
         self,
@@ -534,7 +534,7 @@ class ResizeDetection(Transform):
         merged[self.input_key] = with_data(item, resized) if isinstance(item, NDArrayItem) else resized
 
         target = record.get(self.target_key)
-        if isinstance(target, Regions):
+        if isinstance(target, Boxes):
             import dataclasses
 
             # An EMPTY target is re-framed too. Scaling no boxes is a no-op, but leaving the

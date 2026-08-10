@@ -49,7 +49,7 @@ families), "where does augmentation come from?" had three answers.
 Collapse to ONE carrier and ONE op engine:
 
 - **A record is a plain `dict`** — `recordstream.items.Record = Dict[str, Any]` — of **typed
-  values** (`Image`/`Mask`/`Regions`/`Label`, base `NDArrayItem`; open registry `register_item`;
+  values** (`Image`/`Mask`/`Boxes`/`Label`, base `NDArrayItem`; open registry `register_item`;
   uniform payload accessors `item_data`/`with_data`). No container class, no roles, no
   `primary()`: **key names carry meaning** (`"image"`, `"mask"`, `"bboxes"`, `"class"`), and a
   scalar side value is just another key. Metadata is attrs on the typed value (`Image.layout`,
@@ -61,7 +61,7 @@ Collapse to ONE carrier and ONE op engine:
   (`@MyOp.kernel(ItemType)`, MRO-aware registry in `recordstream/dispatch.py`) apply to every
   handled value, `field=` pins one key. The second sanctioned shape — type-CHANGING ops
   (`Threshold`: array→`Mask`, `ConvertToImage`: array→`Image`, `ConnectedComponents`:
-  `Mask`→`Regions`, the target ops) — overrides `__call__`, resolves its source by an explicit
+  `Mask`→`Boxes`, the target ops) — overrides `__call__`, resolves its source by an explicit
   `field=` or the first value of the natural type, and raises a `ValueError` naming the record's
   keys on every miss.
 - **External libraries run AS-IS through the engine's op-family dispatch**
@@ -103,10 +103,10 @@ Collapse to ONE carrier and ONE op engine:
   `ops:` list like any native op (deferred markers flow at route entry).
 - The albumentations vocabulary is load-bearing: a value augments only if it rides one of the
   library's key names — routing is an explicit `RenameField`, never engine magic.
-- **Contracts that outlive refactors:** the `(row_min, row_max, col_min, col_max)` inclusive
-  integer bin-box order of `connected_component_bboxes` (a downstream back-projection reads
-  exactly that order); the `typedrecord-v1` tag + no-back-compat rule; the albumentations key
-  vocabulary; the `"module:qualname"` callable-path format (§4).
+- **Contracts that outlive refactors:** the HALF-OPEN pixel xyxy `(x0, y0, x1, y1)` order of
+  `connected_component_boxes` (every `Boxes` producer emits it; a downstream back-projection
+  reads exactly that order); the `typedrecord-v1` tag + no-back-compat rule; the albumentations
+  key vocabulary; the `"module:qualname"` callable-path format (§4).
 - Anything that used the old container API must migrate — there are deliberately no aliases and
   no legacy read path.
 
@@ -1277,3 +1277,65 @@ dataset_uris(ConcatSource(sources=[a, b]))   # ['hf://datasets/…', 'file:///�
 - **Recognise a new wrapper shape**: `recordstream/uri.py` follows `.source`; a wrapper using a
   different attribute name implements the properties itself instead.
 - **Usage** is [docs/sources.md](sources.md#identifying-a-dataset).
+
+## 14. `Boxes` is pixel-only — the signal-domain region type moved out (2026-08-10)
+
+### Context
+
+The structured item was born as `Regions`, and its own docstring sanctioned TWO coordinate
+systems in one field: pixel `[x0, y0, x1, y1]` rows on an image raster, or signal
+`[f0, f1, t0, t1]` rows in time/frequency. Nothing on the item said which one a given
+instance held — consumers disambiguated by record key and by which op produced the value.
+Every mechanical consumer in this package (the detection target ops, `ResizeDetection`'s
+scaling, the three geometry-desync guards, `canvas` itself — an `(H, W)` raster) assumed the
+pixel reading; a `Regions` carrying signal coordinates satisfied `isinstance` checks written
+for a contract it did not hold. A third convention hid inside the same type:
+`connected_component_bboxes` emitted INCLUSIVE `(row_min, row_max, col_min, col_max)` bin
+tuples, axis-swapped from every other producer, reconciled by a transpose at exactly one
+call site.
+
+### Decision
+
+The item is **`Boxes`**, and it is **pixel-only**: half-open absolute-pixel
+`[x0, y0, x1, y1]` rows (x rightward, y downward), `labels`/`scores`, the `(H, W)` `canvas`
+frame, per-box `extras`. A domain package needing a different coordinate system registers its
+OWN item through the SAME open `register_item` registry — exactly the modality-neutrality
+story the item registry exists for; this engine keeps zero knowledge of it.
+`connected_component_boxes` (renamed WITH its contract, so stale callers break loudly) now
+emits the same half-open xyxy convention, `ConnectedComponents` fills `canvas` in (empty
+masks included), and the one reconciling transpose in `masks_to_detection` is gone. There is
+NO back-compat alias in either direction (the workspace rename convention): a stored
+`typedrecord-v1` record carrying `__item_type__: "Regions"` fails loudly on decode and is
+re-generated with a current sink.
+
+### Consequences
+
+- One name, one convention: `isinstance(value, Boxes)` now implies the pixel contract the
+  geometry guards and detection consumers were already assuming.
+- The guards correctly go SILENT for a domain package's region item — physical-unit
+  coordinates are raster-independent, so "the pixels moved and the boxes did not" was a false
+  alarm for them all along.
+- Every `Boxes` producer emits the same row shape; the `+1`/transpose fix-ups that existed
+  only to bridge `connected_component_bboxes`' divergent order are deleted rather than moved.
+- Stored datasets from before the rename must be re-generated (loud `KeyError`/`TypeError` on
+  decode — the established `typedrecord-v1` no-back-compat rule).
+
+### Example
+
+```python
+from recordstream import Boxes, Mask
+from recordstream.ops.numpy import ConnectedComponents
+
+out = ConnectedComponents()({"mask": Mask(mask_2d)})
+out["boxes"]            # Boxes(boxes=[(x0, y0, x1, y1), ...], canvas=mask_2d.shape)
+mask_2d[y0:y1, x0:x1]   # half-open: covers the component exactly
+```
+
+### What you may change (and where it's documented)
+
+- **Add a new pixel-box producer**: emit half-open xyxy and FILL `canvas` in (the
+  metadata-on-the-value mandate); the pins live in `tests/test_typed_generic_ops.py`.
+- **A new coordinate system** is a NEW registered item in the owning domain package, never a
+  second meaning for `Boxes` — that is the mistake this record exists to prevent.
+- **Usage** is [docs/record-model.md](record-model.md); the batch read-back is `batch_boxes`
+  ([docs/kinds.md](kinds.md)).

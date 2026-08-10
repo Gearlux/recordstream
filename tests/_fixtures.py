@@ -11,16 +11,16 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from recordstream import Image, Mask, Record, Regions, Transform, item_data, with_data
+from recordstream import Boxes, Image, Mask, Record, Transform, item_data, with_data
 
 
 class FixtureFlip(Transform):
-    """Horizontal flip with ONE shared decision across Image + Mask + Regions (test fixture)."""
+    """Horizontal flip with ONE shared decision across Image + Mask + Boxes (test fixture)."""
 
-    handles = (Image, Mask, Regions)
+    handles = (Image, Mask, Boxes)
     consumes = (Image,)
-    optional = (Mask, Regions)
-    produces = (Image, Mask, Regions)
+    optional = (Mask, Boxes)
+    produces = (Image, Mask, Boxes)
 
     def __init__(self, p: float = 0.5, field: Optional[str] = None) -> None:
         super().__init__(field=field)
@@ -46,19 +46,19 @@ def _flip_mask(item: Mask, params: Dict[str, Any]) -> Mask:
     return with_data(item, np.flip(item_data(item), axis=1).copy())
 
 
-@FixtureFlip.kernel(Regions)
-def _flip_regions(item: Regions, params: Dict[str, Any]) -> Regions:
+@FixtureFlip.kernel(Boxes)
+def _flip_regions(item: Boxes, params: Dict[str, Any]) -> Boxes:
     if not params["do"]:
         return item
     width = params.get("width") or (item.canvas[1] if item.canvas else None)
     if width is None:
-        raise ValueError("FixtureFlip: no reference width to flip Regions")
+        raise ValueError("FixtureFlip: no reference width to flip Boxes")
     boxes = [[width - box[2], box[1], width - box[0], box[3]] for box in item.boxes]
-    return Regions(boxes=boxes, labels=item.labels, scores=item.scores, canvas=item.canvas)
+    return Boxes(boxes=boxes, labels=item.labels, scores=item.scores, canvas=item.canvas)
 
 
 def _reference_width(record: Record) -> Optional[int]:
-    """The horizontal extent to flip boxes against — from the first Image/Mask, or a Regions canvas."""
+    """The horizontal extent to flip boxes against — from the first Image/Mask, or a Boxes canvas."""
     for _, item in record.items():
         if isinstance(item, Image):
             arr = item_data(item)
@@ -70,6 +70,6 @@ def _reference_width(record: Record) -> Optional[int]:
             if arr.ndim >= 2:
                 return int(arr.shape[1])
     for _, item in record.items():
-        if isinstance(item, Regions) and item.canvas:
+        if isinstance(item, Boxes) and item.canvas:
             return int(item.canvas[1])
     return None

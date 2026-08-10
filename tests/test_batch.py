@@ -207,19 +207,19 @@ if __name__ == "__main__":
 
 
 # --------------------------------------------------------------------------- #
-# batch_regions — the collate's transpose for a region-set column
+# batch_boxes — the collate's transpose for a region-set column
 # --------------------------------------------------------------------------- #
-class TestBatchRegions:
-    """A collated `Regions` back into the per-record dicts every detection interface takes."""
+class TestBatchBoxes:
+    """A collated `Boxes` back into the per-record dicts every detection interface takes."""
 
     def _batch(self, counts: tuple = (1, 3), scores: bool = False) -> Any:
         import torch
 
-        from recordstream import Regions, collate_records
+        from recordstream import Boxes, collate_records
 
         records = [
             {
-                "target": Regions(
+                "target": Boxes(
                     boxes=torch.rand(n, 4),
                     labels=torch.zeros(n, dtype=torch.int64),
                     scores=torch.ones(n) if scores else None,
@@ -230,52 +230,52 @@ class TestBatchRegions:
         return collate_records(records)
 
     def test_it_transposes_a_variable_n_column_into_per_record_dicts(self) -> None:
-        from recordstream import batch_regions
+        from recordstream import batch_boxes
 
-        targets = batch_regions(self._batch(counts=(1, 3)), "target")
+        targets = batch_boxes(self._batch(counts=(1, 3)), "target")
         assert len(targets) == 2
         assert [tuple(t["boxes"].shape) for t in targets] == [(1, 4), (3, 4)]
         assert [tuple(t["labels"].shape) for t in targets] == [(1,), (3,)]
 
     def test_an_absent_field_is_OMITTED_not_handed_over_as_none(self) -> None:
         """A training target is exactly {boxes, labels} — a `None` scores key would reach a model."""
-        from recordstream import batch_regions
+        from recordstream import batch_boxes
 
-        assert set(batch_regions(self._batch(), "target")[0]) == {"boxes", "labels"}
-        assert set(batch_regions(self._batch(scores=True), "target")[0]) == {"boxes", "labels", "scores"}
+        assert set(batch_boxes(self._batch(), "target")[0]) == {"boxes", "labels"}
+        assert set(batch_boxes(self._batch(scores=True), "target")[0]) == {"boxes", "labels", "scores"}
 
     def test_values_keep_their_framework(self) -> None:
         """Framework-free by rule: the caller owns dtype and device, as with `batch_values`."""
         import torch
 
-        from recordstream import batch_regions
+        from recordstream import batch_boxes
 
-        assert isinstance(batch_regions(self._batch(), "target")[0]["boxes"], torch.Tensor)
+        assert isinstance(batch_boxes(self._batch(), "target")[0]["boxes"], torch.Tensor)
 
     def test_numpy_boxes_stay_numpy(self) -> None:
         import numpy as np
 
-        from recordstream import Regions, batch_regions, collate_records
+        from recordstream import Boxes, batch_boxes, collate_records
 
-        batch = collate_records([{"target": Regions(boxes=np.zeros((2, 4)), labels=np.zeros(2))}])
-        assert isinstance(batch_regions(batch, "target")[0]["boxes"], np.ndarray)
+        batch = collate_records([{"target": Boxes(boxes=np.zeros((2, 4)), labels=np.zeros(2))}])
+        assert isinstance(batch_boxes(batch, "target")[0]["boxes"], np.ndarray)
 
     def test_a_wrong_type_raises_naming_it(self) -> None:
         import pytest
 
-        from recordstream import Label, batch_regions, collate_records
+        from recordstream import Label, batch_boxes, collate_records
 
-        with pytest.raises(TypeError, match="not a Regions"):
-            batch_regions(collate_records([{"target": Label(0)}]), "target")
+        with pytest.raises(TypeError, match="not a Boxes"):
+            batch_boxes(collate_records([{"target": Label(0)}]), "target")
 
     def test_an_uncollated_regions_raises_naming_the_mistake(self) -> None:
         import numpy as np
         import pytest
 
-        from recordstream import Regions, batch_regions
+        from recordstream import Boxes, batch_boxes
 
-        with pytest.raises(ValueError, match="not a COLLATED Regions"):
-            batch_regions({"target": Regions(boxes=np.zeros((2, 4)))}, "target")
+        with pytest.raises(ValueError, match="not a COLLATED Boxes"):
+            batch_boxes({"target": Boxes(boxes=np.zeros((2, 4)))}, "target")
 
 
 # --------------------------------------------------------------------------- #
@@ -291,12 +291,12 @@ class TestCollateIsAChoice:
     def _records(self, sizes: tuple = (8, 8)) -> Any:
         import torch
 
-        from recordstream import Image, Label, Regions
+        from recordstream import Boxes, Image, Label
 
         return [
             {
                 "image": Image(np.zeros((3, s, s), dtype="float32"), layout="CHW"),
-                "target": Regions(boxes=torch.rand(n, 4), labels=torch.zeros(n, dtype=torch.int64)),
+                "target": Boxes(boxes=torch.rand(n, 4), labels=torch.zeros(n, dtype=torch.int64)),
                 "class": Label(i),
             }
             for i, (s, n) in enumerate(zip(sizes, (1, 3)))
@@ -344,12 +344,12 @@ class TestCollateIsAChoice:
 
     @pytest.mark.parametrize("collate_key", ["record", "list"])
     def test_every_read_back_helper_accepts_both_collates(self, collate_key: str) -> None:
-        """`batch_values` / `batch_regions` / `batch_metadata` give the SAME answer either way."""
-        from recordstream import batch_metadata, batch_regions, batch_values, collate
+        """`batch_values` / `batch_boxes` / `batch_metadata` give the SAME answer either way."""
+        from recordstream import batch_boxes, batch_metadata, batch_values, collate
 
         batch = collate(self._records(), key=collate_key)
         assert batch_values(batch, "class") == [0, 1]
-        targets = batch_regions(batch, "target")
+        targets = batch_boxes(batch, "target")
         assert [t["boxes"].shape[0] for t in targets] == [1, 3]
         assert batch_metadata(batch, exclude=("image", "target")) == [{"class": 0}, {"class": 1}]
 

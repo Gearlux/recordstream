@@ -2,7 +2,7 @@
 
 from typing import Any, Dict
 
-from recordstream import Image, Label, Mask, Regions, Transform
+from recordstream import Boxes, Image, Label, Mask, Transform
 from recordstream.dispatch import dispatch, get_kernel, register_kernel, registered_kernels
 from tests._fixtures import FixtureFlip
 
@@ -51,6 +51,6 @@ class TestDispatch:
     def test_registered_kernels_lists_pairs(self) -> None:
         pairs = registered_kernels()
         assert ("FixtureFlip", "Image") in pairs
-        assert ("FixtureFlip", "Regions") in pairs
+        assert ("FixtureFlip", "Boxes") in pairs
         assert dispatch(FixtureFlip, Label) is None  # FixtureFlip does not handle Label
-        assert dispatch(FixtureFlip, Regions) is get_kernel(FixtureFlip, Regions)
+        assert dispatch(FixtureFlip, Boxes) is get_kernel(FixtureFlip, Boxes)

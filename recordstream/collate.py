@@ -193,7 +193,7 @@ def collate_list(items: Sequence[Record]) -> Record:
       raises — and the type does not depend on the data, because you asked for lists;
     * items stay ITEMS (a list of :class:`~recordstream.Image`, not a list of bare arrays), so
       per-record metadata survives. The read-back helpers (:func:`~recordstream.batch_values`,
-      :func:`~recordstream.batch_regions`, :func:`~recordstream.batch_metadata`) accept BOTH
+      :func:`~recordstream.batch_boxes`, :func:`~recordstream.batch_metadata`) accept BOTH
       shapes, so a consumer reads the batch the same way under either collate.
 
     Example::

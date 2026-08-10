@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 
 from recordstream import (
+    Boxes,
     EncodedItem,
     Image,
     Label,
-    Regions,
     decode_item,
     decode_record,
     encode_item,
@@ -100,7 +100,7 @@ class TestRecordCodec:
     def test_record_round_trip_keys_order_and_plain_entries(self) -> None:
         record = {
             "image": Image(np.zeros((2, 2, 3), dtype=np.float32)),
-            "regions": Regions(boxes=[[0, 0, 1, 1]], labels=["a"], canvas=(2, 2)),
+            "regions": Boxes(boxes=[[0, 0, 1, 1]], labels=["a"], canvas=(2, 2)),
             "class": Label("x"),
             "gain_db": -3.0,  # a plain scalar rides the same layout under the "plain" tag
         }

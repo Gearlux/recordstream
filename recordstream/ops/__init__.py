@@ -3,7 +3,7 @@ RecordStream operations (record-dict ops).
 
 Submodules:
     - recordstream.ops.numpy: Threshold, ConnectedComponents (+ threshold_array /
-      connected_component_bboxes / resolve_expression helpers)
+      connected_component_boxes / resolve_expression helpers)
     - recordstream.ops.torch: ToTensor (+ to_tensor helper)
     - recordstream.ops.image: ConvertToImage, ConvertToMask (+ value_to_image / normalize_to_uint8 …)
     - recordstream.ops.target: EncodeTarget, DecodeTarget,

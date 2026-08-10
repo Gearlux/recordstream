@@ -1,6 +1,6 @@
 """Typed items — array-subclass attribute preservation, wrappers, payload accessors, registry.
 
-Only the MODALITY-NEUTRAL core items live in recordstream (Image / Mask / Regions / Label). The
+Only the MODALITY-NEUTRAL core items live in recordstream (Image / Mask / Boxes / Label). The
 data-bearing-wrapper and multi-attribute-array paths (which the signal-domain items in a domain
 package exercise for real) are covered here with small test-local item types, so the core stays
 tested without importing a domain package.
@@ -12,11 +12,11 @@ import numpy as np
 import pytest
 
 from recordstream.items import (
+    Boxes,
     Image,
     Label,
     Mask,
     NDArrayItem,
-    Regions,
     get_item_type,
     is_item,
     item_data,
@@ -78,7 +78,7 @@ class TestWrapperItems:
 
     def test_zero_arg_construction(self) -> None:
         # Wrappers build with no args (fields defaulted) — the workspace lazy/zero-arg convention.
-        assert _Blob().data is None and Regions().boxes == [] and Label().value is None
+        assert _Blob().data is None and Boxes().boxes == [] and Label().value is None
 
 
 class TestPayloadAccessors:
@@ -91,7 +91,7 @@ class TestPayloadAccessors:
         assert np.array_equal(item_data(_Blob(np.ones(3))), np.ones(3))
 
     def test_item_data_no_payload_returns_self(self) -> None:
-        reg = Regions(boxes=[[0, 0, 1, 1]])
+        reg = Boxes(boxes=[[0, 0, 1, 1]])
         assert item_data(reg) is reg  # no `.data` slot — returns the item
 
     def test_item_data_plain_value_passes_through(self) -> None:
@@ -108,13 +108,13 @@ class TestPayloadAccessors:
 
     def test_with_data_without_payload_raises(self) -> None:
         with pytest.raises(TypeError, match="no payload slot"):
-            with_data(Regions(boxes=[]), [[0, 0, 1, 1]])
+            with_data(Boxes(boxes=[]), [[0, 0, 1, 1]])
 
 
 class TestRegistry:
     def test_builtins_registered(self) -> None:
         names = item_type_names()
-        for name in ("Image", "Mask", "Regions", "Label"):
+        for name in ("Image", "Mask", "Boxes", "Label"):
             assert name in names
         assert Image in item_types()
 

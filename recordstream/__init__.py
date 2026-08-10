@@ -11,8 +11,8 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 
 # --- shared infrastructure -----------------------------------------------------------------
 from recordstream.batch import (
+    batch_boxes,
     batch_metadata,
-    batch_regions,
     batch_tensor,
     batch_values,
     multi_hot,
@@ -52,13 +52,13 @@ from recordstream.io import (
     register_io,
 )
 from recordstream.items import (
+    Boxes,
     Image,
     Label,
     Mask,
     MultiLabel,
     NDArrayItem,
     Record,
-    Regions,
     get_item_type,
     is_class_id,
     is_item,
@@ -112,7 +112,7 @@ __all__ = [
     "NDArrayItem",
     "Image",
     "Mask",
-    "Regions",
+    "Boxes",
     "Label",
     "MultiLabel",
     "is_class_id",
@@ -152,7 +152,7 @@ __all__ = [
     "FlowGraph",
     "collate",
     "batch_metadata",
-    "batch_regions",
+    "batch_boxes",
     "batch_tensor",
     "batch_values",
     "multi_hot",

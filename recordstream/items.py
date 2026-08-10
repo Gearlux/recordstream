@@ -2,7 +2,7 @@
 
 A record is a plain ``dict`` (the :data:`Record` alias) whose values are TYPED: an
 :class:`Image` carries its ``layout``, a :class:`Label` its ``classes``, a
-:class:`Regions` its ``canvas`` reference frame. Ops dispatch on these types (the
+:class:`Boxes` its ``canvas`` reference frame. Ops dispatch on these types (the
 torchvision-v2 ``tv_tensors`` idea) — there is no wrapper container and no role tags;
 key names ("image", "mask", "label") carry meaning, exactly like every torch batch dict.
 
@@ -12,7 +12,7 @@ The item model is HYBRID (the workspace decision):
   subclass) so a type-agnostic operation touches them AS an array while their extra
   attributes survive numpy operations (``__array_finalize__``). ``Image`` / ``Mask`` are
   these.
-* **Structured items are dataclass wrappers** (:class:`Regions` / :class:`Label`) — a
+* **Structured items are dataclass wrappers** (:class:`Boxes` / :class:`Label`) — a
   bounding-box set or a class label is not an array; a wrapper is also the right home for a
   payload a domain package does not want to subclass (e.g. complex-IQ signal data, where
   subclassing an ``np.complex64`` ndarray and preserving attributes through arithmetic is
@@ -55,7 +55,7 @@ __all__ = [
     "NDArrayItem",
     "Image",
     "Mask",
-    "Regions",
+    "Boxes",
     "Label",
     "MultiLabel",
     "is_class_id",
@@ -169,20 +169,24 @@ class Mask(NDArrayItem):
 # ---------------------------------------------------------------------------
 @register_item
 @dataclass
-class Regions:
-    """A set of rectangular regions / bounding boxes with optional labels and scores.
+class Boxes:
+    """A set of pixel-space bounding boxes on an image raster, with optional labels and scores.
+
+    Pixel-ONLY by contract: boxes are HALF-OPEN ``[x0, y0, x1, y1]`` rows in absolute
+    pixels (x rightward, y downward). A domain package needing a different coordinate
+    system (e.g. time/frequency regions on a waveform) registers its OWN item type —
+    this one is what every image-geometry op and detection consumer dispatches on.
 
     Attributes:
-        boxes: The boxes — pixel ``[x0, y0, x1, y1]`` or signal ``[f0, f1, t0, t1]`` rows, as a
+        boxes: The boxes — half-open absolute-pixel ``[x0, y0, x1, y1]`` rows, as a
             list OR an ``[N, 4]`` array/tensor (a detection pipeline keeps its framework's type;
             annotated ``Any`` because list, ndarray and tensor share no useful protocol).
         labels: Optional per-box class labels (list or ``[N]`` array/tensor, like ``boxes``).
         scores: Optional per-box confidence scores (list or ``[N]`` array/tensor).
-        canvas: Optional ``(H, W)`` reference frame — the coordinate system boxes live in,
+        canvas: Optional ``(H, W)`` reference frame — the raster the boxes are stated in,
             so a geometric transform (flip / resize) has a self-contained frame.
-        extras: Auxiliary PER-BOX parallel arrays and region-set measurements keyed by name
-            (e.g. per-box durations/bandwidths/power readings) — item-scoped metadata that
-            travels WITH the boxes it describes.
+        extras: Auxiliary PER-BOX parallel arrays and box-set measurements keyed by name —
+            item-scoped metadata that travels WITH the boxes it describes.
     """
 
     boxes: Any = field(default_factory=list)

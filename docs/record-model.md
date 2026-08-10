@@ -1,7 +1,7 @@
 # The record model — THE recordstream data model
 
 A record is a **plain `dict`** of **typed values**. Import the whole surface from the PACKAGE TOP
-LEVEL (`from recordstream import Record, Image, Mask, Regions, Label, Transform, Pipeline,
+LEVEL (`from recordstream import Record, Image, Mask, Boxes, Label, Transform, Pipeline,
 as_transform, item_data, item_value, with_data, register_item, register_kernel, register_io, collate_records, ...`).
 The design rationale is recorded in
 [architecture.md](architecture.md#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25).
@@ -42,11 +42,11 @@ recordstream is **modality-neutral**, so its core ships only generic items — i
 labels. (Domain items — a signal, a spectrogram — live in the domain package; see below.)
 
 ```python
-from recordstream import Image, Mask, Regions, Label, MultiLabel
+from recordstream import Image, Mask, Boxes, Label, MultiLabel
 
 Image(rgb_hwc, layout="HWC")                        # an image knows its layout ("HWC" default / "CHW")
 Mask(seg_hw)                                         # a mask shares its image's frame
-Regions(boxes=[[1,1,4,4]], labels=["drone"], canvas=(8, 10), extras={"snr_db": [12.5]})
+Boxes(boxes=[[10,10,40,40]], labels=[1], canvas=(64, 64))   # half-open pixel xyxy on a raster
 Label("drone_x", classes=["noise", "drone_x"])       # ONE class for this record
 MultiLabel(["drone_x", "jammer"], classes=[...])     # SEVERAL classes for this record
 ```
@@ -59,7 +59,7 @@ multi-label target from an ordinary sequence value that happens to sit under the
 
 Items are **hybrid**: array-backed items (`Image`, `Mask`) subclass `NDArrayItem` — an `np.ndarray`
 subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` — so a
-type-agnostic operation touches them as an array; structured items (`Regions`, `Label`, `MultiLabel`)
+type-agnostic operation touches them as an array; structured items (`Boxes`, `Label`, `MultiLabel`)
 are dataclass wrappers (a bounding-box set is not an array). A uniform payload accessor hides the difference from
 kernels:
 
@@ -111,7 +111,7 @@ def _brighten_image(value: Image, params: dict) -> Image:
 
 The second sanctioned op shape is the **type-changing op** — read one key, write a differently-typed
 item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `ConnectedComponents`:
-`Mask` → `Regions`, the target ops). It subclasses `Transform` and overrides `__call__` instead of
+`Mask` → `Boxes`, the target ops). It subclasses `Transform` and overrides `__call__` instead of
 registering a same-type kernel, declaring `handles` / `consumes` / `produces` truthfully as graph
 metadata (next section).
 
@@ -148,12 +148,12 @@ the FFT ops), and diverge in two directions:
 
   ```python
   class JointFlip(Transform):
-      handles  = (Image, Mask, Regions)   # everything ONE draw may move
+      handles  = (Image, Mask, Boxes)   # everything ONE draw may move
       consumes = (Image,)                 # the only input it needs to be useful
-      optional = (Mask, Regions)          # moved together with the image when present
+      optional = (Mask, Boxes)          # moved together with the image when present
   ```
 
-  A record with just an `Image` is fine; a record that also carries a `Mask`/`Regions` gets them
+  A record with just an `Image` is fine; a record that also carries a `Mask`/`Boxes` gets them
   moved consistently. Declaring `consumes = handles` here would wrongly tell a reader (or a
   pipeline linter) that a mask is required.
 
@@ -165,8 +165,8 @@ the FFT ops), and diverge in two directions:
 
   ```python
   class ScaleBoxesToImage(Transform):
-      handles  = (Regions,)          # the only type it CHANGES
-      consumes = (Regions, Image)    # ...but it cannot run without the reference Image (its shape)
+      handles  = (Boxes,)          # the only type it CHANGES
+      consumes = (Boxes, Image)    # ...but it cannot run without the reference Image (its shape)
   ```
 
 In short: `handles` = "what I write", `consumes` = "what must be present", `optional` = "what I
@@ -180,48 +180,48 @@ constructor param per input slot** — defaulting to the conventional key name, 
 validated lazily in `__call__`:
 
 ```python
-class KeepRegionsOnMask(Transform):
-    """Drop regions whose center pixel is OFF in the activity mask.
+class KeepBoxesOnMask(Transform):
+    """Drop boxes whose center pixel is OFF in the activity mask.
 
     Args:
         mask_field: Record key of the activity Mask to test against. Defaults to "mask".
-        regions_field: Record key of the Regions to filter. Defaults to "regions".
-        output: Key the filtered Regions are written to; blank (default) replaces regions_field in place.
+        boxes_field: Record key of the Boxes to filter. Defaults to "boxes".
+        output: Key the filtered Boxes are written to; blank (default) replaces boxes_field in place.
     """
 
-    handles = (Regions,)             # the only type it CHANGES
-    consumes = (Mask, Regions)       # both inputs must be present
-    produces = (Regions,)
+    handles = (Boxes,)             # the only type it CHANGES
+    consumes = (Mask, Boxes)       # both inputs must be present
+    produces = (Boxes,)
 
-    def __init__(self, mask_field: str = "mask", regions_field: str = "regions", output: str = "") -> None:
+    def __init__(self, mask_field: str = "mask", boxes_field: str = "boxes", output: str = "") -> None:
         super().__init__()
         self.mask_field = mask_field
-        self.regions_field = regions_field
+        self.boxes_field = boxes_field
         self.output = output
 
     def __call__(self, record: Record) -> Record:
-        for name, want in ((self.mask_field, Mask), (self.regions_field, Regions)):
+        for name, want in ((self.mask_field, Mask), (self.boxes_field, Boxes)):
             if name not in record:
                 raise ValueError(f"{type(self).__name__}: no {name!r} key in record (keys: {list(record)})")
             if not isinstance(record[name], want):
                 raise TypeError(f"{type(self).__name__}: {name!r} is {type(record[name]).__name__}, expected {want.__name__}")
-        mask, regions = record[self.mask_field], record[self.regions_field]
-        keep = [b for b in regions.boxes if mask[int((b[1] + b[3]) / 2), int((b[0] + b[2]) / 2)]]
-        out = Regions(boxes=keep, labels=regions.labels, scores=regions.scores, canvas=regions.canvas)
-        return {**record, (self.output or self.regions_field): out}
+        mask, boxes = record[self.mask_field], record[self.boxes_field]
+        keep = [b for b in boxes.boxes if mask[int((b[1] + b[3]) / 2), int((b[0] + b[2]) / 2)]]
+        out = Boxes(boxes=keep, labels=boxes.labels, scores=boxes.scores, canvas=boxes.canvas)
+        return {**record, (self.output or self.boxes_field): out}
 ```
 
 So a record carrying several masks and several region sets is disambiguated entirely in config —
 the op looks ONLY at the named entries:
 
 ```yaml
-- !class:mypkg.KeepRegionsOnMask
+- !class:mypkg.KeepBoxesOnMask
   mask_field: activity_mask      # not the segmentation mask under "mask"
-  regions_field: predictions     # not the ground truth under "regions"
+  boxes_field: predictions     # not the ground truth under "boxes"
 ```
 
 This is the established pattern for every shipped multi-input op (e.g. the region→target ops
-take `image_field="image"` + `regions_field="regions"` + `output="target"`). Two rules keep it
+take `image_field="image"` + `boxes_field="regions"` + `output="target"`). Two rules keep it
 predictable: the defaults are the CONVENTIONAL key names (so the common record shape needs zero
 config), and a wrong/missing key fails lazily in `__call__` with the key list in the message —
 never silently falls back to a different entry when an explicit name was given.
@@ -466,7 +466,7 @@ rules (all records must share the same key set; a mismatch raises):
 
 1. **array-backed item** → payloads stacked into one array/tensor with a leading batch dim, SAME
    item type back; each declared attr becomes a per-record list;
-2. **wrapper item** (`Label`, `Regions`) → ONE item whose fields are per-record LISTS — deliberately
+2. **wrapper item** (`Label`, `Boxes`) → ONE item whose fields are per-record LISTS — deliberately
    not auto-tensorized (turning class names into an `[N]` int64 tensor is the model boundary's one
    explicit step, not a generic-engine guess);
 3. **plain value** → a plain list.
@@ -515,13 +515,13 @@ same for its pixel-class mask. What stays task-side is only *which* call to make
 ### When the generic rules cannot work: register a task collate
 
 Stacking is task-shaped, and detection is the canonical failure: each record carries a DIFFERENT
-number of boxes, and rule 2 can only give you `Regions(boxes=[<1 box>, <3 boxes>])` — per-record
+number of boxes, and rule 2 can only give you `Boxes(boxes=[<1 box>, <3 boxes>])` — per-record
 lists no detection model accepts. A detection model family has its own batch contract (stacked
 images + RAGGED per-record target dicts), so the task package registers a collate that produces
 exactly that:
 
 ```python
-from recordstream import Image, Regions, collate, register_collate
+from recordstream import Image, Boxes, collate, register_collate
 
 @register_collate("detection")
 def detection_collate(items):

@@ -1,11 +1,11 @@
 """The two detection target-shaping ops over dict records.
 
 Pins the native transforms that build a detection pipeline's torchvision-style
-``{boxes, labels}`` target as a :class:`~recordstream.Regions` item:
+``{boxes, labels}`` target as a :class:`~recordstream.Boxes` item:
 
 * :class:`recordstream.ops.target.CocoToTorchVisionDetection` — a HuggingFace / COCO ``objects``
-  annotation → a target ``Regions``;
-* :class:`recordstream.ops.target.MasksToDetectionBoxes` — a segmentation ``Mask`` → a target ``Regions``.
+  annotation → a target ``Boxes``;
+* :class:`recordstream.ops.target.MasksToDetectionBoxes` — a segmentation ``Mask`` → a target ``Boxes``.
 
 Each op REUSES its conversion helper, so the op's ``boxes`` / ``labels`` tensors are pinned
 byte-identical to the helper (parity). recordstream-only — no domain-package import.
@@ -16,7 +16,7 @@ import pytest
 import torch
 from confluid.registry import get_registry, resolve_class
 
-from recordstream import Image, Label, Mask, Regions, collate_records
+from recordstream import Boxes, Image, Label, Mask, collate_records
 from recordstream.ops.target import (
     CocoToTorchVisionDetection,
     MasksToDetectionBoxes,
@@ -44,7 +44,7 @@ class TestCocoToTorchVisionDetection:
     def test_produces_target_regions(self) -> None:
         out = CocoToTorchVisionDetection(field="objects")({"objects": Label(_OBJECTS)})
         regions = out["target"]
-        assert isinstance(regions, Regions)
+        assert isinstance(regions, Boxes)
         assert isinstance(regions.boxes, torch.Tensor)
         assert isinstance(regions.labels, torch.Tensor)
         assert regions.boxes.shape == (2, 4)
@@ -77,7 +77,7 @@ class TestCocoToTorchVisionDetection:
 
     def test_new_output_key_keeps_source(self) -> None:
         out = CocoToTorchVisionDetection(field="objects", output="det")({"objects": Label(_OBJECTS)})
-        assert isinstance(out["det"], Regions)
+        assert isinstance(out["det"], Boxes)
         assert out["objects"].value == _OBJECTS  # source left intact
 
     def test_missing_field_raises(self) -> None:
@@ -101,7 +101,7 @@ class TestMasksToDetectionBoxes:
     def test_instance_mask_produces_target_regions(self) -> None:
         out = MasksToDetectionBoxes(field="mask")({"mask": Mask(_instance_mask())})
         regions = out["target"]
-        assert isinstance(regions, Regions)
+        assert isinstance(regions, Boxes)
         assert isinstance(regions.boxes, torch.Tensor)
         assert isinstance(regions.labels, torch.Tensor)
         assert regions.boxes.shape == (3, 4)  # three instances
@@ -123,6 +123,17 @@ class TestMasksToDetectionBoxes:
         assert torch.equal(out["target"].boxes, expected["boxes"])
         assert torch.equal(out["target"].labels, expected["labels"])
 
+    def test_connected_equals_instance_mode_on_disjoint_instances(self) -> None:
+        # The two derivations agree when every instance is its own connected component. This
+        # pins the axis order of the connected path: before connected_component_boxes emitted
+        # xyxy directly, this branch transposed row/col tuples — the bug class this guards.
+        mask = _instance_mask()
+        instance = masks_to_detection(mask)
+        connected = masks_to_detection((mask != 0).astype(np.uint8), connected=True)
+        boxes_a = sorted(map(tuple, instance["boxes"].tolist()))
+        boxes_b = sorted(map(tuple, connected["boxes"].tolist()))
+        assert boxes_a == boxes_b
+
     def test_min_area_drops_small_instances(self) -> None:
         mask = _instance_mask()
         out = MasksToDetectionBoxes(field="mask", min_area=10)({"mask": Mask(mask)})
@@ -141,7 +152,7 @@ class TestMasksToDetectionBoxes:
 
     def test_new_output_key_keeps_source(self) -> None:
         out = MasksToDetectionBoxes(field="mask", output="det")({"mask": Mask(_instance_mask())})
-        assert isinstance(out["det"], Regions)
+        assert isinstance(out["det"], Boxes)
         assert isinstance(out["mask"], Mask)  # source left intact
 
     def test_missing_field_raises(self) -> None:
@@ -154,7 +165,7 @@ class TestMasksToDetectionBoxes:
 
 
 # --------------------------------------------------------------------------- #
-# Collate — per-record Regions gather into a list of detection targets.
+# Collate — per-record Boxes gather into a list of detection targets.
 # --------------------------------------------------------------------------- #
 def test_record_collate_gathers_regions_as_list() -> None:
     a = CocoToTorchVisionDetection(field="objects")({"objects": Label(_OBJECTS)})
@@ -163,7 +174,7 @@ def test_record_collate_gathers_regions_as_list() -> None:
     )
     batch = collate_records([a, c])
     # Variable-N boxes can't be stacked → the collate gathers them as a per-record list of tensors.
-    assert isinstance(batch["target"], Regions)
+    assert isinstance(batch["target"], Boxes)
     assert isinstance(batch["target"].boxes, list) and len(batch["target"].boxes) == 2
     assert batch["target"].boxes[0].shape == (2, 4)
     assert batch["target"].boxes[1].shape == (1, 4)
@@ -202,10 +213,10 @@ class TestResizeDetection:
     def _record(self) -> dict:
         import torch
 
-        from recordstream import Image, Regions
+        from recordstream import Boxes, Image
 
         image = Image((np.arange(40 * 20 * 3) % 256).reshape(40, 20, 3).astype(np.uint8))  # H=40, W=20
-        target = Regions(boxes=torch.tensor([[5.0, 10.0, 15.0, 30.0]]), labels=torch.tensor([1]))
+        target = Boxes(boxes=torch.tensor([[5.0, 10.0, 15.0, 30.0]]), labels=torch.tensor([1]))
         return {"image": image, "target": target}
 
     def test_image_and_boxes_move_together(self) -> None:
@@ -220,12 +231,12 @@ class TestResizeDetection:
         assert out["target"].labels.tolist() == [1]
 
     def test_boxes_stay_in_their_framework(self) -> None:
-        from recordstream import Image, Regions
+        from recordstream import Boxes, Image
         from recordstream.ops.target import ResizeDetection
 
         record = {
             "image": Image(np.zeros((10, 10, 3), dtype=np.uint8)),
-            "target": Regions(boxes=np.array([[1.0, 1.0, 5.0, 5.0]]), labels=np.array([0])),
+            "target": Boxes(boxes=np.array([[1.0, 1.0, 5.0, 5.0]]), labels=np.array([0])),
         }
         out = ResizeDetection(width=20, height=20)(record)
         assert isinstance(out["target"].boxes, np.ndarray)

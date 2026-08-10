@@ -71,12 +71,12 @@ out = Pipeline([flip])(record)      # image + mask + bboxes flipped together, on
 
 Format handling (`pascal_voc` / `coco` / `yolo` / `albumentations`) is `BboxParams`' knob — the
 engine adds nothing on top. The detection-target ops (`CocoToTorchVisionDetection` /
-`MasksToDetectionBoxes`) produce a `Regions` item for the training boundary; the plain
+`MasksToDetectionBoxes`) produce a `Boxes` item for the training boundary; the plain
 `bboxes`/`labels` list keys are the augmentation-time form the library consumes.
 
-For a plain deterministic resize of the `Regions` form there is `ResizeDetection`
+For a plain deterministic resize of the `Boxes` form there is `ResizeDetection`
 (`recordstream.ops.target`) — the detection twin of the joint image+mask draw: it resizes the
-image (PIL or uint8 array) to a fixed `(height, width)` AND scales the `Regions` boxes by the
+image (PIL or uint8 array) to a fixed `(height, width)` AND scales the `Boxes` boxes by the
 same factors in one coupled step, recording the new frame in `canvas`. Fixed-input-size
 detectors need it; detectors that resize internally simply omit it. Run it BEFORE any float
 conversion (e.g. before `ToTensor`):
@@ -90,7 +90,7 @@ ops:
 
 ### Boxes carry the frame they are stated in
 
-A box is only meaningful against a raster, so a `Regions` records that raster in `canvas` —
+A box is only meaningful against a raster, so a `Boxes` records that raster in `canvas` —
 `(H, W)` — and every op that makes or re-frames one fills it in: `CocoToTorchVisionDetection`
 from the image the annotation describes, `MasksToDetectionBoxes` from the mask the boxes were
 derived from, `ResizeDetection` from the size it resized to (including for an empty target, so a
@@ -108,15 +108,15 @@ ops:
 
 Every shape downstream stays valid — only the coordinates are wrong — so a model trains happily
 against misplaced targets. `ConvertToImage` warns once per op when it resizes a record carrying a
-`Regions`, and a consumer that must be certain compares `canvas` against the image itself
+`Boxes`, and a consumer that must be certain compares `canvas` against the image itself
 (`recordstream.ops.image.image_frame` reads the `(H, W)` of either). Use `ResizeDetection`, which
 moves both.
 
 **A bare library transform has the same gap**, for the reason that makes the dispatch work: an
-albumentations op receives exactly its own key vocabulary, and a `Regions` is not in it. So a bare
+albumentations op receives exactly its own key vocabulary, and a `Boxes` is not in it. So a bare
 `A.Resize` resizes the image and leaves the boxes; a bare `A.HorizontalFlip` mirrors the pixels
 and leaves them — *without changing any shape at all*. The engine warns once per transform type
-when a geometry-changing transform runs while a `Regions` sat out the call, deciding "geometry-
+when a geometry-changing transform runs while a `Boxes` sat out the call, deciding "geometry-
 changing" by the library's own `DualTransform` / `ImageOnlyTransform` split (so `Normalize` and
 friends stay silent). Speak the library's vocabulary and it moves them for you, in the same draw:
 
@@ -129,7 +129,7 @@ ops:
 ```
 
 **torchvision v2 has it too, by the other route.** v2 walks the record natively but transforms
-only its OWN `tv_tensors` types, and a `Regions` is not one — so `v2.Resize` moves the pixels and
+only its OWN `tv_tensors` types, and a `Boxes` is not one — so `v2.Resize` moves the pixels and
 leaves the boxes, while the same transform over a `tv_tensors.BoundingBoxes` rescales them
 correctly. The engine warns once per transform type here as well, using v2's geometric-transform
 grouping so `ColorJitter` and `Normalize` stay silent. Carry boxes in v2's own type when you want
@@ -141,7 +141,7 @@ from torchvision import tv_tensors
 record["boxes"] = tv_tensors.BoundingBoxes(boxes, format="XYXY", canvas_size=(h, w))
 ```
 
-Either way, `ResizeDetection` remains the plain coupled resize over the `Regions` form.
+Either way, `ResizeDetection` remains the plain coupled resize over the `Boxes` form.
 
 ## YAML — bare library transforms are ordinary `!class:` nodes
 

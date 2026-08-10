@@ -7,7 +7,7 @@ import h5py
 import numpy as np
 import pytest
 
-from recordstream import Image, Label, Regions, register_item
+from recordstream import Boxes, Image, Label, register_item
 from recordstream.storage.base import TYPED_FORMAT, require_record_format, restore_attrs, split_attrs
 from recordstream.storage.directory import DirectorySink, DirectorySource
 from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
@@ -31,7 +31,7 @@ def _records() -> list:
     r0 = {
         "image": Image(np.arange(12, dtype=np.float32).reshape(2, 2, 3), layout="CHW"),
         "sig": _StoreSig(np.arange(8, dtype=np.float32), samplerate=20e6, mask=np.array([1, 0, 1], dtype=np.uint8)),
-        "regions": Regions(boxes=[[0, 0, 1, 1], [1, 1, 2, 2]], labels=["a", "b"], canvas=(2, 2)),
+        "regions": Boxes(boxes=[[0, 0, 1, 1], [1, 1, 2, 2]], labels=["a", "b"], canvas=(2, 2)),
         "label": Label("drone", classes=["x", "drone"]),
         "gain_db": -3.0,
         "source_file": "a.iq",
@@ -40,7 +40,7 @@ def _records() -> list:
     r1 = {
         "image": Image(np.ones((2, 2, 3), dtype=np.float32)),
         "sig": _StoreSig(np.zeros(4, dtype=np.float32), samplerate=1e6, mask=np.array([0], dtype=np.uint8)),
-        "regions": Regions(boxes=[[0, 0, 2, 2]], labels=["c"], canvas=(2, 2)),
+        "regions": Boxes(boxes=[[0, 0, 2, 2]], labels=["c"], canvas=(2, 2)),
         "label": Label("x", classes=["x", "drone"]),
         "gain_db": 1.5,
         "source_file": "b.iq",

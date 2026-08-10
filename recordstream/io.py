@@ -135,7 +135,7 @@ def _has_data_field(cls: type) -> bool:
     return is_dataclass(cls) and any(f.name == "data" for f in dataclass_fields(cls))
 
 
-# --- optional helper: an item with a python-object payload (e.g. Regions boxes) ----
+# --- optional helper: an item with a python-object payload (e.g. Boxes boxes) ----
 def default_encoded_attrs(item: Any) -> Dict[str, Any]:
     """The default codec's attrs view of ``item`` — reusable inside a custom encoder."""
     return _attrs(item)

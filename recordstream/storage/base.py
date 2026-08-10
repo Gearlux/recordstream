@@ -74,7 +74,7 @@ class DataSink(Protocol):
 # The shared attr wire-format for the record key-group layout (HDF5 attrs / Zarr .zattrs
 # / directory JSON all speak it): scalars stay native (queryable), array values become
 # separate datasets, and structured values (list/tuple/dict/None) ride a JSON string with
-# TUPLE TAGGING so a round-trip preserves tuple-ness (Regions.canvas == (H, W), not [H, W]).
+# TUPLE TAGGING so a round-trip preserves tuple-ness (Boxes.canvas == (H, W), not [H, W]).
 # --------------------------------------------------------------------------------------
 def split_attrs(attrs: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Split an encoded value's attrs into ``(plain, arrays)`` for storage.

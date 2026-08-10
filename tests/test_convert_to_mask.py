@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 from PIL import Image as PILImage
 
-from recordstream import Image, Label, Mask, MultiLabel, Regions, collate_records, item_data, item_value
+from recordstream import Boxes, Image, Label, Mask, MultiLabel, collate_records, item_data, item_value
 from recordstream.core import _apply_op
 from recordstream.ops import ConvertToMask, DropField, FormulaOp
 
@@ -261,7 +261,7 @@ def _captured_warnings() -> Iterator[List[str]]:
 
 
 class TestBoxesKnowTheirFrame:
-    """`canvas` is the raster a `Regions`' boxes are stated in — so every op that makes or
+    """`canvas` is the raster a `Boxes`' boxes are stated in — so every op that makes or
     re-frames one records it, and the op that moves pixels ALONE says so.
 
     Before this, only the coupled resize set `canvas`, which meant the frame was knowable
@@ -303,7 +303,7 @@ class TestBoxesKnowTheirFrame:
 
         record = {
             "objects": Label({"bbox": [[1.0, 2.0, 3.0, 4.0]], "category": [0]}),
-            "other": Regions(boxes=np.zeros((7, 4), dtype="float32"), labels=np.zeros((7,), dtype="int64")),
+            "other": Boxes(boxes=np.zeros((7, 4), dtype="float32"), labels=np.zeros((7,), dtype="int64")),
         }
         assert CocoToTorchVisionDetection(field="objects")(record)["target"].canvas is None
 
@@ -313,7 +313,7 @@ class TestBoxesKnowTheirFrame:
 
         record = {
             "image": Image(np.zeros((100, 100, 3), dtype="uint8")),
-            "target": Regions(boxes=np.zeros((0, 4), dtype="float32"), labels=np.zeros((0,), dtype="int64")),
+            "target": Boxes(boxes=np.zeros((0, 4), dtype="float32"), labels=np.zeros((0,), dtype="int64")),
         }
         out = ResizeDetection(width=64, height=32)(record)
         assert out["target"].canvas == (32, 64)
@@ -323,7 +323,7 @@ class TestBoxesKnowTheirFrame:
 
         record = {
             "image": Image(np.zeros((200, 200, 3), dtype="uint8")),
-            "target": Regions(boxes=np.array([[10.0, 10.0, 50.0, 50.0]]), labels=np.array([1])),
+            "target": Boxes(boxes=np.array([[10.0, 10.0, 50.0, 50.0]]), labels=np.array([1])),
         }
         op = ConvertToImage(field="image", width=64, height=64)
         with _captured_warnings() as warnings:
@@ -340,7 +340,7 @@ class TestBoxesKnowTheirFrame:
         from recordstream.ops.image import ConvertToImage
 
         image = Image(np.zeros((200, 200, 3), dtype="uint8"))
-        boxes = Regions(boxes=np.array([[1.0, 2.0, 3.0, 4.0]]), labels=np.array([1]))
+        boxes = Boxes(boxes=np.array([[1.0, 2.0, 3.0, 4.0]]), labels=np.array([1]))
         with _captured_warnings() as warnings:
             ConvertToImage(field="image", width=64, height=64)({"image": image})  # resized, no boxes
             ConvertToImage(field="image", max_size=999)({"image": image, "target": boxes})  # boxes, no resize
