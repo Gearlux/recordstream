@@ -2,6 +2,25 @@
 
 from typing import Any
 
+from confluid.fluid import Fluid as _ConfluidFluid
+
+from recordstream.core import _fluid_source_guidance
+
+
+def _guard_live_source(source: Any, slot: str) -> None:
+    """Raise Stream's actionable deferred-marker error when ``source`` is still a Fluid.
+
+    A still-deferred ``!class:X`` (parens-less) marker in a ``source:`` slot is a CONFIG
+    error, and the view sources answer it exactly as ``Stream._guard_live_source`` does —
+    naming the slot and the deferred target, and pointing at the ``!class:X()`` fix —
+    instead of the cryptic ``got Class`` a bare ``hasattr`` check produces. Deliberately
+    message-only: the slot is never flowed here (the raise-with-guidance convention for
+    ``source:`` slots, distinct from the free functions ``project`` / ``dataset_uri``,
+    which do materialize a marker first).
+    """
+    if isinstance(source, _ConfluidFluid):
+        raise TypeError(_fluid_source_guidance(source, slot=slot))
+
 
 def _pass_through(item: Any) -> Any:
     """Pass a wrapped source's item through verbatim.

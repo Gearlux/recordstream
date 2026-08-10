@@ -6,7 +6,7 @@ from typing import Any, Iterator, List, Optional
 from confluid import configurable
 
 from recordstream.items import Record
-from recordstream.sources.base import _pass_through
+from recordstream.sources.base import _guard_live_source, _pass_through
 
 
 @configurable(category="source")
@@ -43,6 +43,7 @@ class ConcatSource:
             offsets: List[int] = []
             total = 0
             for i, src in enumerate(self.sources):
+                _guard_live_source(src, f"ConcatSource.sources[{i}]")
                 if not hasattr(src, "__len__") or not hasattr(src, "__getitem__"):
                     raise TypeError(
                         "ConcatSource requires sources supporting __len__ and __getitem__; "

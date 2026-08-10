@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterator, List, Literal, Optional, get_args
 from confluid import configurable
 
 from recordstream.items import Record
-from recordstream.sources.base import _pass_through
+from recordstream.sources.base import _guard_live_source, _pass_through
 
 # Closed set of split names for DatasetSplit's fraction mode (workspace mandate: prefer
 # closed Literals over bare strings — self-documenting + machine-introspectable by UIs /
@@ -93,6 +93,7 @@ class DatasetSplit:
     def _validate(self) -> None:
         """Validate the (post-construction) configuration. Called lazily before the first partition."""
         source = self.source
+        _guard_live_source(source, "DatasetSplit.source")
         if source is None or not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
             raise TypeError(
                 "DatasetSplit requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"

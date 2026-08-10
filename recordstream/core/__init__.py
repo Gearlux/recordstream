@@ -47,6 +47,7 @@ from recordstream.core.stream import (  # noqa: F401  — see the internal-surfa
     JointStream,
     Stream,
     _check_ops_materialized,
+    _fluid_source_guidance,
     _worker_task,
     ensure_materialized,
     ensure_record_dataset,

@@ -48,14 +48,18 @@ def _describe_deferred_source(source: Any) -> str:
     return f"{type(source).__name__}(target={target_name!r})"
 
 
-def _fluid_source_guidance(source: Any) -> str:
-    """Build an actionable message when Stream.source is still a Confluid Fluid."""
+def _fluid_source_guidance(source: Any, slot: str = "Stream.source") -> str:
+    """Build an actionable message when a source slot is still a Confluid Fluid.
+
+    ``slot`` names the owning slot (``"Stream.source"``, ``"RangeSource.source"``, …) so the
+    view sources raise the SAME guidance Stream does — a still-deferred ``source:`` is a
+    CONFIG error (the parens-less ``!class:X`` spelling), never something the engine flows.
+    """
     return (
-        f"Stream.source is still a deferred Confluid marker: {_describe_deferred_source(source)}. "
+        f"{slot} is still a deferred Confluid marker: {_describe_deferred_source(source)}. "
         "Confluid has not materialized it yet. Fixes: (a) in YAML, write the source as "
         "`!class:X()` (with parens) instead of `!class:X` so it becomes an Instance and is "
-        "materialized at load time; (b) or call `flow(source)` on the source before handing "
-        "it to Stream."
+        "materialized at load time; (b) or call `flow(source)` on the source before wiring it."
     )
 
 

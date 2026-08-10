@@ -6,7 +6,7 @@ from confluid import configurable
 from loggair import get_logger
 
 from recordstream.items import Record
-from recordstream.sources.base import _pass_through
+from recordstream.sources.base import _guard_live_source, _pass_through
 
 logger = get_logger(__name__)
 
@@ -41,6 +41,7 @@ class RangeSource:
         """The contiguous ``[start:stop)`` source indices, computed lazily on first access and cached."""
         if self._indices is None:
             source = self.source
+            _guard_live_source(source, "RangeSource.source")
             if source is None or not hasattr(source, "__len__") or not hasattr(source, "__getitem__"):
                 raise TypeError(
                     "RangeSource requires a source supporting __len__ and __getitem__; " f"got {type(source).__name__}"
