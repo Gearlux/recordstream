@@ -1,11 +1,18 @@
-"""A still-deferred ``!class:`` marker in a view source's ``source:`` slot explains itself.
+"""A still-deferred marker in a view source's ``source:`` slot explains itself.
 
-The parens-less ``!class:X`` YAML spelling leaves a Confluid ``Fluid`` marker in the slot —
-a CONFIG error (the fix is ``!class:X()``), and the view sources answer it with the same
-actionable guidance ``Stream`` gives (naming the slot, the deferred target, and the parens
-fix) instead of the cryptic ``got Class`` their bare ``hasattr`` checks used to produce.
-Deliberately message-only: the slot is never flowed (the raise-with-guidance convention for
-``source:`` slots — distinct from the free functions ``project`` / ``dataset_uri``).
+A ``_partial_: true`` source leaves a Confluid marker in the slot — a CONFIG error, since a
+source slot needs a live object and nothing here will flow it — and the view sources answer
+it with the same actionable guidance ``Stream`` gives (naming the slot, the deferred target,
+and the fix) instead of the cryptic ``got Partial`` their bare ``hasattr`` checks used to
+produce. Deliberately message-only: the slot is never flowed (the raise-with-guidance
+convention for ``source:`` slots — distinct from the free functions ``project`` /
+``dataset_uri``).
+
+**The TRIGGER changed 2026-08-11.** It used to be the parens-less ``!class:X`` spelling,
+which left a deferred stub; confluid merged its eager and deferred markers, so both
+spellings build and that footgun is gone. Deferral is now asked for explicitly, which is
+the only way left to reach this guard — and the message changed with it (it used to say
+"add parens", advice that would now change nothing).
 """
 
 import pytest
@@ -23,14 +30,15 @@ def _expect_guidance(excinfo: "pytest.ExceptionInfo[TypeError]", slot: str) -> N
     assert slot in message
     assert "deferred Confluid marker" in message
     assert "ConcatSource" in message  # the deferred target, not just "Class"
-    assert "!class:X()" in message  # the actionable fix
+    assert "_partial_: true" in message  # the actionable fix
 
 
-def test_a_parens_less_marker_under_range_source_raises_the_stream_guidance() -> None:
+def test_a_partial_marker_under_range_source_raises_the_stream_guidance() -> None:
     cfg = load(
         f"""
-range_src: !class:recordstream.sources.range.RangeSource()
-  source: !class:{_LEAF}
+range_src:
+  _target_: recordstream.sources.range.RangeSource
+  source: {{_target_: {_LEAF}, _partial_: true}}
   stop: 3
 """,
         flow=True,
@@ -40,13 +48,14 @@ range_src: !class:recordstream.sources.range.RangeSource()
     _expect_guidance(excinfo, "RangeSource.source")
 
 
-def test_a_parens_less_marker_under_concat_source_names_the_offending_index() -> None:
+def test_a_partial_marker_under_concat_source_names_the_offending_index() -> None:
     cfg = load(
         f"""
-concat_src: !class:recordstream.sources.concat.ConcatSource()
+concat_src:
+  _target_: recordstream.sources.concat.ConcatSource
   sources:
-    - !class:{_LEAF}()
-    - !class:{_LEAF}
+    - {{_target_: {_LEAF}}}
+    - {{_target_: {_LEAF}, _partial_: true}}
 """,
         flow=True,
     )
@@ -55,11 +64,12 @@ concat_src: !class:recordstream.sources.concat.ConcatSource()
     _expect_guidance(excinfo, "ConcatSource.sources[1]")
 
 
-def test_a_parens_less_marker_under_dataset_split_raises_the_stream_guidance() -> None:
+def test_a_partial_marker_under_dataset_split_raises_the_stream_guidance() -> None:
     cfg = load(
         f"""
-split_src: !class:recordstream.sources.split.DatasetSplit()
-  source: !class:{_LEAF}
+split_src:
+  _target_: recordstream.sources.split.DatasetSplit
+  source: {{_target_: {_LEAF}, _partial_: true}}
 """,
         flow=True,
     )
@@ -94,6 +104,6 @@ split_src: !class:recordstream.sources.split.DatasetSplit()
 
 def test_streams_own_guidance_still_names_its_slot() -> None:
     """The shared message helper's default slot stays ``Stream.source``."""
-    cfg = load(f"deferred: !class:{_LEAF}", flow=True)
+    cfg = load(f"deferred: {{_target_: {_LEAF}, _partial_: true}}", flow=True)
     with pytest.raises(TypeError, match="Stream.source is still a deferred Confluid marker"):
         len(Stream(source=cfg["deferred"]))

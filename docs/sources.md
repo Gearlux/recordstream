@@ -99,11 +99,12 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 
 **HuggingFace native slicing** (alternative, no RecordStream split needed): `split: "train[:90%]"` / `"train[90%:]"` on two `HuggingFaceSource`s.
 
-> **Nesting a source inline: write `!class:X()`, with parens.** A parens-less `!class:X` is a
-> *deferred marker*, not an instance — a `source:` slot holding one fails at first use with an
-> error naming the slot and this fix (the same guidance `Stream` gives). The examples above
-> sidestep this with `!ref:` to a top-level instance, which is also what lets several wrappers
-> share one loaded source.
+> **Never mark a nested source `_partial_: true`.** A partial is a *deferred marker*, not an
+> instance — a `source:` slot holding one fails at first use with an error naming the slot and
+> the fix (the same guidance `Stream` gives), because nothing will flow it for you. A plain
+> `_target_:` source is built at load time and is what the slot wants. The examples above use
+> `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
+> loaded source.
 
 ## Identifying a dataset
 

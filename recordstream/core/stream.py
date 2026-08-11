@@ -53,13 +53,21 @@ def _fluid_source_guidance(source: Any, slot: str = "Stream.source") -> str:
 
     ``slot`` names the owning slot (``"Stream.source"``, ``"RangeSource.source"``, …) so the
     view sources raise the SAME guidance Stream does — a still-deferred ``source:`` is a
-    CONFIG error (the parens-less ``!class:X`` spelling), never something the engine flows.
+    CONFIG error, never something the engine flows.
+
+    The trigger CHANGED with confluid's marker merge (2026-08-11): a parens-less
+    ``!class:X`` used to leave a deferred stub here, and this message used to say "add
+    parens". Both spellings build now, so the only way to reach this is asking for
+    deferral explicitly — ``_partial_: true`` (``!lazy:``) — or wiring a hand-built
+    ``PartialClass(...)``. Telling the user to add parens would now be advice that
+    changes nothing.
     """
     return (
         f"{slot} is still a deferred Confluid marker: {_describe_deferred_source(source)}. "
-        "Confluid has not materialized it yet. Fixes: (a) in YAML, write the source as "
-        "`!class:X()` (with parens) instead of `!class:X` so it becomes an Instance and is "
-        "materialized at load time; (b) or call `flow(source)` on the source before wiring it."
+        "Confluid was told NOT to build it. Fixes: (a) in YAML, drop `_partial_: true` from "
+        "the source so it is built at load time — a source slot needs a live object, and "
+        "nothing here will flow it for you; (b) or call `flow(source)` yourself before "
+        "wiring it in."
     )
 
 
@@ -67,9 +75,9 @@ def _fluid_op_guidance(op: Any, index: int) -> str:
     """Build an actionable message when a Stream op marker cannot be materialized."""
     return (
         f"Stream.ops[{index}] is a deferred Confluid marker that could not be materialized: "
-        f"{_describe_deferred_source(op)}. Fixes: (a) in YAML, write the op as `!class:X()` "
-        "(with parens) so it becomes an Instance and is materialized at load time; (b) or "
-        "call `flow(op)` on the op before handing it to Stream."
+        f"{_describe_deferred_source(op)}. Fixes: (a) in YAML, drop `_partial_: true` from "
+        "the op so it is built at load time; (b) or call `flow(op)` on the op before handing "
+        "it to Stream."
     )
 
 
