@@ -59,7 +59,7 @@ def _markdown_files() -> List[Path]:
 def _strip_code(text: str) -> str:
     """Blank out fenced code blocks before scanning for links.
 
-    Python subscript-then-call — `LazyClass[Metric](SomeClass)` — is
+    Python subscript-then-call — `PartialClass[Metric](SomeClass)` — is
     indistinguishable from a markdown link to a regex, so a code sample containing
     one gets reported as a link to a file named `SomeClass`. Found exactly that way:
     the first run of this check against another project's docs produced a false

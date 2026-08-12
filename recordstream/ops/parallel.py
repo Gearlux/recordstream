@@ -39,7 +39,7 @@ class Parallel:
     """
 
     def __init__(self, ops: Optional[List[Any]] = None, workers: int = 4) -> None:
-        # Lazy / zero-arg: store config only; ``workers >= 1`` is validated lazily in ``stream``.
+        # Partial / zero-arg: store config only; ``workers >= 1`` is validated lazily in ``stream``.
         self.ops = list(ops) if ops else []
         self.workers = int(workers)
 

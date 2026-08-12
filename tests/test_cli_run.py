@@ -2,7 +2,7 @@
 
 from typing import List
 
-from confluid import Class
+from confluid import Target
 
 from recordstream.cli import run
 
@@ -32,7 +32,7 @@ def test_run_flows_deferred_marker() -> None:
             log.append(self.tag)
 
     # A deferred Confluid marker is flowed before run() is called.
-    run(Class(R, tag="x"))
+    run(Target(R, tag="x"))
     assert log == ["x"]
 
 

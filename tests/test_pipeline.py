@@ -64,9 +64,9 @@ class TestPipelineSemantics:
         assert closed == [True]
 
     def test_fluid_entry_flowed_and_cached(self) -> None:
-        # A config-deferred entry (confluid Class marker) is flowed on first call and the
+        # A config-deferred entry (confluid Target marker) is flowed on first call and the
         # live op is cached back into the transforms list.
-        p = Pipeline(transforms=[confluid.Class(RenameField, src="class", dst="klass")])
+        p = Pipeline(transforms=[confluid.Target(RenameField, src="class", dst="klass")])
         out = p(_rec())
         assert out is not None and "klass" in out and "class" not in out
         assert isinstance(p.transforms[0], RenameField)  # cached in place

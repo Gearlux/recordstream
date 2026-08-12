@@ -13,7 +13,7 @@ Design notes
 ------------
 * :class:`SupportsProjection` is a ``Protocol`` (never a base class), so a source
   opts in by *defining* ``project``, not by inheriting.
-* Every public function is a lazy generator (**Lazy Evaluation** mandate) —
+* Every public function is a lazy generator (**Partial Evaluation** mandate) —
   nothing materializes the whole source.
 * :func:`num_classes` (integer class-id semantics) is a free function, *not* a
   method on the generic :class:`~recordstream.core.stream.Stream` engine — counting classes is
@@ -43,7 +43,7 @@ def project(source: Any, keys: Collection[str]) -> Iterator[Record]:
 
     Uses the source's own ``project`` when it implements :class:`SupportsProjection` (the
     efficient path that skips building unrequested values); otherwise falls back to a full
-    iteration that keeps only the requested keys. Lazy: a generator.
+    iteration that keeps only the requested keys. Partial: a generator.
 
     A DEFERRED source (a ``!class:`` marker straight out of a config) is materialized first,
     so a caller never has to remember which entry point flows and which does not —

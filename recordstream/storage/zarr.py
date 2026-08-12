@@ -64,7 +64,7 @@ class ZarrGroupSink(Storage, DataSink):
     """
 
     def __init__(self, path: Union[str, Path] = "", overwrite: bool = False) -> None:
-        # Lazy / zero-arg: store config only; the group is opened lazily in open().
+        # Partial / zero-arg: store config only; the group is opened lazily in open().
         self.path = str(path)
         self.overwrite = overwrite
         self._root: Optional[zarr.Group] = None
@@ -132,7 +132,7 @@ class ZarrGroupSource(Storage, DataSource):
     """
 
     def __init__(self, path: Union[str, Path] = "") -> None:
-        # Lazy / zero-arg: store config only; the group is opened lazily in open().
+        # Partial / zero-arg: store config only; the group is opened lazily in open().
         self.path = str(path)
         self._root: Optional[zarr.Group] = None
 
@@ -181,7 +181,7 @@ class ZarrBatchSink(Storage, DataSink):
         chunks: Optional[List[int]] = None,
         overwrite: bool = False,
     ) -> None:
-        # Lazy / zero-arg: store config only; the array is created lazily in open() (an unset
+        # Partial / zero-arg: store config only; the array is created lazily in open() (an unset
         # path / shape surfaces there).
         self.path = str(path)
         self.shape = tuple(shape) if shape else ()
@@ -254,7 +254,7 @@ class ZarrBatchSource(Storage, DataSource):
     """
 
     def __init__(self, path: Union[str, Path] = "") -> None:
-        # Lazy / zero-arg: store config only; the array is opened lazily in open().
+        # Partial / zero-arg: store config only; the array is opened lazily in open().
         self.path = str(path)
         self._data_arr: Optional[zarr.Array] = None
 

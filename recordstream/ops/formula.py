@@ -40,7 +40,7 @@ class FormulaOp:
     """
 
     def __init__(self, formula: str = "a", field: str = "", var: str = "a") -> None:
-        # Lazy / zero-arg: store config only; formula and field are validated at first call.
+        # Partial / zero-arg: store config only; formula and field are validated at first call.
         self.formula = str(formula)
         self.field = str(field)
         self.var = str(var)

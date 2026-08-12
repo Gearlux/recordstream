@@ -293,7 +293,7 @@ def test_encode_refuses_an_already_encoded_id() -> None:
 
 def test_encode_flows_a_deferred_source() -> None:
     """A config-wired `!class:` source works without the caller flowing it first."""
-    from confluid import Class as ConfluidClass
+    from confluid import Target as ConfluidClass
 
     from recordstream import Stream, iter_key
 
@@ -454,11 +454,11 @@ def test_a_stream_rejects_non_string_names_at_construction() -> None:
 
 def _deferred(records: list) -> Any:
     """A `!class:` marker as a config hands one over — unbuilt."""
-    from confluid import Class
+    from confluid import Target
 
     from recordstream import Stream
 
-    return Class(Stream, source=records)
+    return Target(Stream, source=records)
 
 
 def test_project_materializes_a_deferred_source() -> None:

@@ -28,7 +28,7 @@ class FilterOp:
     """
 
     def __init__(self, p: Optional[Callable[[Record], bool]] = None):
-        # Lazy / zero-arg: store config only; a missing predicate is validated lazily in __call__.
+        # Partial / zero-arg: store config only; a missing predicate is validated lazily in __call__.
         self.p = p
 
     def __call__(self, record: Record) -> Optional[Record]:
@@ -58,7 +58,7 @@ class WrappedOp:
     def __init__(self, f: Union[str, Callable] = "", key: Optional[str] = None, kw: Optional[Dict[str, Any]] = None):
         from recordstream.discovery import get_callable_path
 
-        # Lazy / zero-arg: store config only (the empty-path default resolves lazily via the `func`
+        # Partial / zero-arg: store config only (the empty-path default resolves lazily via the `func`
         # property). EXPLICIT: always store the string path for serialization.
         self.f = get_callable_path(f) if callable(f) else f
         self.key = key

@@ -19,7 +19,7 @@ torch = pytest.importorskip("torch")
 
 
 def _kwargs(marker: object) -> dict:
-    """A slot holds a LazyClass MARKER pre-flow; its stored kwargs are what these tests pin."""
+    """A slot holds a PartialClass MARKER pre-flow; its stored kwargs are what these tests pin."""
     assert isinstance(marker, Fluid)
     return marker.kwargs
 

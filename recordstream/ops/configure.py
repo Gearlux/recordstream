@@ -57,7 +57,7 @@ class ConfigureOp:
         param: str = "",
         source: str = "",
     ) -> None:
-        # Lazy / zero-arg: store config only; target/param/source are validated at first call.
+        # Partial / zero-arg: store config only; target/param/source are validated at first call.
         self.ops = list(ops) if ops else []
         self.target = target
         self.param = str(param)

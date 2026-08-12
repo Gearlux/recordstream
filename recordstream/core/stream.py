@@ -149,7 +149,7 @@ class JointStream:
     """
 
     def __init__(self, streams: Optional[List["Stream"]] = None) -> None:
-        # Lazy / zero-arg: store config only; no sub-streams ⇒ an empty stream.
+        # Partial / zero-arg: store config only; no sub-streams ⇒ an empty stream.
         self.streams = streams if streams is not None else []
 
     def __iter__(self) -> Iterator[Record]:
@@ -428,7 +428,7 @@ class Stream:
 
         Implements :class:`recordstream.projection.SupportsProjection`. Stream must run its op
         chain to produce each record (an op may consume the input), so this is the generic
-        "iterate, then keep only the requested keys" form. Lazy: a generator.
+        "iterate, then keep only the requested keys" form. Partial: a generator.
         """
         want = set(keys)
         for record in self:

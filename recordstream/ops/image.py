@@ -776,7 +776,7 @@ class ConvertToMask(Transform):
     produces = (MaskItem,)
 
     def __init__(self, field: str = "", output: str = "mask") -> None:
-        # Lazy / zero-arg: store config only. A missing/unusable field is reported at call time.
+        # Partial / zero-arg: store config only. A missing/unusable field is reported at call time.
         super().__init__()
         self.field = field
         self.output = output

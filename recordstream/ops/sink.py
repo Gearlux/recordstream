@@ -43,7 +43,7 @@ class RecordSinkOp:
     """
 
     def __init__(self, sink: Any = None) -> None:
-        # Lazy / zero-arg: store config only; a non-None sink is required lazily in __call__.
+        # Partial / zero-arg: store config only; a non-None sink is required lazily in __call__.
         self.sink = sink
         self._opened = False
 

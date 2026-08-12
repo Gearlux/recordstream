@@ -17,7 +17,7 @@ class RangeSource:
 
     The plain-slice counterpart to :class:`~recordstream.sources.DatasetSplit` (which shuffles
     + partitions) — extracted from DatasetSplit's old "range mode". Negative ``start`` /
-    ``stop`` count from the end; both are clamped to ``[0, len(source)]``. Lazy: only index
+    ``stop`` count from the end; both are clamped to ``[0, len(source)]``. Partial: only index
     arithmetic happens up front; records are produced on demand.
 
     The wrapped source must implement ``__len__`` and ``__getitem__``.
@@ -29,7 +29,7 @@ class RangeSource:
     """
 
     def __init__(self, source: Any = None, start: Optional[int] = None, stop: Optional[int] = None) -> None:
-        # Lazy / zero-arg: store config only; the index arithmetic (and source validation) is deferred
+        # Partial / zero-arg: store config only; the index arithmetic (and source validation) is deferred
         # to the ``indices`` property so the source can be configured post-construction.
         self.source = source
         self.start = start

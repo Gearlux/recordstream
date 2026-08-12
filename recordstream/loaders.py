@@ -6,7 +6,7 @@ reshuffle). torch's second half is the ``DataLoader``, and every training runnab
 workspace baked the same three deferred loader slots into its constructor — train shuffled,
 val/test not, one shared kwarg set. :func:`loader_slots` is that construction written once.
 
-The slots are :class:`confluid.LazyClass` markers, not live loaders, on purpose: the lazy-init
+The slots are :class:`confluid.PartialClass` markers, not live loaders, on purpose: the lazy-init
 mandate forbids functional work in a constructor, and the dataset does not exist yet — the run
 method flows each slot with ``dataset=`` at run time (``flow(self.train_loader, dataset=ds)``).
 
@@ -19,7 +19,7 @@ a consumer — which is by definition a torch trainer — imports it directly::
 
 from typing import Any, Callable, List, NamedTuple
 
-from confluid import Lazy, LazyClass
+from confluid import Partial, PartialClass
 
 from recordstream.collate import collate_records
 from recordstream.items import Record
@@ -37,9 +37,9 @@ __all__ = ["LoaderSlots", "loader_slots"]
 class LoaderSlots(NamedTuple):
     """The three deferred loader markers, addressed by split (``slots.train`` / ``.val`` / ``.test``)."""
 
-    train: Lazy[DataLoader[Any]]
-    val: Lazy[DataLoader[Any]]
-    test: Lazy[DataLoader[Any]]
+    train: Partial[DataLoader[Any]]
+    val: Partial[DataLoader[Any]]
+    test: Partial[DataLoader[Any]]
 
 
 def loader_slots(
@@ -76,7 +76,7 @@ def loader_slots(
             not a shared kwarg.
 
     Returns:
-        A :class:`LoaderSlots` named tuple — three ``LazyClass(DataLoader, ...)`` markers
+        A :class:`LoaderSlots` named tuple — three ``PartialClass(DataLoader, ...)`` markers
         (``slots.train`` with ``shuffle=True``, ``slots.val`` / ``slots.test`` with
         ``shuffle=False``). Assign them to the runnable's ``train_loader`` / ``val_loader`` /
         ``test_loader`` slots and flow each with ``dataset=`` at run time.
@@ -95,7 +95,7 @@ def loader_slots(
         **loader_kw,
     )
     return LoaderSlots(
-        train=LazyClass(DataLoader, shuffle=True, **shared),
-        val=LazyClass(DataLoader, shuffle=False, **shared),
-        test=LazyClass(DataLoader, shuffle=False, **shared),
+        train=PartialClass(DataLoader, shuffle=True, **shared),
+        val=PartialClass(DataLoader, shuffle=False, **shared),
+        test=PartialClass(DataLoader, shuffle=False, **shared),
     )

@@ -33,7 +33,7 @@ class MapStyle(Protocol):
 #: named ONCE here rather than restated by every consumer: anything MAP-STYLE (``__len__`` +
 #: ``__getitem__`` — which a ``Stream`` is), or any iterable of records (a recordstream
 #: source, a plain list of record dicts). Consumers annotate their slots
-#: ``Optional[Lazy[RecordSource]]`` — ``Lazy`` because they flow the slot at run time.
+#: ``Optional[Partial[RecordSource]]`` — ``Partial`` because they flow the slot at run time.
 #:
 #: Expressed with the structural :class:`MapStyle` rather than ``torch.utils.data.Dataset`` so the
 #: engine can say "a dataset" without importing a framework; torch's ``DataLoader`` is itself

@@ -27,7 +27,7 @@ class ConcatSource:
     """
 
     def __init__(self, sources: Optional[List[Any]] = None) -> None:
-        # Lazy / zero-arg: store config only; sub-source validation + the cumulative-offset precompute
+        # Partial / zero-arg: store config only; sub-source validation + the cumulative-offset precompute
         # are deferred to the ``offsets`` property so sources can be configured post-construction.
         self.sources = list(sources) if sources else []
         self._offsets: Optional[List[int]] = None

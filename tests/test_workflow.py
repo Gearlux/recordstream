@@ -68,7 +68,7 @@ def test_sequence_skips_none_entries() -> None:
 
 
 def test_sequence_caches_flowed_step() -> None:
-    seq = Sequence([confluid.Class(_RunStep, tag="x")])
+    seq = Sequence([confluid.Target(_RunStep, tag="x")])
     seq.run()
     # After run, the deferred marker has been replaced by the live, flowed object.
     assert isinstance(seq.steps[0], _RunStep)

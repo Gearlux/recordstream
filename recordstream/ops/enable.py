@@ -73,7 +73,7 @@ class Enable:
     Constraints:
       * ``ops`` is required and must be a non-empty list — validated **lazily**
         on first call (zero-arg construction stays valid per the recordstream
-        "Lazy Initialization & Zero-Arg Construction" convention).
+        "Partial Initialization & Zero-Arg Construction" convention).
       * ``enabled`` must be a ``bool``; a non-bool raises ``TypeError`` at set time.
       * Any OTHER boolean attribute set on the wrapper raises ``ValueError`` on
         first call. That is the migration guard for the retired dynamic-toggle
@@ -90,7 +90,7 @@ class Enable:
     """
 
     def __init__(self, ops: Optional[List] = None, enabled: bool = True, name: str = "") -> None:
-        # Lazy / zero-arg: store config only; `ops` non-emptiness and stray-toggle
+        # Partial / zero-arg: store config only; `ops` non-emptiness and stray-toggle
         # rejection are enforced lazily on first call.
         self.ops: List = list(ops) if ops else []
         self.name = name
@@ -111,7 +111,7 @@ class Enable:
         self._enabled = value
 
     def _check(self) -> None:
-        """Lazy one-time validation, run on the first record."""
+        """Partial one-time validation, run on the first record."""
         if not self.ops:
             raise ValueError("Enable requires a non-empty 'ops' list.")
         stray = [key for key, value in vars(self).items() if isinstance(value, bool) and not key.startswith("_")]

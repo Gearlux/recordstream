@@ -33,7 +33,7 @@ class DirectorySink(Storage, DataSink):
     """
 
     def __init__(self, path: Union[str, Path] = "", overwrite: bool = False, use_npz: bool = True) -> None:
-        # Lazy / zero-arg: store config only; the directory is created lazily in open().
+        # Partial / zero-arg: store config only; the directory is created lazily in open().
         self.path = Path(path)
         self.overwrite = overwrite
         self.use_npz = use_npz
@@ -121,7 +121,7 @@ class DirectorySource(Storage, DataSource):
     """
 
     def __init__(self, path: Union[str, Path] = "") -> None:
-        # Lazy / zero-arg: store config only; the directory is scanned lazily on iteration.
+        # Partial / zero-arg: store config only; the directory is scanned lazily on iteration.
         self.path = Path(path)
 
     def _record_dirs(self) -> list:

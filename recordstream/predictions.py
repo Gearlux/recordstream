@@ -32,7 +32,7 @@ class PredictionsSink(Protocol):
 
     Structural, not a base class: a sink is anything that can take one record's prediction plus
     that record's metadata, and be closed at the end. Naming it here — beside the sink this
-    package ships — means consuming runnables annotate ``Optional[Lazy[PredictionsSink]]``
+    package ships — means consuming runnables annotate ``Optional[Partial[PredictionsSink]]``
     instead of ``Any``, which declared nothing and let a use site call ``.write`` on a slot that
     might still be a deferred marker.
 

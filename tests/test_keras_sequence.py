@@ -149,7 +149,7 @@ def test_on_epoch_end_is_a_no_op_when_not_shuffling() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Lazy construction — the recordstream constructor rule
+# Partial construction — the recordstream constructor rule
 # --------------------------------------------------------------------------- #
 
 

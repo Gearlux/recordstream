@@ -189,7 +189,7 @@ class MetadataFilterSource:
         where: str = "",
         predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
     ) -> None:
-        # Lazy / zero-arg: store config only; matching indices compute lazily on first access.
+        # Partial / zero-arg: store config only; matching indices compute lazily on first access.
         self.source = source
         self.where = str(where)
         self.predicate = predicate

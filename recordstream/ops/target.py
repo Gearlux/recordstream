@@ -219,7 +219,7 @@ class EncodeTarget(Transform):
         output: str = "",
     ) -> None:
         super().__init__()
-        # Lazy / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
+        # Partial / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
         self.mapping = dict(mapping) if mapping else {}
         self.ignore_unknown = bool(ignore_unknown)
         self.default = default
@@ -274,7 +274,7 @@ class DecodeTarget(Transform):
         output: str = "",
     ) -> None:
         super().__init__()
-        # Lazy / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
+        # Partial / zero-arg: store config only; the non-empty requirement is validated lazily in __call__.
         self.mapping = dict(mapping) if mapping else {}
         self.ignore_unknown = bool(ignore_unknown)
         self.default = default

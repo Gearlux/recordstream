@@ -58,7 +58,7 @@ class DatasetSplit:
     Omit ``test_fraction`` for a plain two-way train/val split; omit both fractions for a
     degenerate split where ``train`` is the whole source and ``val`` / ``test`` are empty.
 
-    The wrapped source must implement ``__len__`` and ``__getitem__``. Lazy: only index
+    The wrapped source must implement ``__len__`` and ``__getitem__``. Partial: only index
     arithmetic happens up front; records are produced on demand.
 
     Args:
@@ -77,7 +77,7 @@ class DatasetSplit:
         test_fraction: Optional[float] = None,
         seed: Optional[int] = None,
     ) -> None:
-        # Lazy / zero-arg: store config only. All validation is deferred to first materialization
+        # Partial / zero-arg: store config only. All validation is deferred to first materialization
         # (``_validate``, invoked from ``_view``) so the source can be configured post-construction.
         self.source = source
         self.split = split

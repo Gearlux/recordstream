@@ -70,8 +70,8 @@ class HuggingFaceSource:
     * each ``metadata_features`` column -> its own :class:`~recordstream.Label` keyed by the column
       name, plus the source-provenance ``hf_path`` / ``hf_split`` Labels.
 
-    Lazy & zero-arg per the workspace class-design convention (see confluid AGENTS.md
-    "Lazy Initialization & Zero-Arg Construction"): the constructor only stores values and
+    Partial & zero-arg per the workspace class-design convention (see confluid AGENTS.md
+    "Partial Initialization & Zero-Arg Construction"): the constructor only stores values and
     does NO functional work — ``HuggingFaceSource()`` is valid, and the dataset is downloaded
     only on first access to :attr:`dataset` (cached thereafter; reset ``_dataset`` to reload).
     ``path`` is therefore optional at construction and validated lazily when the data is needed.
@@ -110,7 +110,7 @@ class HuggingFaceSource:
         revision: Optional[str] = None,
         load_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
-        # Lazy constructor: store config only — never load here. Real work (the network/disk
+        # Partial constructor: store config only — never load here. Real work (the network/disk
         # download) is deferred to the ``dataset`` property so the object is cheap to build and
         # configurable post-construction.
         self.path = path
@@ -133,7 +133,7 @@ class HuggingFaceSource:
         # `default-<hash of the kwargs>`, missed the cache, and went to the Hub. Measured: the same
         # command passes with no name override and fails with one.
         self._load_kwargs = dict(load_kwargs or {})
-        # Lazy cache for the materialized dataset (see the ``dataset`` property).
+        # Partial cache for the materialized dataset (see the ``dataset`` property).
         self._dataset: Any = None
 
     @property
@@ -226,7 +226,7 @@ class HuggingFaceSource:
     def resolved_metadata_features(self) -> List[str]:
         """``metadata_features`` resolved against the live dataset's columns (expands the ``"*"`` sentinel).
 
-        Lazy because the ``"*"`` expansion needs the loaded dataset's ``column_names``; ``None`` / ``[]``
+        Partial because the ``"*"`` expansion needs the loaded dataset's ``column_names``; ``None`` / ``[]``
         stays "no extra metadata" (backward-compatible).
         """
         return _resolve_metadata_features(

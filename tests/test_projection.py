@@ -7,7 +7,7 @@ what it skips, what it costs, and that it inherits ``iter_key``'s three properti
 
 from typing import Any, Collection, Dict, Iterator, List
 
-from confluid import LazyClass
+from confluid import PartialClass
 
 from recordstream import Label, MultiLabel, first_value, is_class_id
 from recordstream.items import Record
@@ -101,7 +101,7 @@ def test_first_value_asks_only_for_the_requested_key() -> None:
 
 def test_first_value_materializes_a_deferred_source() -> None:
     """``project()`` flows a ``!class:`` marker, so a caller writes no ``flow()`` here."""
-    marker = LazyClass(_Source, records=[{"class": "cat"}])
+    marker = PartialClass(_Source, records=[{"class": "cat"}])
     assert first_value(marker, "class") == "cat"
 
 

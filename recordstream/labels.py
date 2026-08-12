@@ -15,7 +15,7 @@ So fitting happens once, then the mapping is pinned/persisted — it does NOT co
 "mapping pinned in config, not fitted" discipline of the ops; it is how the pin gets created.
 
 Zero-arg constructible (``LabelMap()`` succeeds with an empty mapping) and side-effect-free in
-``__init__`` per the workspace "Lazy Initialization & Zero-Arg Construction" convention; the
+``__init__`` per the workspace "Partial Initialization & Zero-Arg Construction" convention; the
 non-empty requirement is validated lazily in the properties, not in the constructor.
 
 A label is ALWAYS mappable to ids: :meth:`LabelMap.to_ids` accepts a ``Label`` / ``MultiLabel``
@@ -71,7 +71,7 @@ class LabelMap:
     """
 
     def __init__(self, mapping: Optional[Dict[str, int]] = None) -> None:
-        # Lazy / zero-arg: store config only. An empty map is a valid object; the non-empty
+        # Partial / zero-arg: store config only. An empty map is a valid object; the non-empty
         # requirement is enforced lazily in the properties, never here.
         self.mapping: Dict[str, int] = {str(k): int(v) for k, v in mapping.items()} if mapping else {}
 

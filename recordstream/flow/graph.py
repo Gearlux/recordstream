@@ -46,7 +46,7 @@ class FlowGraph:
         outputs: str = "",
         chunk_size: int = 0,
     ) -> None:
-        # Lazy / zero-arg: store config only; parsing/validation happen in the cached property.
+        # Partial / zero-arg: store config only; parsing/validation happen in the cached property.
         self.source = source
         self.flow = flow
         self.outputs = str(outputs)

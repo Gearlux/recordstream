@@ -1,11 +1,11 @@
-"""Pins the "Lazy Initialization & Zero-Arg Construction" convention for ALL recordstream configurables.
+"""Pins the "Partial Initialization & Zero-Arg Construction" convention for ALL recordstream configurables.
 
 Every ``@configurable`` class in recordstream MUST be constructible with no arguments and do no
 functional work in ``__init__`` (no I/O, no network, no eager materialization). This walks the
 whole package, discovers every ``@configurable`` class, and asserts ``Cls()`` succeeds — so a
 newly-added class that violates the convention (a required ctor arg, or a constructor that opens a
-file / loads a dataset) fails here. See confluid ``AGENTS.md`` → "Lazy Initialization & Zero-Arg
-Construction" and recordstream ``AGENTS.md`` → "Lazy Evaluation".
+file / loads a dataset) fails here. See confluid ``AGENTS.md`` → "Partial Initialization & Zero-Arg
+Construction" and recordstream ``AGENTS.md`` → "Partial Evaluation".
 """
 
 import importlib

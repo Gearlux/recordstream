@@ -113,7 +113,7 @@ class Sequence(TorchRunner, ProgressReporting):
     """
 
     def __init__(self, steps: Optional[List[Any]] = None) -> None:
-        # Lazy / zero-arg: store config only; branches are flowed in run().
+        # Partial / zero-arg: store config only; branches are flowed in run().
         self.steps: List[Any] = list(steps) if steps else []
 
     def run(self) -> None:

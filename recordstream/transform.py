@@ -112,7 +112,7 @@ class Pipeline:
     """
 
     def __init__(self, transforms: Optional[Sequence[Any]] = None) -> None:
-        # Lazy / zero-arg: store config only; marker flow happens on first call.
+        # Partial / zero-arg: store config only; marker flow happens on first call.
         self.transforms: List[Any] = list(transforms) if transforms else []
 
     def __call__(self, record: Record) -> Optional[Record]:
