@@ -36,21 +36,26 @@ class DatasetSplit:
         split.test    # ≈10%
 
     The views are disjoint and complementary, computed once (cached) over a single
-    deterministic shuffle, so the underlying source is consumed once. In Confluid YAML the
-    views are reachable by **attribute reference** — ``!ref:my_split.train`` / ``.val`` /
-    ``.test`` — and because two ``!ref:`` to the same key flow the *same* instance, the
-    partition and the source load are shared across all three references::
-
-        my_split: !class:recordstream.sources.split.DatasetSplit()
-          source: !ref:hf_train
-          val_fraction: 0.1
-          test_fraction: 0.1
-          seed: 42
+    deterministic shuffle. In a config each view is a ``DatasetSplit`` of its own with the
+    ``split`` selector set — the recipe is written once (a YAML anchor) and merged (``<<:``)
+    into the other views. Every view references the SAME ``source`` (``!ref:`` shares the
+    instance), so the upstream source is loaded exactly once; a ``DatasetSplit``'s own
+    partition is one seeded shuffle over ``len(source)``, cheap to repeat::
 
         train_set: !class:recordstream.core.stream.Stream()
-          source: !ref:my_split.train
+          source: &split_recipe !class:recordstream.sources.split.DatasetSplit()
+            source: !ref:hf_train
+            val_fraction: 0.1
+            test_fraction: 0.1
+            seed: 42
+            split: train
         val_set: !class:recordstream.core.stream.Stream()
-          source: !ref:my_split.val
+          source: !class:recordstream.sources.split.DatasetSplit()
+            <<: *split_recipe
+            split: val
+
+    (Reading a view by attribute reference — ``!ref:my_split.train`` — is no longer a
+    config spelling; the config engine refuses it and names this rewrite.)
 
     **Select-one API.** Passing ``split`` makes the ``DatasetSplit`` itself iterate that one
     view (``split=None`` ⇒ ``train``), so it is directly usable as a single ``source:``.
@@ -169,7 +174,7 @@ class _SplitView:
     """An indexable view of ``source`` restricted (and reordered) to ``indices``.
 
     Internal to :class:`DatasetSplit` — produced by its ``train`` / ``val`` / ``test``
-    properties (and reachable in Confluid YAML via ``!ref:my_split.train``). Deliberately
+    properties (in a config, select a view with the ``split`` parameter). Deliberately
     NOT a ``@configurable``: it is never constructed directly in a config, only read off a
     live ``DatasetSplit`` instance, so it carries no discovery surface of its own. It stays
     in this module for the same reason — it is DatasetSplit's own return type, not a

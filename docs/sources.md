@@ -47,23 +47,31 @@ split = DatasetSplit(source=src, val_fraction=0.1, test_fraction=0.1, seed=42)
 split.train   # ≈80% — the remainder      split.val   # ≈10%      split.test  # ≈10%
 ```
 
-The views are disjoint and complementary, computed once over a single deterministic shuffle (cached), so the underlying source is consumed once. In Confluid YAML they're reachable by **attribute reference** — `!ref:my_split.train` / `.val` / `.test`. All three refs resolve to the *same* `DatasetSplit` instance, so the upstream source is loaded **exactly once**:
+The views are disjoint and complementary, computed once over a single deterministic shuffle (cached). In a config each view is a `DatasetSplit` with its `split` selector set — write the recipe once (a YAML anchor on the first view) and merge it (`<<:`) into the others. Every view references the *same* `hf_train` (`!ref:` shares the instance), so the upstream source is loaded **exactly once**; a `DatasetSplit`'s own partition is one seeded shuffle over `len(source)`:
 
 ```yaml
 hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
   path: ylecun/mnist
   split: train
 
-my_split: !class:recordstream.sources.split.DatasetSplit()
-  source: !ref:hf_train
-  val_fraction: 0.1
-  test_fraction: 0.1
-  seed: 42
-
-train_set: !class:recordstream.core.stream.Stream() { source: !ref:my_split.train }
-val_set:   !class:recordstream.core.stream.Stream() { source: !ref:my_split.val }
-test_set:  !class:recordstream.core.stream.Stream() { source: !ref:my_split.test }
+train_set: !class:recordstream.core.stream.Stream()
+  source: &split_recipe !class:recordstream.sources.split.DatasetSplit()
+    source: !ref:hf_train
+    val_fraction: 0.1
+    test_fraction: 0.1
+    seed: 42
+    split: train
+val_set: !class:recordstream.core.stream.Stream()
+  source: !class:recordstream.sources.split.DatasetSplit()
+    <<: *split_recipe
+    split: val
+test_set: !class:recordstream.core.stream.Stream()
+  source: !class:recordstream.sources.split.DatasetSplit()
+    <<: *split_recipe
+    split: test
 ```
+
+(Reading a view by attribute reference — `!ref:my_split.train` — is no longer a config spelling; the config engine refuses it and names this rewrite.)
 
 Omit `test_fraction` for a plain two-way train/val split; omit both fractions and `train` is the whole source (`val`/`test` empty).
 
@@ -184,4 +192,4 @@ class MyStoreSource:
 
 Rationale: [docs/architecture.md §13](architecture.md#13-dataset-identity-is-a-protocol-and-a-view-propagates-it-verbatim-recordstreamuri-2026-08-02).
 
-> **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key (including attribute refs like `!ref:my_split.train`), so a single `HuggingFaceSource` is loaded once and shared. Use `!clone:` when you want an independent deep copy instead.
+> **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared. Write the marker again when you want an independent instance instead.

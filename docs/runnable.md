@@ -7,7 +7,7 @@ processor, a workflow. It is the unit `recordstream run` executes:
 # config.yaml — the ONE runner shape for every kind of run
 runnable: !class:mypkg.Classifier
   task: fit                # ← the one knob: fit / evaluate / test / predict
-  train_set: !ref:my_split.train
+  train_set: !ref:train_split          # a DatasetSplit with `split: train`
 ```
 
 ```bash
