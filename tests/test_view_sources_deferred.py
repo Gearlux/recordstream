@@ -41,7 +41,6 @@ range_src:
   source: {{_target_: {_LEAF}, _partial_: true}}
   stop: 3
 """,
-        flow=True,
     )
     with pytest.raises(TypeError) as excinfo:
         cfg["range_src"].indices
@@ -57,7 +56,6 @@ concat_src:
     - {{_target_: {_LEAF}}}
     - {{_target_: {_LEAF}, _partial_: true}}
 """,
-        flow=True,
     )
     with pytest.raises(TypeError) as excinfo:
         cfg["concat_src"].offsets
@@ -71,7 +69,6 @@ split_src:
   _target_: recordstream.sources.split.DatasetSplit
   source: {{_target_: {_LEAF}, _partial_: true}}
 """,
-        flow=True,
     )
     with pytest.raises(TypeError) as excinfo:
         len(cfg["split_src"].train)
@@ -91,7 +88,6 @@ concat_src: !class:recordstream.sources.concat.ConcatSource()
 split_src: !class:recordstream.sources.split.DatasetSplit()
   source: !class:{_LEAF}()
 """,
-        flow=True,
     )
     range_src: RangeSource = cfg["range_src"]
     concat_src: ConcatSource = cfg["concat_src"]
@@ -104,6 +100,6 @@ split_src: !class:recordstream.sources.split.DatasetSplit()
 
 def test_streams_own_guidance_still_names_its_slot() -> None:
     """The shared message helper's default slot stays ``Stream.source``."""
-    cfg = load(f"deferred: {{_target_: {_LEAF}, _partial_: true}}", flow=True)
+    cfg = load(f"deferred: {{_target_: {_LEAF}, _partial_: true}}")
     with pytest.raises(TypeError, match="Stream.source is still a deferred Confluid marker"):
         len(Stream(source=cfg["deferred"]))

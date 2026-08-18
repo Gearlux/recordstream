@@ -11,7 +11,7 @@ import multiprocessing
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 from confluid import configurable
-from confluid import resolve as _confluid_resolve
+from confluid import load as _confluid_load
 from loggair import get_logger
 
 from recordstream.core.families import _extra_op_families, _op_expands
@@ -92,10 +92,10 @@ class FlowGraph:
     def from_yaml(cls, path: str, source: Optional[Any] = None) -> "FlowGraph":
         """Build a FlowGraph from a ``{flow: {...}, outputs: ...}`` YAML document (or inline string).
 
-        Uses ``confluid.resolve`` so step markers stay UNbuilt until :func:`parse_flow`
+        Uses ``confluid.load(until="settled")`` so step markers stay UNbuilt until :func:`parse_flow`
         pops the reserved step keys and flows each op itself.
         """
-        doc = _confluid_resolve(path)
+        doc = _confluid_load(path, until="settled")
         if not isinstance(doc, dict) or "flow" not in doc:
             raise ValueError(f"FlowGraph.from_yaml: {path!r} has no 'flow:' mapping")
         return cls(source=source, flow=doc["flow"], outputs=str(doc.get("outputs", "") or ""))

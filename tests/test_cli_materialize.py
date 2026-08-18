@@ -59,8 +59,8 @@ def liquifai_context() -> Any:
 
 
 def _node(text: str = FLAT_CONFIG) -> Any:
-    """The document + its ``runnable:`` node, loaded the way liquifai loads it (flow=False)."""
-    document = confluid.load(text, flow=False)
+    """The document + its ``runnable:`` node, loaded the way liquifai loads it (until="document")."""
+    document = confluid.load(text, until="document")
     return document, document["runnable"]
 
 
@@ -108,7 +108,7 @@ def test_no_liquifai_context_falls_back_to_flow(liquifai_context: Any) -> None:
 
 def test_a_root_fluid_document_falls_back_to_flow(liquifai_context: Any) -> None:
     """A YAML whose root is a single `!class:` has no siblings — nothing is lost."""
-    document = confluid.load("!class:tests.test_cli_materialize._Runner\nmax_epochs: 5\n", flow=False)
+    document = confluid.load("!class:tests.test_cli_materialize._Runner\nmax_epochs: 5\n", until="document")
     liquifai_context(document)  # not a dict
 
     runner = materialize_runnable(document)

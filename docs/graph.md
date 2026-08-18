@@ -119,7 +119,7 @@ from recordstream.sources import HuggingFaceSource
 stream = Stream.from_ops_yaml("ops.yaml", source=HuggingFaceSource(path="ylecun/mnist"))
 ```
 
-The helper **materializes** the deferred `!class:` markers eagerly (via `confluid.materialize`) so
+The helper **materializes** the deferred `!class:` markers eagerly (via `confluid.load`) so
 a broken op fails at load time with the YAML in hand. It is a convenience, not a necessity:
 `Stream` also flows any still-deferred marker in place at engine-route entry, which is what lets a
 bare mapping-form `!class:albumentations.HorizontalFlip {p: 0.5}` sit directly in an `ops:` list.

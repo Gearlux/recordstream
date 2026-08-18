@@ -199,7 +199,7 @@ def test_a_deferred_config_marker_is_materialized_before_being_asked() -> None:
 
     node = load(
         "!class:recordstream.sources.huggingface.HuggingFaceSource()\n  path: ylecun/mnist\n  split: train\n",
-        flow=False,
+        until="document",
     )
     assert dataset_uri(node) == "hf://datasets/ylecun/mnist?split=train"
 

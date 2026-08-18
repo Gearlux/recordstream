@@ -25,7 +25,6 @@ from typing import Any, Callable, Collection, Iterable, Iterator, List, Optional
 
 from confluid import configurable
 from confluid import load as _confluid_load
-from confluid import materialize as _confluid_materialize
 from confluid.fluid import Fluid as _ConfluidFluid
 from loggair import get_logger
 
@@ -225,11 +224,11 @@ class Stream:
         ``path`` is the ``{ops: [!class:...()]}`` document produced by an external graph
         exporter's ops-export. Op markers are materialized to live callables before being
         attached (``confluid.load`` leaves ``!class:`` markers nested under a mapping key
-        deferred, so ``confluid.materialize`` flows them into live ops).
+        deferred, so ``confluid.load`` flows them into live ops).
         """
         loaded = _confluid_load(path)
         raw_ops = loaded.get("ops", []) if isinstance(loaded, dict) else []
-        ops = list(_confluid_materialize(raw_ops))
+        ops = list(_confluid_load(raw_ops))
         return cls(source=source, ops=ops)
 
     @property

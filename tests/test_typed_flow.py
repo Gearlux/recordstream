@@ -212,7 +212,7 @@ outputs: out
         from_yaml = list(FlowGraph.from_yaml(str(path), source=[dict(record)]))
         import confluid
 
-        doc = confluid.resolve(str(path))
+        doc = confluid.load(str(path), until="settled")
         parsed = list(FlowGraph(source=[dict(record)], flow=doc["flow"], outputs=str(doc.get("outputs", ""))))
         assert len(from_yaml) == len(parsed) == 1
         assert set(from_yaml[0]) == set(parsed[0])
@@ -233,7 +233,7 @@ flow:
         )
         import confluid
 
-        marker = confluid.resolve(str(path))["flow"]["gated"]
+        marker = confluid.load(str(path), until="settled")["flow"]["gated"]
         assert "bind" not in marker.kwargs  # consumed as addressed configuration
 
 

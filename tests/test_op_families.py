@@ -485,7 +485,7 @@ ops:
             "labels": [1],
         }
         with _captured_warnings() as warnings:
-            out = list(Stream(source=[record], ops=confluid.load(document, flow=True)["ops"]))[0]
+            out = list(Stream(source=[record], ops=confluid.load(document)["ops"]))[0]
         assert warnings == []
         assert [round(v, 1) for v in out["bboxes"][0]] == [60.0, 10.0, 90.0, 40.0], "mirrored across x"
 

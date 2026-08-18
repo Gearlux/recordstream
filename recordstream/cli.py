@@ -47,7 +47,7 @@ def materialize_runnable(runnable: Any) -> Any:
     the constructor default and looks configured.
 
     So this reaches back to the loaded document through liquifai's context and calls
-    ``materialize(node, context=document)``. Nested stubs still ride the normal deferred
+    ``load(node, context=document)``. Nested stubs still ride the normal deferred
     path — a ``!lazy:`` marker stays deferred for the runnable to flow at run time.
 
     **liquifai 0.1.1 fixes this at its own layer** (``di.deep_flow`` now takes the
@@ -74,7 +74,7 @@ def materialize_runnable(runnable: Any) -> Any:
             runnable = materialize_runnable(runnable)
             runnable.run()
     """
-    from confluid import flow, materialize
+    from confluid import flow, load
     from confluid.fluid import Fluid
     from liquifai.context import get_context
 
@@ -84,7 +84,7 @@ def materialize_runnable(runnable: Any) -> Any:
     context = get_context()
     document = getattr(context, "config_data", None) if context is not None else None
     if isinstance(document, dict):
-        return materialize(runnable, context=document)
+        return load(runnable, context=document)
     return flow(runnable)
 
 
