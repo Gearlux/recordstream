@@ -90,6 +90,7 @@ recordstream-flow = "recordstream.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source
 recordstream-storage-query = "recordstream.storage.query"
 recordstream-ops-sink = "recordstream.ops.sink"
+recordstream-ops-predict = "recordstream.ops.predict"
 recordstream-ops-numpy = "recordstream.ops.numpy"
 recordstream-ops-torch = "recordstream.ops.torch"
 recordstream-ops-target = "recordstream.ops.target"

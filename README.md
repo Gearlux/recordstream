@@ -92,6 +92,27 @@ Inner ops are not materialized until the wrapper first fires, so gating an expen
 `Enable(ops=[...], name="visualize", enabled=False)` — which is what lets a visual editor or a
 generated tool schema set the toggle too (see [docs/architecture.md](docs/architecture.md#6-every-knob-is-a-declared-parameter--the-enable-toggle-2026-07-27)).
 
+### Inference as an op (`ModelPredict`)
+
+A pipeline can carry its own inference: `recordstream.ops.predict.ModelPredict` runs any
+callable model wrapper on each record and stamps the prediction back as a record field —
+a class `Label`, `Boxes`, an int class mask, or the restored image, by `kind`. The model's
+heavy work (build the network, load `checkpoint_path`) happens in its `solidify()`, called
+lazily on the first record; the op itself imports no ML framework.
+
+```yaml
+pipeline: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist, split: test}
+  ops:
+    - !class:recordstream.ops.image.ConvertToImage {width: 224, height: 224}
+    - !class:recordstream.ops.predict.ModelPredict
+        model: !class:<your model wrapper> {checkpoint_path: runs/checkpoints/mnist/last.ckpt}
+        kind: classification        # or detection / segmentation / restoration
+```
+
+A viewer reads the stamped `predict*` fields back as layers; `recordstream run` executes
+the same document offline.
+
 ## 📚 Documentation
 
 | Page | Covers |
