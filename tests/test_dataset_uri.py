@@ -234,3 +234,47 @@ def test_dataset_uris_skips_members_that_have_no_identity() -> None:
     concat = ConcatSource(sources=[_FakeSource(), HuggingFaceSource(path="a/b")])
     found: List[str] = dataset_uris(concat)
     assert found == ["hf://datasets/a/b?split=train"]
+
+
+# --- asking never builds: a deferred marker's CLASS is checked before construction -------------
+
+_BUILDS = {"count": 0}
+
+
+class _NoDatasetSurface:
+    """No identity properties, no ``source`` slot — the shape of a deferred trainer/loader."""
+
+    def __init__(self, max_epochs: int = 1) -> None:
+        _BUILDS["count"] += 1
+        self.max_epochs = max_epochs
+
+
+def test_a_deferred_marker_whose_class_has_no_dataset_surface_is_never_built() -> None:
+    from confluid import PartialClass
+
+    _BUILDS["count"] = 0
+    assert dataset_uri(PartialClass(_NoDatasetSurface, max_epochs=3)) is None
+    assert dataset_url(PartialClass(_NoDatasetSurface, max_epochs=3)) is None
+    assert _BUILDS["count"] == 0, "the class answers the question; nothing is constructed"
+
+
+def test_a_deferred_source_with_an_identity_property_still_builds_and_answers() -> None:
+    class _IdSource:
+        @property
+        def dataset_uri(self) -> str:
+            return "hf://datasets/x"
+
+    from confluid import Target
+
+    assert dataset_uri(Target(_IdSource)) == "hf://datasets/x"
+
+
+def test_a_deferred_wrapper_with_a_source_slot_is_still_built_and_followed() -> None:
+    class _Wrap:
+        def __init__(self, source: Any = None) -> None:
+            self.source = source
+
+    from confluid import Target
+
+    inner = _FakeSource(uri="hf://datasets/inner")
+    assert dataset_uri(Target(_Wrap, source=inner)) == "hf://datasets/inner"
