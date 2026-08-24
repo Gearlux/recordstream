@@ -46,6 +46,29 @@ def test_the_shared_kwargs_are_baked_and_persistent_workers_derives() -> None:
     assert _kwargs(loader_slots(batch_size=8, num_workers=2).train)["persistent_workers"] is True
 
 
+def test_an_explicit_persistent_workers_wins_over_the_derived_default() -> None:
+    """The host-scoped case: `persistent_workers: false` in YAML reaches all three slots
+    while `num_workers` stays 8 (macOS terminates persistent workers slowly)."""
+    slots = loader_slots(batch_size=8, num_workers=8, persistent_workers=False)
+    for split, marker in zip(("train", "val", "test"), slots):
+        assert _kwargs(marker)["persistent_workers"] is False, split
+        assert _kwargs(marker)["num_workers"] == 8, split
+
+
+def test_none_still_derives_from_num_workers() -> None:
+    """The default is unchanged: not passing the knob is exactly the old behaviour."""
+    assert _kwargs(loader_slots(batch_size=8, num_workers=2, persistent_workers=None).train) == _kwargs(
+        loader_slots(batch_size=8, num_workers=2).train
+    )
+
+
+def test_persistent_workers_true_without_workers_is_refused() -> None:
+    """torch raises for this pairing at ITERATION time; the knob makes it a construction-time
+    error instead, which is the invariant the derived-only version protected by construction."""
+    with pytest.raises(ValueError, match="persistent_workers=True needs num_workers > 0"):
+        loader_slots(batch_size=2, num_workers=0, persistent_workers=True)
+
+
 def test_the_collate_is_the_batch_shape_choice() -> None:
     """A detection consumer passes collate_list; the slot carries it verbatim."""
     assert (

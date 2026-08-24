@@ -17,7 +17,7 @@ a consumer — which is by definition a torch trainer — imports it directly::
     from recordstream.loaders import loader_slots
 """
 
-from typing import Any, Callable, List, NamedTuple
+from typing import Any, Callable, List, NamedTuple, Optional
 
 from confluid import Partial, PartialClass
 
@@ -47,6 +47,7 @@ def loader_slots(
     num_workers: int,
     *,
     collate_fn: Callable[[List[Record]], Record] = collate_records,
+    persistent_workers: Optional[bool] = None,
     **loader_kw: Any,
 ) -> LoaderSlots:
     """The train/val/test deferred ``DataLoader`` triple every torch training runnable declares.
@@ -64,9 +65,16 @@ def loader_slots(
 
     Args:
         batch_size: Rows per batch, baked into all three loaders.
-        num_workers: Worker processes per loader. ``persistent_workers`` derives from it
-            (``num_workers != 0``) — there is deliberately no separate knob, because persistent
-            workers with zero workers is a torch error and the pairing never varies.
+        num_workers: Worker processes per loader. ``persistent_workers`` DERIVES from it
+            (``num_workers != 0``) unless the caller says otherwise.
+        persistent_workers: Override the derived pairing. ``None`` (the default) derives as
+            above and is what nearly every run wants; an explicit value is for the case the
+            derivation cannot see — a HOST fact. macOS terminates persistent workers slowly
+            enough that a short run spends longer stopping than training, so a config there
+            says ``persistent_workers: false`` while keeping its workers. ``True`` with
+            ``num_workers=0`` is refused HERE (torch raises for that pairing when the loader
+            is first iterated, minutes into a run); it is the one invariant the previously
+            derived-only value protected by construction.
         collate_fn: The batch-shape choice (see the collate registry) — ``collate_records``
             stacks, ``collate_list`` does not (what a detection consumer passes), and a task
             collate is any callable.
@@ -87,11 +95,17 @@ def loader_slots(
             "a shared kwarg — replace the individual loader slot instead "
             "(e.g. train_loader: !class:torch.utils.data.DataLoader {shuffle: false, ...})."
         )
+    if persistent_workers and num_workers == 0:
+        raise ValueError(
+            "loader_slots: persistent_workers=True needs num_workers > 0 — torch keeps worker "
+            "processes alive between epochs and there are none. Raise num_workers, or leave "
+            "persistent_workers unset to derive it."
+        )
     shared = dict(
         collate_fn=collate_fn,
         batch_size=batch_size,
         num_workers=num_workers,
-        persistent_workers=num_workers != 0,
+        persistent_workers=(num_workers != 0) if persistent_workers is None else persistent_workers,
         **loader_kw,
     )
     return LoaderSlots(

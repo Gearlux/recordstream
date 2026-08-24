@@ -591,6 +591,33 @@ accepts_broadcast(Enable, "enabled")       # True — the bare --enabled form no
   than teaching one wrapper several toggles — each name is independently addressable, and the
   broadcast form still flips them all.
 
+### Amendment: a DERIVED value is a knob nobody can reach either (2026-08-22)
+
+`loader_slots` derived `persistent_workers` from `num_workers` (`!= 0`) and its docstring said
+there was "deliberately no separate knob, because the pairing never varies". The pairing does vary,
+along an axis the derivation cannot see: macOS terminates persistent workers slowly enough that a
+short run spends longer stopping than training, so a config there wants workers WITHOUT persistence.
+Reaching that meant replacing all three loader slots wholesale — twelve YAML lines that also had to
+restate `collate_fn`, because a replaced slot loses the code default and torch's `default_collate`
+then crashes on string metadata.
+
+The reason a plain top-level key was not enough is worth stating, because the neighbouring case
+looks identical and behaves differently: a flat config key DOES reach these code-created markers by
+broadcasting — `multiprocessing_context: fork` lands in all three slots with no parameter anywhere
+(measured) — but only for a kwarg the marker does not already carry. `persistent_workers` is BAKED
+here at construction, so there was nothing for a config to reach.
+
+The rule above answers it unchanged: **if a front-end must set it, declare it.** The parameter is
+`persistent_workers: Optional[bool] = None` — `None` derives exactly as before (so nothing that
+does not pass it changes), an explicit value wins, and `True` with `num_workers=0` raises at
+construction rather than inside torch at first iteration, which is the one invariant the
+derived-only version had protected by construction. The same parameter is declared by every
+consuming runnable, so it broadcasts from a flat config like `batch_size` does.
+
+The generalisation for the next time: deriving a value is not a way to avoid declaring it. A
+derivation is a good DEFAULT and a bad ONLY option — the moment one caller knows something the
+derivation cannot, the undeclared value costs a wholesale replacement of the object that holds it.
+
 ## 7. The `@entrypoint` markers ARE the dispatch table (`run_entrypoint`, 2026-07-29)
 
 ### Context
