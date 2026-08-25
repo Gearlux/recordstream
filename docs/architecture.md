@@ -1367,3 +1367,69 @@ mask_2d[y0:y1, x0:x1]   # half-open: covers the component exactly
   second meaning for `Boxes` — that is the mistake this record exists to prevent.
 - **Usage** is [docs/record-model.md](record-model.md); the batch read-back is `batch_boxes`
   ([docs/kinds.md](kinds.md)).
+
+## 15. A pipeline interface is a pass-through op, not a socket type (`RecordContract`, 2026-08-25)
+
+### Context
+
+A pipeline built in a visual editor (or authored as YAML) has an implicit contract with its
+host: the records it delivers must carry certain entries with certain item types — a
+classification consumer needs an `Image` under `image` and a `Label` under `class`. Nothing
+stated that contract. A wrong graph loaded cleanly, exported cleanly, and failed only
+downstream — as an empty review queue or a training run with no targets — far from the
+place the mistake was made. Two alternative homes for the contract were considered: a typed
+socket vocabulary in the editor (statically narrow the stream wire per record schema), and a
+host-side check at apply time (peek a record after loading the document).
+
+### Decision
+
+The contract is an **op**: `recordstream.ops.contract.RecordContract`, a pass-through
+`Record -> Record` callable that checks each record against a declared `fields` map
+(record key → registered item type name, `"*"` = present with any type) and raises a
+located `ContractError` on the first violation. **Position decides the role** — the first
+op in a chain states what the host must feed (input contract), the last what the pipeline
+guarantees (output contract) — so ONE class serves both boundaries and there is no `role`
+knob. Socket-level typing was rejected because every op is a generic `Record -> Record`:
+no static claim survives one op between source and boundary, so a socket schema would be
+enforcement theater. A host-side-only check was rejected because it leaves the contract
+invisible in the graph (nothing to see or edit) and unenforced when the exported document
+runs elsewhere; as an op, the contract rides the document into every executor.
+
+### Consequences
+
+- The item registry is the type vocabulary (`get_item_type` / `item_type_names` — already
+  documented as the enumerable socket-type vocabulary), so a domain package's registered
+  item is contractable with zero core changes.
+- The check runs on EVERY record (a dict lookup + `isinstance` per declared entry) — a
+  violation names the exact record ordinal, not just "somewhere in the stream".
+- A conversion that emits plain values (a live tensor) is expressible via `"*"` —
+  presence-only, no item type demanded.
+- A host that seeds a graph places a pre-configured contract node at the boundary; the
+  editor's user sees the required shape before wiring the first node.
+
+### Example
+
+```python
+from recordstream import Stream
+from recordstream.ops.contract import RecordContract
+
+stream = Stream(
+    source=my_source,
+    ops=[
+        RecordContract(fields={"raw": "*"}, name="denoise input"),        # first = input contract
+        wrap_raw_as_image,
+        RecordContract(fields={"image": "Image"}, name="denoise output"),  # last = output guarantee
+    ],
+)
+# a record without "raw" fails AT THE INPUT boundary:
+# ContractError: denoise input: record #0 has no entry 'raw' (expected *); present: class[Label]
+```
+
+### What you may change (and where it's documented)
+
+- **Add checks** (shape, dtype, value range) as new declared parameters on the op — never a
+  second contract class per task.
+- **Do not add a `role` parameter**: position already is the role, and a role knob would let
+  a graph state one and mean the other.
+- **Usage** is the README ("Stating a pipeline's interface"); pins live in
+  `tests/test_contract.py` (incl. the input+output dual-position group).

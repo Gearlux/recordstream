@@ -124,6 +124,8 @@ recordstream-flow = "recordstream.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source
 recordstream-storage-query = "recordstream.storage.query"
 recordstream-ops-sink = "recordstream.ops.sink"
+# RecordContract (pass-through interface contract at a pipeline boundary — input/output by position)
+recordstream-ops-contract = "recordstream.ops.contract"
 recordstream-ops-predict = "recordstream.ops.predict"
 recordstream-ops-numpy = "recordstream.ops.numpy"
 recordstream-ops-torch = "recordstream.ops.torch"

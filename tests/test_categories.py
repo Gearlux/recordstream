@@ -12,6 +12,7 @@ from confluid.registry import get_registry
 from recordstream import Pipeline
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
 from recordstream.ops.configure import ConfigureOp
+from recordstream.ops.contract import RecordContract
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
@@ -71,6 +72,7 @@ def test_op_classes_tagged() -> None:
         CopyField,
         SelectFields,
         PrintRecordOp,
+        RecordContract,
     ):
         assert cls.__confluid_category__ == "op", cls.__name__
 
@@ -95,6 +97,7 @@ def test_op_group_tags() -> None:
     assert ConvertToMask.__confluid_group__ == "image"
     assert SelectFields.__confluid_group__ == "structure"
     assert PrintRecordOp.__confluid_group__ == "debug"
+    assert RecordContract.__confluid_group__ == "contract"
     assert EncodeTarget.__confluid_group__ == "structure"
     assert DecodeTarget.__confluid_group__ == "structure"
     assert CocoToTorchVisionDetection.__confluid_group__ == "structure"

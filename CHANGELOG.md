@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the versioning is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `recordstream.ops.contract.RecordContract` — a pass-through interface op asserting what
+  each record carries at the boundary where it sits (`fields`: record key → registered
+  item type name, `"*"` = present with any type). One class serves input and output
+  boundaries, decided by position in the ops list; a violation raises `ContractError`
+  naming the boundary, record ordinal, offending entry, and the entries present.
+
 ## [0.1.0a1] — 2026-08-25
 
 First public pre-release. The surface it ships:

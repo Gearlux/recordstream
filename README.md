@@ -113,6 +113,37 @@ pipeline: !class:recordstream.core.stream.Stream
 A viewer reads the stamped `predict*` fields back as layers; `recordstream run` executes
 the same document offline.
 
+### Stating a pipeline's interface (`RecordContract`)
+
+`recordstream.ops.contract.RecordContract` is a pass-through op that asserts what each
+record carries at the point in the chain where it sits — an executable, visible interface
+statement. One class serves both boundary roles, decided by position: the **first** op in
+a chain states what the host must feed (input contract), the **last** states what the
+pipeline guarantees to deliver (output contract). `fields` maps a record key to a
+registered item type name (`"*"` = present with any type, for boundaries past a
+conversion that emits plain values); `name` labels the boundary in errors:
+
+```yaml
+pipeline: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist, split: test}
+  ops:
+    - !class:recordstream.ops.contract.RecordContract
+        name: classification output
+        fields: {image: Image, class: Label}
+```
+
+A violating record fails loudly at the boundary — naming the contract, the record
+ordinal, the offending entry, and what the record does carry — instead of surfacing
+later as an empty result:
+
+```
+ContractError: classification output: record #0 has no entry 'class' (expected Label); present: image[Image]
+```
+
+A consuming workspace or visual editor seeds the contract into a graph so the required
+record shape is declared before the first node is wired; the exported document then
+enforces the same contract when it runs offline.
+
 ## 📚 Documentation
 
 | Page | Covers |

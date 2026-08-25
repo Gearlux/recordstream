@@ -16,6 +16,7 @@ Submodules:
     - recordstream.ops.formula: FormulaOp (math formula over one record entry)
     - recordstream.ops.sink: RecordSinkOp (adapt a DataSink as a pass-through op)
     - recordstream.ops.debug: PrintRecordOp (per-record summary probe)
+    - recordstream.ops.contract: RecordContract (pass-through interface contract at a pipeline boundary)
 
 The sequential composer ``Pipeline`` lives in :mod:`recordstream.transform` (package-root
 export) — one list mixing native ops with bare albumentations / torchvision-v2 transforms.
@@ -25,6 +26,7 @@ import importlib
 from typing import Any, Dict, List, Tuple
 
 from recordstream.ops.configure import ConfigureOp
+from recordstream.ops.contract import ContractError, RecordContract
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
@@ -40,6 +42,7 @@ __all__ = [
     "CocoToTorchVisionDetection",
     "ConfigureOp",
     "ConnectedComponents",
+    "ContractError",
     "ConvertToImage",
     "ConvertToMask",
     "CopyField",
@@ -52,6 +55,7 @@ __all__ = [
     "Parallel",
     "PrintRecordOp",
     "RandomApply",
+    "RecordContract",
     "RenameField",
     "RecordSinkOp",
     "SelectFields",
