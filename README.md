@@ -1,210 +1,177 @@
-# DataFlux
+# RecordStream
 
-**DataFlux** is a high-performance, functional data processing engine built for modern Machine Learning pipelines. It provides a clean, fluent API for streaming and transforming data from any source while maintaining strict compatibility with PyTorch and Hugging Face.
+**RecordStream** is a high-performance, functional data processing engine built for modern Machine Learning pipelines. It provides a clean, fluent API for streaming and transforming data from any source while maintaining strict compatibility with PyTorch and Hugging Face.
 
-Part of the **Modular Quartet**: `LogFlow`, `Confluid`, `Liquify`, and `DataFlux`.
+Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordStream`.
 
 ## 🚀 Key Features
 
--   **Functional Purity:** Transforms are simple Python callables. No complex base classes required.
--   **Standardized Sample Triplet:** Standardizes on `(input, target, metadata)` for full traceability.
--   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context.
--   **Advanced Storage:** Built-in support for high-performance backends:
-    -   **HDF5**: Clean, efficient read/write.
-    -   **Zarr**: Cloud-native, concurrent storage (Group and Batch modes).
-    -   **Directory**: Robust concurrent writing for irregular data lengths.
--   **Passive Introspection:** Automatically generates JSON manifests for visual orchestration in **FluxStudio**.
+-   **A record is a plain dict:** the [record model](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Boxes`, `Label`, `MultiLabel`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
+-   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
+-   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
+-   **Graph pipelines:** readable [`flow:` documents](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) of named steps — `from:` forks, `merge_from:` merges, `bind:` feeds one step's value into another's parameter. An `ops:` list is the same engine's linear spelling; both parse to one step graph.
+-   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
+-   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
+-   **Passive Introspection:** ops declare the value types they [handle / consume / produce](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) and are discoverable by category for visual editors and schema generators.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
-
-## 🎯 Design Goals & Requirements
-
-### Stream Engine
-- **Functional API:** Provide a lazy, chainable pipeline API (`map`, `filter`, `batch`).
-- **Standardized Samples:** Use the `Sample(input, target, metadata)` triplet as the primary data unit.
-- **Parallel Execution:** Support high-performance multiprocess execution via `.parallel(workers=N)` using the `spawn` context.
-
-### Storage
-- **High-Performance Sinks:** Native support for HDF5 (sequential), Zarr (concurrent), and Directory (irregular) storage.
-- **JointFlux Pattern:** Support aggregating multiple heterogeneous data sources into a single stream, preserving per-source transform chains.
-
-### Metadata & Discovery
-- **Passive Introspection:** Automatically discover available tools and ops for serialized manifests.
-- **Discovery Categories:** `@configurable` classes are tagged with a confluid `category` (`Flux`/`JointFlux` → `dataset`, `FilterOp`/`WrappedOp` → `op`) so tools like navigaitor's `list_configurable_classes(category=...)` enumerate them by kind.
-- **Serialization Symmetry:** Ensure full-pipeline states are serializable and reconstructible via Confluid.
 
 ## 🛠 Quick Start
 
+One pipeline mixing a **bare albumentations Compose** (image + mask + boxes move together in one draw), a **bare torchvision v2 transform**, and a **native op** — no wrappers (mirrors [`examples/record_pipeline.py`](https://github.com/Gearlux/recordstream/blob/main/examples/record_pipeline.py)):
+
 ```python
+import albumentations as A
 import numpy as np
-from dataflux.core import Flux
+from recordstream import Stream, Image, Label, Mask, as_transform
 
-# 1. Define a simple transformation
-def normalize(data: np.ndarray, mean: float = 0.0):
-    return data - mean
+records = [
+    {
+        "image": Image(rng.random((16, 20, 3)).astype(np.float32)),   # typed: knows its layout
+        "mask": Mask((rng.random((16, 20)) > 0.5).astype(np.uint8)),
+        "bboxes": [[2, 3, 6, 7]],                                     # albumentations vocabulary
+        "labels": ["drone"],
+        "class": Label("drone_x", classes=["noise", "drone_x"]),      # typed: knows its vocab
+        "gain_db": -3.0,                                              # a scalar is just another key
+    }
+    for rng in (np.random.default_rng(i) for i in range(100))
+]
 
-# 2. Build a pipeline
-raw_data = [np.random.randn(10) for _ in range(100)]
+stream = Stream(
+    source=records,
+    ops=[
+        A.Compose(                                    # bare albumentations — as-is
+            [A.HorizontalFlip(p=0.5)],
+            bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+        ),
+        A.GaussNoise(p=1.0),                          # image only (its own kwarg vocabulary)
+        as_transform(lambda d: d - 0.5, handles=(Image,)),   # native: a plain function op
+    ],
+).parallel(workers=4)
 
-flux = Flux(raw_data) \
-    .map(normalize, mean=0.5) \
-    .filter(lambda s: s.input.mean() > 0) \
-    .parallel(workers=4)
-
-# 3. Collect or stream
-for sample in flux:
-    print(sample.input.shape)
+for record in stream:
+    print(record["image"].shape, record["class"].value)   # image+mask+boxes flipped together
 ```
 
-## 🏷 Type Specs
-
-`dataflux.typespec` describes *what flows through a `Sample`* and lets ops declare what they accept/produce, so tools like FluxStudio can filter which nodes may connect. It is flexible by design — N-dimensional arrays across numpy/torch/tensorflow, **per-axis bounded ranges**, dtype families, images, and arbitrary Python types — and anything left unspecified defaults to `Any`.
-
-```python
-from dataflux.typespec import SampleType, ArrayType, Dim, PythonType, UnionType
-
-# "a 2-D float array whose first axis is 1–10, second axis any size"
-ArrayType(shape=(Dim.range(1, 10), Dim.any("N")), dtype="floating")
-ArrayType.parse("3 h w", dtype="float32", framework="torch")  # jaxtyping-style shorthand
-ArrayType.image("CHW", channels=3, dtype="float32", framework="torch")  # an image convenience
-```
-
-**Declare an op's contract** with the class attributes `ACCEPTS` / `PRODUCES` (each a `SampleType`; both default to `Any`, so annotating is optional and backward-compatible). No base class — transforms stay plain callables:
-
-```python
-@configurable
-class StandardizeOp:
-    ACCEPTS = SampleType(input=UnionType((ArrayType(dtype="numeric"), PythonType("PIL.Image.Image"))))
-    PRODUCES = SampleType(input=ArrayType(dtype="floating", frameworks={"numpy"}))
-    def __call__(self, sample): ...
-```
-
-Matching is asymmetric: `consumer.accepts(producer)` is strict (used at runtime against a concrete inferred type); `compatible(consumer, producer)` is permissive (used at edit time — `Any`/unknown on either side passes). A `Sample`'s own type comes from `sample.describe()` — it returns a type stored in the reserved metadata keys `__features__` (a `datasets.Features` dict) + `__spec__` (sidecar refinements), or infers one from the live data; attach a stored type with `sample.with_type(SampleType(...))`.
-
-## 📦 Storage Integration
-
-DataFlux makes it easy to move data between different formats:
-
-```python
-from dataflux.storage.hdf5 import HDF5Source
-from dataflux.storage.zarr import ZarrGroupSink
-
-# Stream from HDF5 to Zarr in parallel
-Flux.from_source(HDF5Source("input.h5")) \
-    .parallel(workers=8) \
-    .map(heavy_op) \
-    .to_sink(ZarrGroupSink("output.zarr"))
-```
-
-## ✂️ Train / Val Splitting
-
-`DatasetSplit` carves a subset view out of any indexable source (implementing `__len__` and `__getitem__`). It supports three modes:
-
-1. **Fraction mode** — pick a reproducible train/val split from a single source:
-
-    ```yaml
-    hf_train: !class:dataflux.sources.HuggingFaceSource()
-      path: mnist
-      split: train
-
-    train_set: !class:dataflux.sources.DatasetSplit()
-      source: !ref:hf_train
-      split: train
-      val_fraction: 0.1
-      seed: 42
-
-    val_set: !class:dataflux.sources.DatasetSplit()
-      source: !ref:hf_train
-      split: val
-      val_fraction: 0.1
-      seed: 42
-    ```
-
-    Same seed + same source length ⇒ deterministic, disjoint, complementary views.
-
-2. **Range mode** — explicit slice:
-
-    ```yaml
-    first_half: !class:dataflux.sources.DatasetSplit()
-      source: !ref:hf_train
-      start: 0
-      end: 5000
-    ```
-
-3. **HuggingFace native slicing** (alternative, no `DatasetSplit` needed):
-
-    ```yaml
-    train_src: !class:dataflux.sources.HuggingFaceSource()
-      path: mnist
-      split: "train[:90%]"
-    val_src: !class:dataflux.sources.HuggingFaceSource()
-      path: mnist
-      split: "train[90%:]"
-    ```
-
-> **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared by both splits. Use `!clone:` when you want an independent deep copy instead.
-
-## 🔗 Paired Join (Binary ↔ Annotations)
-
-`PairedSource` joins a primary `DataSource` (e.g. raw binary samples) with a secondary mapping-shaped annotation store via a key function. It generalises the common "I have data, and I have a sidecar file of annotations that covers some of it" pattern. Three join policies cover the scenarios we actually see in ML research:
-
-| Policy | Iterates | Use case |
-|---|---|---|
-| `left_outer` (default) | Every primary sample; attaches annotation when the key matches | Process everything, use labels where available |
-| `inner` | Only primary samples whose key is in the store | Train/evaluate on the labeled subset |
-| `right_driven` | Every key in the annotation store; resolves the primary sample via `primary_resolver(key, primary)` | Very sparse labels where full-primary enumeration is costly |
+The same ops list in Confluid YAML — bare library transforms are ordinary `!class:` nodes:
 
 ```yaml
-primary: !class:waivefront.rfuav.data.source.RFUAVSource()
-  root: /Volumes/Data/RFUAV
-  window_samples: 1000000
-
-labels: !class:annotaide.store.JSONFileAnnotationStore()
-  path: /Volumes/Data/RFUAV-labels
-
-paired: !class:dataflux.paired.PairedSource()
-  primary: !ref:primary
-  secondary: !ref:labels
-  key_fn: "waivefront.rfuav.keys:sample_window_key"
-  policy: left_outer
+ops:
+  - !class:albumentations.HorizontalFlip
+    p: 0.5
+  - !class:albumentations.GaussNoise
+    p: 1.0
+  - !class:recordstream.ops.numpy.Threshold
+    low_level: 0.5
 ```
 
-Annotation records are **flattened into `Sample.metadata`**, so a detection record `{bboxes, labels, scores}` shows up as three independent metadata keys. Two `metadata` keys are always populated: `annotated: bool` and `annotation_key: str`. Optional `prefix` and `store_full_under` parameters shape the layout.
+### Toggling a branch from the CLI (`Enable`)
 
-### Coarser-granularity keys (broadcast and slicing)
+Wrap any stretch of an ops list in `Enable` to switch the whole chain on or off from one flag.
+The toggle is the declared `enabled` parameter; `name` identifies the wrapper so several of them
+toggle independently:
 
-`key_fn` is free to return a coarser key than the sample granularity. When multiple primary samples map to the same key, they all look up the same record:
+```yaml
+ops:
+  - !class:recordstream.ops.numpy.Threshold {low_level: 0.5}
+  - !class:recordstream.ops.enable.Enable
+    name: visualize          # ← names THIS wrapper; scopes its CLI flag
+    enabled: false           # ← off by default; the chain below is skipped
+    ops:
+      - !class:recordstream.ops.image.ConvertToImage {}
+      - !class:recordstream.ops.debug.PrintRecordOp {}
+```
 
-- **Without `extract_fn`** — the record is broadcast identically into every matching sample's metadata (e.g. a scalar pack-level class label inherited by every window of that pack).
-- **With `extract_fn`** — the record is projected per sample. The callable is invoked as `extract_fn(record, sample) -> dict | None`; returning `None` marks the sample unannotated (and filters it under `policy="inner"`). Use this when a pack-level annotation carries time-ranged content that must be trimmed to each window's bounds.
+```bash
+recordstream run pipeline.yaml --visualize.enabled true   # this wrapper only
+recordstream run pipeline.yaml --visualize.enabled+       # polarity shorthand → True
+recordstream run pipeline.yaml --enabled false            # broadcast: every Enable off
+```
 
-Multi-granularity joins (e.g. pack-level + window-level annotations merged together) compose by chaining `PairedSource` instances — the output of one is itself a `DataSource` that the next can consume.
+Inner ops are not materialized until the wrapper first fires, so gating an expensive chain with
+`enabled: false` costs nothing at startup. In Python the same wrapper is one call —
+`Enable(ops=[...], name="visualize", enabled=False)` — which is what lets a visual editor or a
+generated tool schema set the toggle too (see [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md#6-every-knob-is-a-declared-parameter--the-enable-toggle-2026-07-27)).
 
-### Callable resolution
+### Inference as an op (`ModelPredict`)
 
-`key_fn`, `extract_fn`, and `primary_resolver` all accept either a callable **or** a `"module:function"` string path resolved through `dataflux.discovery.resolve_callable`. The string form is what survives YAML round-trip via Confluid.
+A pipeline can carry its own inference: `recordstream.ops.predict.ModelPredict` runs any
+callable model wrapper on each record and stamps the prediction back as a record field —
+a class `Label`, `Boxes`, an int class mask, or the restored image, by `kind`. The model's
+heavy work (build the network, load `checkpoint_path`) happens in its `solidify()`, called
+lazily on the first record; the op itself imports no ML framework.
 
-See [`examples/paired_annotations.py`](examples/paired_annotations.py) for a runnable end-to-end walkthrough of all four scenarios.
+```yaml
+pipeline: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist, split: test}
+  ops:
+    - !class:recordstream.ops.image.ConvertToImage {width: 224, height: 224}
+    - !class:recordstream.ops.predict.ModelPredict
+        model: !class:<your model wrapper> {checkpoint_path: runs/checkpoints/mnist/last.ckpt}
+        kind: classification        # or detection / segmentation / restoration
+```
+
+A viewer reads the stamped `predict*` fields back as layers; `recordstream run` executes
+the same document offline.
+
+## 📚 Documentation
+
+| Page | Covers |
+|---|---|
+| [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
+| [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
+| [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
+| [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
+| [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
+| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), array introspection helpers |
+| [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
+| [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
+| [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
+| [docs/augmentation.md](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
+| [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
+
+## 🧭 Scope: a modality-neutral engine
+
+RecordStream deliberately contains **no domain-specific code** — every op, source and sink in this package is meaningful for any modality (arrays, tensors, images, generic metadata). Domain packages build on it and keep their own vocabulary:
+
+- Signal/waveform items and ops (spectrograms, FFT windows, recording formats) live in the domain package, which registers its item types into the same registries.
+- Task-specific trainers, collates and models live in their consuming projects.
 
 ## 🌐 Ecosystem Integration
 
-DataFlux is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines.
+RecordStream is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines:
 
-### Intake (Data Discovery & Catalogs)
--   **Use Intake for:** Data discovery, remote storage abstraction (S3/GCS), and sharing "canned" datasets via YAML catalogs.
--   **Integration:** Wrap an Intake driver in a DataFlux `DataSource` to gain functional `.map()`, `.filter()`, and `.parallel()` capabilities on cataloged data.
-
-### Hugging Face (Community & Standardized Datasets)
--   **Use Hugging Face for:** Accessing community datasets and leveraging the `datasets` library for efficient Arrow/Parquet loading.
--   **Integration:** Use DataFlux to transform `datasets.Dataset` objects into standardized `Sample` triplets, ensuring metadata traceability that often goes missing in simple dictionary-based records.
-
-### DataFlux (The Functional Engine)
--   **Use DataFlux for:** The "inner loop" of your experiment. When you need high-performance multiprocess streaming, per-sample metadata preservation, and 100% reproducible pipelines via **Confluid** serialization.
+- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability, and [names the dataset it reads](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#identifying-a-dataset) so a run record can point at it (see [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md)).
+- **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node — including bare library transforms — every run reproducible.
+- **PyTorch**: `Stream` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#batching--collate_records--the-collate-registry-recordstreamcollate) (`collate_records` is the default).
+- **Keras 3**: no `DataLoader` exists to do the batching, so [`RecordSequence`](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you) is the `keras.utils.PyDataset` half — row order, slicing, per-epoch reshuffle, `collate_records` — and a `transform` callable supplies the batch shape, exactly as `collate_fn` does for torch.
+- **Augmentation libraries**: [albumentations](https://albumentations.ai) and torchvision `transforms.v2` transforms run **as-is** in any ops list — the engine speaks each library's native convention (kwarg vocabulary vs dict walk), so there is nothing to wrap (see [docs/augmentation.md](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md)).
 
 ## 🔧 Installation
 
+RecordStream is on PyPI as a pre-release, so `pip` needs `--pre` to see it:
+
 ```bash
-pip install git+https://github.com/Gearlux/dataflux.git@main
+pip install --pre recordstream
 ```
+
+The core engine is **numpy**, and installs no ML framework. A framework arrives only with the extra
+that needs it:
+
+| Extra | Provides |
+|---|---|
+| `torch` | The pieces that genuinely produce tensors — the `ToTensor` op, `batch_tensor`, and the `classification_output` / `segmentation_output` builders |
+| `keras` | `recordstream.keras` — the `RecordSequence` `PyDataset` adapter and the `KERAS_BACKEND` ordering. Keras 3 is an API, so this names no compute engine; it runs on whichever of torch / TensorFlow / JAX you have |
+
+```bash
+pip install --pre "recordstream[torch]"
+```
+
+Everything else works without either. A `Stream` is map-style (`__len__`/`__getitem__`), so a
+`DataLoader` still accepts one directly on a torch install; `batch_values`, `multi_hot` and the
+class-balance statistics return numpy, so a non-torch backend converts in one line. Reaching for
+`recordstream.ops.ToTensor` without the extra raises an `ImportError` naming it.
 
 ## 📄 License
 

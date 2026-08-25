@@ -1,26 +1,69 @@
 [project]
-name = "data-flux"
-version = "0.1.0"
+name = "recordstream"
+version = "0.1.0a1"
 description = "Clean, functional data pipelines for ML research and production."
-authors = [{ name = "Taidal", email = "info@gearlux.ai" }]
+readme = "README.md"
+authors = [{ name = "Gert Behiels" }]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+# Floors are what this package is actually TESTED against, not the oldest release that
+# once worked: `confluid==0.1.0` is provably unsatisfiable here (liquifai requires
+# confluid>=0.2.0), so the old `>=0.1.0` described a combination nobody could install.
 dependencies = [
-    "confluid>=0.1.0",
-    "log-flow>=0.1.0",
+    "confluid>=0.3.0",
+    "loggair>=0.2.0",
     "numpy",
+    "Pillow",
     "h5py",
     "zarr",
-    "torch",
     "typing-extensions",
     "datasets",
     "albumentations",
     "orjson",
     "fsspec",
-    "cloudpathlib"
+    "cloudpathlib",
+    # liquifai powers the generic `recordstream run <config.yaml>` CLI (recordstream.cli) that
+    # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
+    # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
+    "liquifai>=0.2.0",
 ]
 requires-python = ">=3.12"
 
+[project.urls]
+Homepage = "https://github.com/Gearlux/recordstream"
+Repository = "https://github.com/Gearlux/recordstream.git"
+Issues = "https://github.com/Gearlux/recordstream/issues"
+Changelog = "https://github.com/Gearlux/recordstream/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
+# The torch-shaped surface, NOT the engine: `recordstream.ops.torch` (ToTensor),
+# `batch_tensor`, and the `outputs` builders. The core is numpy — `Stream` is a plain
+# map-style class, and the two places that recognise a torch tensor do it through
+# `_compat.is_torch_tensor`, which consults sys.modules rather than importing. So a
+# consumer on Keras/JAX installs recordstream without a 2GB framework it never calls.
+torch = ["torch"]
+# The Keras-shaped surface: `recordstream.keras` (the KERAS_BACKEND ordering + `RecordSequence`,
+# the `PyDataset` a `DataLoader` would have been). Keras 3 is an API, not a runtime, so this
+# names NO compute engine — `recordstream.keras` defaults KERAS_BACKEND to whichever of
+# torch/tensorflow/jax is actually installed, and the consumer's own extra picks one.
+keras = ["keras>=3.0"]
 dev = [
+    # Release tooling: `python -m build` produces the sdist + wheel, `twine check`
+    # validates the metadata PyPI will re-validate on upload.
+    "build>=1.0.0",
+    "twine>=5.0.0",
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",
     "flake8>=6.0.0,<8.0.0",
@@ -28,9 +71,15 @@ dev = [
     "mypy>=1.0.0,<2.0.0",
     "pytest>=7.0.0,<9.0.0",
     "pytest-cov>=4.0.0,<7.0.0",
-    "Pillow",
-    "intake>=2.0",
-    "xarray",
+    # CI installs `.[dev]` (unit-tests AND verify-examples), so torchvision here keeps the
+    # bare torchvision-v2 op family + examples exercised in CI without a workflow edit.
+    "torchvision",
+    # Same reason: `ops.image._apply_colormap` lazily imports matplotlib for every
+    # non-gray colormap, and the gray path is matplotlib-free BY DESIGN — so without this
+    # the colormap half of ConvertToImage / value_to_image goes untested in CI. It stays
+    # out of `dependencies` deliberately: a consumer rendering only grayscale must not be
+    # made to install a plotting library.
+    "matplotlib",
 ]
 notebook = [
     "matplotlib",
@@ -39,34 +88,97 @@ notebook = [
 ]
 vision = [
     "scipy",
+    # Bare torchvision transforms.v2 ops run as-is through the engine's op-family dispatch
+    # (recordstream.core.families._apply_op); the extra makes `pip install recordstream[vision]` the
+    # documented way to enable them.
+    "torchvision",
 ]
 
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # CONFLUID-CONFIGURABLE DISCOVERY
-# Sources / ops live in separate submodules that `dataflux/__init__.py`
+# Sources / ops live in separate submodules that `recordstream/__init__.py`
 # does not eagerly import. Listing them here makes navigaitor discover
 # every ``@configurable`` on bootstrap without hardcoding the list.
 [project.entry-points."confluid.configurables"]
-dataflux = "dataflux"
-dataflux-core = "dataflux.core"
-dataflux-sources = "dataflux.sources"
-dataflux-ops-parallel = "dataflux.ops.parallel"
-dataflux-ops-tee = "dataflux.ops.tee"
-dataflux-ops-stash = "dataflux.ops.stash"
-dataflux-ops-numpy = "dataflux.ops.numpy"
-dataflux-ops-torch = "dataflux.ops.torch"
-dataflux-ops-copy = "dataflux.ops.copy"
-dataflux-ops-swap = "dataflux.ops.swap"
+recordstream = "recordstream"
+# ONE entry point per engine PACKAGE (core / flow / sources are each one class per cohesive
+# module, all re-exported by the package __init__, so importing it registers every
+# @configurable). Unlike recordstream.ops.*, do NOT add per-submodule entry points: scan_module's
+# __module__ filter finds nothing in a package __init__, so a visual editor's node bridge
+# surfaces these through its second pass over ``__all__`` — which is why that list is load-bearing.
+recordstream-core = "recordstream.core"
+recordstream-sources = "recordstream.sources"
+recordstream-ops-parallel = "recordstream.ops.parallel"
+recordstream-ops-enable = "recordstream.ops.enable"
+recordstream-ops-random-apply = "recordstream.ops.random_apply"
+# ConfigureOp (per-record parameter injection — derive an op's parameter from the record); entry-point
+# changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.
+recordstream-ops-configure = "recordstream.ops.configure"
+recordstream-ops-formula = "recordstream.ops.formula"
+# The FlowGraph engine (flow: named-step documents) + the per-record kernel both authoring
+# forms run on. There is no flow<->ops lowering pass — it was deleted 2026-07-30 (architecture §3).
+recordstream-flow = "recordstream.flow"
+# The queryable-metadata scan protocol + MetadataFilterSource view source
+recordstream-storage-query = "recordstream.storage.query"
+recordstream-ops-sink = "recordstream.ops.sink"
+recordstream-ops-predict = "recordstream.ops.predict"
+recordstream-ops-numpy = "recordstream.ops.numpy"
+recordstream-ops-torch = "recordstream.ops.torch"
+recordstream-ops-target = "recordstream.ops.target"
+recordstream-ops-image = "recordstream.ops.image"
+# PrintRecordOp (log/print a per-record summary). Entry-point changes need an editable reinstall
+# before StreamStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
+recordstream-ops-debug = "recordstream.ops.debug"
+# Storage SINKS (HDF5Sink / ZarrGroupSink / ZarrBatchSink / DirectorySink) carry
+# category="sink" so StreamStudio surfaces them as DatasetProcessor sink nodes. They live under
+# recordstream.storage.* (NOT re-exported from the package root), and scan_module does not recurse
+# submodules, so each storage module needs its own entry point. The matching SOURCES in these
+# modules stay uncategorised, so the positive {op,source,engine,sink} allowlist surfaces only the
+# tagged sinks. (Entry-point changes need an editable reinstall — `aisland setup`, never --reinstall.)
+recordstream-storage-hdf5 = "recordstream.storage.hdf5"
+recordstream-storage-zarr = "recordstream.storage.zarr"
+recordstream-storage-directory = "recordstream.storage.directory"
+# The record model's op surface: Transform (type-dispatched record ops) + Pipeline (THE
+# compose op) live in recordstream.transform. Entry-point changes need an editable reinstall
+# before StreamStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
+recordstream-transform = "recordstream.transform"
+# Structure ops (RenameField/DropField/CopyField/SelectFields) — reshape a record's entries.
+recordstream-ops-structure = "recordstream.ops.structure"
+# The runnable orchestration layer: DatasetProcessor (generic source→sink runner) and the
+# workflow combinators (Sequence/Conditional/Switch + PathExists/Not/AllOf/AnyOf predicates).
+# Discovered as @configurable runnables; run via `recordstream run`.
+recordstream-processing = "recordstream.processing"
+recordstream-workflow = "recordstream.workflow"
+
+# The `recordstream` console script — `recordstream run <config.yaml>` runs any Confluid-wired
+# runnable (a trainer, an evaluator, a DatasetProcessor, a workflow).
+[project.scripts]
+recordstream = "recordstream.cli:main"
+
+# Liquifai app registration: lets `liquifai-install-completions` discover this CLI via an
+# instant entry-point metadata read instead of a subprocess probe. Name = the binary name;
+# value = the LiquifyApp instance.
+[project.entry-points."liquifai.apps"]
+recordstream = "recordstream.cli:app"
+
+# Which of this project's extras are ML FRAMEWORKS, for `aisland framework`. Selecting a name
+# here is what makes `aisland setup` add the matching extra to this project's install.
+#
+# The core engine is numpy — `torch` powers only `ToTensor` and the output builders, and `keras`
+# only `recordstream.keras`, so a workspace that selects no framework still gets a fully working
+# record engine.
+[tool.aisland]
+frameworks = ["torch", "keras"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dataflux*"]
+include = ["recordstream*"]
 
 [tool.setuptools.package-data]
-dataflux = ["py.typed"]
+recordstream = ["py.typed"]
 
 [tool.black]
 line-length = 120
@@ -79,13 +191,26 @@ line_length = 120
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 
+# This project is type-checked TWICE with different configs, and only one of them is
+# authoritative for a release. From the workspace root a shared `mypy.ini` supplies these
+# ignores, so a gap here is invisible there; this project's OWN CI runs `mypy .` from the
+# project directory, reads only the table below, and is what a published package must
+# satisfy. Every optional or lazily-imported third party therefore needs an entry HERE,
+# even when the workspace config already carries one.
 [[tool.mypy.overrides]]
 module = [
+    "albumentations.*",
     "datasets.*",
     "h5py.*",
+    # Lazily imported inside `ops.image._apply_colormap` (only a non-gray colormap needs
+    # it), so it is not a declared dependency at all — nothing installs it for CI.
+    "matplotlib.*",
+    # The `[keras]` extra. Keras ships no `py.typed`, so it is untyped rather than absent.
+    "keras.*",
     "PIL.*",
+    # The `[vision]` extra, behind a try/except in `ops.numpy.connected_component_boxes`.
+    "scipy.*",
+    "torchvision.*",
     "zarr.*",
-    "intake.*",
-    "xarray.*",
 ]
 ignore_missing_imports = true

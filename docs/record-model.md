@@ -1,0 +1,567 @@
+# The record model — THE recordstream data model
+
+A record is a **plain `dict`** of **typed values**. Import the whole surface from the PACKAGE TOP
+LEVEL (`from recordstream import Record, Image, Mask, Boxes, Label, Transform, Pipeline,
+as_transform, item_data, item_value, with_data, register_item, register_kernel, register_io, collate_records, ...`).
+The design rationale is recorded in
+[architecture.md](architecture.md#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25).
+
+## Why
+
+If everything that is not literally the model input or target — a segmentation mask,
+region boxes, a signal's samplerate, an image's layout, a label's class names — is jammed into one
+flat `metadata` dict keyed by string, it is disconnected from the value it describes. And if the
+carrier is a bespoke container class, every external library needs an adapter before it can touch it.
+
+The record model fixes both. **A record is a plain dict, values are typed, and metadata lives on the
+value it describes** — an `Image` carries its `layout`, a `Label` its `classes`. **Key names carry
+meaning** (`"image"`, `"mask"`, `"bboxes"`, `"labels"`, `"class"` — the same convention as every torch
+batch dict and albumentations' keyword vocabulary), so libraries that already understand dicts or
+named kwargs run **as-is**, with no wrapper anywhere. A scalar side value is just another key:
+
+```python
+record = {
+    "image": Image(rgb_hwc),                              # typed: knows its layout
+    "mask": Mask(seg_hw),                                 # shares the image's frame
+    "bboxes": [[2, 3, 6, 7]],                             # albumentations vocabulary
+    "labels": ["drone"],
+    "class": Label("drone_x", classes=["noise", "drone_x"]),
+    "samplerate": 30.72e6,                                # a plain value is just another key
+}
+```
+
+There is deliberately **no container class** — `Record` is a type alias (`Dict[str, Any]` in
+`recordstream.items`), ops receive and return ordinary dicts, and `None` means "drop this record"
+(filter semantics).
+
+## The pieces
+
+### Items — typed values that own their metadata
+
+recordstream is **modality-neutral**, so its core ships only generic items — images, masks, boxes,
+labels. (Domain items — a signal, a spectrogram — live in the domain package; see below.)
+
+```python
+from recordstream import Image, Mask, Boxes, Label, MultiLabel
+
+Image(rgb_hwc, layout="HWC")                        # an image knows its layout ("HWC" default / "CHW")
+Mask(seg_hw)                                         # a mask shares its image's frame
+Boxes(boxes=[[10,10,40,40]], labels=[1], canvas=(64, 64))   # half-open pixel xyxy on a raster
+Label("drone_x", classes=["noise", "drone_x"])       # ONE class for this record
+MultiLabel(["drone_x", "jammer"], classes=[...])     # SEVERAL classes for this record
+```
+
+`Label` / `MultiLabel` hold either class **names** or already-encoded **ids** — `.is_encoded`
+(built on the free function `is_class_id`) is the single rule that decides which, and
+[`LabelMap.to_ids`](projection.md) is the single way to get ids out. Multi-label is its own
+ITEM rather than a `Label` holding a list, because only the type distinguishes a genuine
+multi-label target from an ordinary sequence value that happens to sit under the target key.
+
+Items are **hybrid**: array-backed items (`Image`, `Mask`) subclass `NDArrayItem` — an `np.ndarray`
+subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` — so a
+type-agnostic operation touches them as an array; structured items (`Boxes`, `Label`, `MultiLabel`)
+are dataclass wrappers (a bounding-box set is not an array). A uniform payload accessor hides the difference from
+kernels:
+
+```python
+from recordstream import item_data, item_value, with_data
+item_data(Image(arr))                  # -> the plain ndarray
+with_data(Image(a, layout="CHW"), b)   # a copy carrying b, layout preserved
+```
+
+`item_value` is the same question one step further out, and the difference is the label items: a
+`Label`'s payload slot is `value`, not `data`, so `item_data(Label("cat"))` hands the `Label` back
+while `item_value(Label("cat"))` gives you `"cat"` (and a `MultiLabel` its `.values` list). Use
+`item_data` in a kernel, where the item type is already known; use `item_value` when you want *the
+value* whatever wrapper carried it — which is what `iter_key`, `batch_values` and `ConvertToMask` all
+want, and why the rule is one function rather than three copies of it.
+
+`register_item` / `is_item` / `item_types` / `get_item_type` / `item_type_names` are the open item
+registry — the extensibility surface a domain package or user type plugs into (one class + one
+decorator, no core edit).
+
+An op with a `field=`-style knob resolves the entry it reads with `resolve_item` (or
+`resolve_entry` when it also needs the key back) — an explicit field must exist and hold the
+expected item type (each miss raises a `ValueError` naming the op, the parameter and the record's
+keys), while a blank field falls back to the first value of that type:
+
+```python
+from recordstream import Image, resolve_item
+image = resolve_item(record, self.image_field, Image, owner="SaveImage", param="image_field")
+```
+
+`fallback=False` makes a blank field an error too (for ops whose key is mandatory config);
+`required=False` turns every miss into `None` (the probe form). Twelve per-class `_find_*`
+copies in one consumer package predated the extraction — don't re-derive the branch.
+
+### Ops — type dispatch with once-per-record parameters
+
+A `Transform` (`recordstream.transform`) samples its parameters ONCE per record
+(`get_params(record)`), then applies a per-type **kernel** to every value whose type it handles
+(`@MyOp.kernel(ItemType)`, resolved MRO-aware by `recordstream.dispatch`). Values it does not handle
+pass through. Because the parameters are sampled once and shared, one op moves every handled value
+with the SAME decision — the torchvision-v2 model. Targeting is by TYPE; the `field=` constructor
+parameter pins an op to one named key when a record holds several values of a handled type.
+
+```python
+import numpy as np
+from recordstream import Image, Record, Transform
+
+class Brighten(Transform):
+    handles = (Image,)
+
+    def __init__(self, strength: float = 0.1, field: str | None = None) -> None:
+        super().__init__(field=field)
+        self.strength = strength
+        self._rng = np.random.default_rng(7)
+
+    def get_params(self, record: Record) -> dict:
+        return {"offset": self._rng.uniform(0.0, self.strength)}   # drawn ONCE per record
+
+@Brighten.kernel(Image)
+def _brighten_image(value: Image, params: dict) -> Image:
+    return Image(np.asarray(value) + params["offset"], layout=value.layout)
+```
+
+The second sanctioned op shape is the **type-changing op** — read one key, write a differently-typed
+item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `ConnectedComponents`:
+`Mask` → `Boxes`, the target ops). It subclasses `Transform` and overrides `__call__` instead of
+registering a same-type kernel, declaring `handles` / `consumes` / `produces` truthfully as graph
+metadata (next section).
+
+### Declaring an op's type interface — `handles` / `consumes` / `optional` / `produces`
+
+Every `Transform` carries four class-level tuples of item types. They are the op's **type
+interface**: what a reader (or a machine — a visual editor's typed sockets, a pipeline linter)
+learns about the op without executing it or loading the kernel registry.
+
+| Attribute | Meaning | Enforced at runtime? |
+|---|---|---|
+| `handles` | The value types this op processes — every record value of one of these types is touched, everything else passes through. | Only by `FunctionTransform` / `as_transform` (`isinstance(value, self.handles)` is its application gate). For a kernel op, actual dispatch is the kernel registry (`dispatch(type(self), type(value))`) — `handles` must MIRROR the registered kernels. |
+| `consumes` | The input types the op NEEDS to do useful work (its required inputs). Convention: an empty `consumes` means "same as `handles`". | No — declarative. |
+| `optional` | Input types the op uses when present but works without (e.g. a geometric op that also moves a `Mask` if the record has one). | No — declarative. |
+| `produces` | The types the op ADDS or CHANGES — its output contract (what a downstream op can rely on finding). | No — declarative. |
+
+Concretely, `ToTensor` declares:
+
+```python
+class ToTensor(Transform):
+    handles = (NDArrayItem,)     # touches array-backed values
+    consumes = (NDArrayItem,)    # needs at least one array-bearing key to act on
+    produces = (torch.Tensor,)   # writes a LIVE CHW float tensor under `output` (or in place)
+```
+
+(A `produces` entry need not be a registered item type — `ToTensor`'s output is a plain
+record value, which is exactly what the declaration should say.)
+
+**When `handles` and `consumes` differ.** They coincide for a simple one-type op (`Threshold`,
+the FFT ops), and diverge in two directions:
+
+- **Optional riders — `handles` ⊃ `consumes`.** A joint geometric op MAY move several types with
+  one draw but only REQUIRES one of them:
+
+  ```python
+  class JointFlip(Transform):
+      handles  = (Image, Mask, Boxes)   # everything ONE draw may move
+      consumes = (Image,)                 # the only input it needs to be useful
+      optional = (Mask, Boxes)          # moved together with the image when present
+  ```
+
+  A record with just an `Image` is fine; a record that also carries a `Mask`/`Boxes` gets them
+  moved consistently. Declaring `consumes = handles` here would wrongly tell a reader (or a
+  pipeline linter) that a mask is required.
+
+- **Read-only reference inputs — `consumes` ⊃ `handles`.** An op may NEED a value it never
+  changes. A denoiser that estimates the noise floor from the signal but excludes the
+  ground-truth ON regions when a mask is available follows the same logic with `optional`
+  (a real op: `handles = consumes = (Signal,)`, `optional = (Mask, GridMask)`, `produces =
+  (Signal,)` — the mask is read, never written). The required-reference variant looks like:
+
+  ```python
+  class ScaleBoxesToImage(Transform):
+      handles  = (Boxes,)          # the only type it CHANGES
+      consumes = (Boxes, Image)    # ...but it cannot run without the reference Image (its shape)
+  ```
+
+In short: `handles` = "what I write", `consumes` = "what must be present", `optional` = "what I
+use when present" — the three answer different questions, and only collapse into one tuple for
+the simplest ops.
+
+**Limiting a multi-input op to NAMED keys.** The type interface says *what kinds* of values an
+op works with; *which record entry* each input comes from is CONFIG. A single-input op uses the
+base `field=` param (one key, still type-gated). A multi-input op declares **one `<input>_field`
+constructor param per input slot** — defaulting to the conventional key name, resolved and
+validated lazily in `__call__`:
+
+```python
+class KeepBoxesOnMask(Transform):
+    """Drop boxes whose center pixel is OFF in the activity mask.
+
+    Args:
+        mask_field: Record key of the activity Mask to test against. Defaults to "mask".
+        boxes_field: Record key of the Boxes to filter. Defaults to "boxes".
+        output: Key the filtered Boxes are written to; blank (default) replaces boxes_field in place.
+    """
+
+    handles = (Boxes,)             # the only type it CHANGES
+    consumes = (Mask, Boxes)       # both inputs must be present
+    produces = (Boxes,)
+
+    def __init__(self, mask_field: str = "mask", boxes_field: str = "boxes", output: str = "") -> None:
+        super().__init__()
+        self.mask_field = mask_field
+        self.boxes_field = boxes_field
+        self.output = output
+
+    def __call__(self, record: Record) -> Record:
+        for name, want in ((self.mask_field, Mask), (self.boxes_field, Boxes)):
+            if name not in record:
+                raise ValueError(f"{type(self).__name__}: no {name!r} key in record (keys: {list(record)})")
+            if not isinstance(record[name], want):
+                raise TypeError(f"{type(self).__name__}: {name!r} is {type(record[name]).__name__}, expected {want.__name__}")
+        mask, boxes = record[self.mask_field], record[self.boxes_field]
+        keep = [b for b in boxes.boxes if mask[int((b[1] + b[3]) / 2), int((b[0] + b[2]) / 2)]]
+        out = Boxes(boxes=keep, labels=boxes.labels, scores=boxes.scores, canvas=boxes.canvas)
+        return {**record, (self.output or self.boxes_field): out}
+```
+
+So a record carrying several masks and several region sets is disambiguated entirely in config —
+the op looks ONLY at the named entries:
+
+```yaml
+- !class:mypkg.KeepBoxesOnMask
+  mask_field: activity_mask      # not the segmentation mask under "mask"
+  boxes_field: predictions     # not the ground truth under "boxes"
+```
+
+This is the established pattern for every shipped multi-input op (e.g. the region→target ops
+take `image_field="image"` + `boxes_field="regions"` + `output="target"`). Two rules keep it
+predictable: the defaults are the CONVENTIONAL key names (so the common record shape needs zero
+config), and a wrong/missing key fails lazily in `__call__` with the key list in the message —
+never silently falls back to a different entry when an explicit name was given.
+
+Rules of use:
+
+- **Declare truthfully or not at all.** Nothing validates these tuples against the op's behavior,
+  so wrong metadata is worse than missing metadata — it misleads both readers and any tool that
+  consumes it. A kernel op's `handles` changes when its kernel registrations change; keep them in
+  sync (an externally-registered kernel widens the REAL dispatch without widening `handles` — that
+  is fine, `handles` documents the op author's contract, the registry documents the deployment).
+- **Kernel ops rarely need more than `handles`** — dispatch and pass-through already follow from
+  the registry; `consumes`/`produces` earn their keep on type-CHANGING ops, where the `__call__`
+  override hides the type flow that kernels would have made explicit.
+- **These tuples never gate execution** (except the `FunctionTransform` case above). If an op must
+  refuse to run without an input, validate lazily in `__call__` with a clear error — the same
+  lazy-validation convention every op follows.
+
+**recordstream ships no native augmentation ops** — geometric/photometric augmentation comes from
+torchvision `transforms.v2` / albumentations run as-is (next section); native ops exist only where
+no library covers them.
+
+### Mixing libraries — as-is, no adapters
+
+The engine's single op-application chokepoint, `recordstream.core.families._apply_op(record, op)`, dispatches
+on the op's FAMILY (by MRO module name, no eager import) and invokes each family the way its own
+library expects:
+
+- **albumentations** — the op receives exactly its own kwarg vocabulary: the
+  `image`/`mask`/`masks`/`bboxes`/`keypoints`/`labels` keys present in the record, nothing else. One
+  call = one joint draw across them; array outputs are re-wrapped in the incoming value's item type,
+  so an `Image`/`Mask` keeps its type and metadata through the library.
+- **torchvision `transforms.v2`** — called on the record dict as-is (tv2 walks dicts natively).
+  Layout conversions are the library's own transforms (`v2.ToImage()`) — the engine never converts
+  silently.
+- **everything else** — `op(record)`; `None` drops the record.
+
+So bare library transforms sit in one list with native ops — in `Stream(ops=[...])`, in a `Pipeline`,
+in a `flow:` step:
+
+```python
+import albumentations as A
+from recordstream import Pipeline
+
+Pipeline([
+    A.Compose(                                   # box-carrying augmentation: the library's own Compose
+        [A.HorizontalFlip(p=1.0)],
+        bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]),
+    ),
+    A.GaussNoise(p=1.0),                         # image only — its own kwarg vocabulary
+    Brighten(strength=0.2),                      # native type-dispatched op
+])(record)
+# image + mask + bboxes flipped together (one joint draw); record["class"] untouched.
+```
+
+The same holds in YAML — a bare library transform is an ordinary `!class:` node in an `ops:` list
+(the engine flows deferred markers at route entry):
+
+```yaml
+ops:
+  - !class:albumentations.HorizontalFlip
+    p: 0.5
+  - !class:albumentations.GaussNoise
+    p: 1.0
+```
+
+See [augmentation.md](augmentation.md) for the full key-vocabulary / bbox / seeding recipes.
+Runnable end-to-end: [`examples/record_pipeline.py`](../examples/record_pipeline.py).
+
+### `Pipeline` — the sequential composer
+
+`Pipeline(transforms=[...])` (`recordstream.transform`, `@configurable(category="op",
+group="compose")`) wraps an ordered op list so it appears as one named block in a config and one
+node on a visual canvas: zero-arg/lazy (config-deferred markers flow on first call), entries applied
+through `_apply_op` (so bare library transforms nest exactly as in a bare ops list), `None`
+propagation (a filter-drop stops the chain), and `close()` propagation to inner ops that own
+resources.
+
+## Extending it
+
+### A custom op from a plain function
+
+```python
+from recordstream import as_transform, Image
+brighten = as_transform(lambda d: d + 0.1, handles=(Image,), field="image")
+```
+
+### A custom item type + a kernel for an existing op — no core edit
+
+```python
+from dataclasses import dataclass, field
+from recordstream import register_item
+from mypkg.transforms import MyGeoTransform   # any Transform subclass
+
+@register_item
+@dataclass
+class Keypoints:
+    data: list = field(default_factory=list)   # a `data` field = the payload slot
+
+@MyGeoTransform.kernel(Keypoints)
+def _(value, params):
+    return move_points(value, params)
+```
+
+Dispatch is MRO-aware: a kernel registered for a base item type also serves its subclasses, and a
+subclass transform inherits its base's kernels until it overrides them.
+
+### Domain items live in the domain package
+
+The same mechanism, applied across packages: because recordstream is modality-neutral, a signal-domain
+package defines its own items (a signal, a spectrogram) and its own type-changing ops, registers
+them with `register_item`, and they become first-class record values — dispatchable, collatable,
+storable — with no core edit.
+
+### A new library family
+
+Supporting a new external transform library (kornia, DALI, an albumentations fork, a
+signal-processing library) is NOT an adapter class — it is one **registered op family**: a matcher
+that recognises the library's op objects plus an invoker that applies one op with the library's own
+calling convention. Every engine route (sequential, spawn-parallel, streamed, random-access) and
+every composing op picks it up at once, because they all funnel through `_apply_op`:
+
+```python
+from recordstream import register_op_family
+
+def is_kornia(op) -> bool:
+    # Keep the matcher IMPORT-FREE: inspect MRO module names, never import the library.
+    return any(c.__module__.startswith("kornia.augmentation") for c in type(op).__mro__)
+
+def invoke_kornia(record, op):
+    # kornia augmentations are nn.Modules over batched BCHW tensors — one draw per call.
+    img = record["image"]                    # a CHW torch.Tensor (e.g. after ToTensor)
+    out = op(img.unsqueeze(0)).squeeze(0)
+    return {**record, "image": out}
+
+register_op_family("kornia", is_kornia, invoke_kornia)
+
+# From here on, bare kornia ops sit in ANY ops list — Stream, Pipeline, RandomApply, flow steps:
+stream = Stream(source=records, ops=[ToTensor(field="image"), K.RandomHorizontalFlip(p=1.0)])
+```
+
+The rules: dispatch checks families **last-registered first**, so a more specific family (say a
+fork extending albumentations) registers after the built-ins and wins the overlap; re-registering a
+name replaces that family in place; matcher and invoker must be **module-level functions** — the
+spawn-parallel routes pickle them by reference to rebuild the registry inside worker processes
+(defining them in a script's `__main__` or a REPL breaks `.parallel()`; a module import side effect
+is the sanctioned place, exactly like `register_item`/`register_kernel`). The built-in
+`albumentations` / `torchvision_v2` families register through this same API at import — there is no
+privileged code path. When a library's convention needs per-op configuration instead (which key to
+read, per-op state), write a normal `Transform` op that wraps it explicitly — the registry is for
+AS-IS drop-in.
+
+## Engines — Stream and FlowGraph carry the record
+
+Every carrier is a plain dict, and every route applies ops through `_apply_op` — sequential,
+spawn-parallel, streamed, and random-access (`__getitem__`) alike, in `Stream` and in `FlowGraph`.
+Composing ops (`Pipeline`, `RandomApply`, `Enable`, `Parallel`, `ConfigureOp`, the context ops
+`Apply`/`Capture`) route their inner ops through the same chokepoint, so a bare library transform
+nests anywhere a native op does.
+
+```python
+Stream(source=my_source, ops=[A.GaussNoise(p=1.0), Brighten()]).to_sink(HDF5Sink(path="out.h5"))
+```
+
+`Stream.map(func, key=None)` lifts a plain function over one record entry (`key=None` hands it the
+whole dict — internally a `WrappedOp`, which stores the callable as its importable path so it
+pickles across `spawn` workers); `Stream.project(keys)` yields partial records restricted to the
+requested keys (see [projection.md](projection.md)).
+
+### Graph fan-in (`merge_from`) and entry binds (`step[key]`)
+
+In a `flow:` document, the fan-in is **`merge_from`** — the UNION of the named steps' record
+entries, in slot order, last-write-wins on a key collision. The idiom for a derived-entry branch:
+produce, `SelectFields` the new key(s), merge:
+
+```yaml
+flow:
+  start:     {}
+  masked:    {op: !class:recordstream.ops.numpy.Threshold(low_level=0.5), from: start}
+  mask_only: {op: !class:recordstream.ops.structure.SelectFields(keys: [mask]), from: masked}
+  boosted:   {op: !class:mypkg.Boost(), from: start}
+  out:       {from: boosted, merge_from: [mask_only]}
+```
+
+`bind:` references have three shapes: a bare `step` binds the step's WHOLE result record,
+`step[key]` binds the named ENTRY of that step's record, and `step.attr` binds the step op's live
+`@output`. All three are read by the engine directly from the step grammar — there is no lowering
+to a flat op list (the pass that did that, and the six context ops it emitted, were deleted
+2026-07-30). See [graph.md](graph.md).
+
+## Storage — the record key-group layout
+
+All four backends (`HDF5Sink`↔`HDF5Source`, `ZarrGroupSink`↔`ZarrGroupSource`,
+`ZarrBatchSink`↔`ZarrBatchSource`, `DirectorySink`↔`DirectorySource`) write a record in ONE logical
+schema: per record, one group per KEY carrying the value's registered type name (`__item_type__`),
+the payload as a `data` dataset, and its attrs (scalars natively — queryable; arrays as sub-datasets
+under `attrs/`; structured values JSON-tagged so tuples survive). A plain (non-item) value rides the
+`"plain"` type tag — an array payload as `data`, a scalar under the `value` attr. Key order is
+preserved in `__field_order__`; the store is stamped `recordstream_format = "typedrecord-v1"`.
+
+Backends never inspect item internals — everything serializes through the item codec
+(`recordstream/io.py`: `encode_item` / `decode_item` / `encode_record` / `decode_record`), so an
+externally-registered item type round-trips with zero storage edits;
+`register_io(MyItem, encode=..., decode=...)` overrides the default structural codec when needed.
+Decoding requires the item type to be registered (imported) in the reading process — the same
+contract as Confluid's `!class:`.
+
+```python
+sink = HDF5Sink(path="out.h5", overwrite=True)
+with sink:
+    for record in stream:
+        sink.write(record)
+back = list(HDF5Source(path="out.h5"))   # exact records: keys, types, order, tuple attrs
+```
+
+`ZarrBatchSink` (the uniform single-array sink) appends the FIRST record entry's payload per row and
+stores a one-time item template — per-record attr variation needs `ZarrGroupSink`.
+
+**No backward compatibility:** a store stamped with the pre-record `typedsample-v1` tag (or carrying
+no tag) raises a `ValueError` telling you to re-generate it with a current sink
+(`storage/base.py::require_record_format`) — there is no legacy read path.
+
+### Querying record stores without loading arrays
+
+The metadata scans yield the nested `{key: {attr: value}}` shape, and a `where` expression
+addresses it as `<key>.<attr>` (a plain scalar entry appears under its `value` attr):
+
+```python
+fast = MetadataFilterSource(source=HDF5Source(path="out.h5"), where="signal.samplerate > 1e6")
+```
+
+Array-valued attrs appear as shape/dtype stubs (presence/shape testable, never loaded). A key named
+like a Python keyword (e.g. `class`) can't be addressed in an expression — use the programmatic
+`predicate` or a non-keyword key name. Live records expose the same nested shape via
+`recordstream.storage.query.record_metadata(record)`. See [storage.md](storage.md).
+
+## Batching — `collate_records` and the collate registry
+
+A torch `DataLoader` (or `Stream.batch`) hands a collate function a LIST of N records and expects
+ONE object back. `collate_records` — the registry's `"record"` default — folds per key with three
+rules (all records must share the same key set; a mismatch raises):
+
+1. **array-backed item** → payloads stacked into one array/tensor with a leading batch dim, SAME
+   item type back; each declared attr becomes a per-record list;
+2. **wrapper item** (`Label`, `Boxes`) → ONE item whose fields are per-record LISTS — deliberately
+   not auto-tensorized (turning class names into an `[N]` int64 tensor is the model boundary's one
+   explicit step, not a generic-engine guess);
+3. **plain value** → a plain list.
+
+```python
+records = [{"image": Image(...2×2×3...), "class": Label(i % 2, classes=["noise", "drone"]),
+            "snr_db": 10.0 * i} for i in range(3)]
+batch = collate_records(records)
+# image:  Image (3, 2, 2, 3)      layout: ['HWC', 'HWC', 'HWC']
+# class:  Label value=[0, 1, 0]   classes: [['noise', 'drone'], ×3]
+# snr_db: [0.0, 10.0, 20.0]
+```
+
+### Reading the batch back — `batch_values` / `batch_tensor` / `batch_metadata`
+
+Every model boundary has to undo those three rules, so `recordstream.batch` ships the inverse
+next to the collate that wrote it:
+
+```python
+from recordstream import batch_values, batch_tensor, batch_metadata, multi_hot
+
+batch_values(batch, "class")                             # [0, 1, 0]  — past the wrapper item
+batch_tensor(batch, "image", device=dev)                 # [N, 3, H, W] torch tensor
+batch_tensor(batch, "class", dev, dtype=torch.int64)     # [N] class ids
+multi_hot(batch, "class", num_classes=3)                 # [N, 3] numpy multi-hot
+batch_metadata(batch, exclude=("image", "class"))        # [{"snr_db": 0.0}, ...]
+```
+
+`batch_values` is the one that knows how to get *past* an item — a `Label` yields its `.value`,
+a `MultiLabel` its `.values`, an array item its stacked payload, a plain value its list.
+`multi_hot` renders a `MultiLabel` column as an `[N, C]` matrix. `batch_metadata` transposes
+the remaining columns back into N dicts so a predictions sink can pair a model's output with
+the record it came from.
+
+**Only `batch_tensor` is torch.** The others return plain values or numpy, so a non-torch
+backend uses the same code and converts in one line (`torch.as_tensor(m)`, which shares memory,
+or the TensorFlow/JAX equivalent). A torch-typed `multi_hot` would have forced a second
+implementation for the next backend.
+
+`dtype` is a **parameter, not an opinion** — the same knob as `device`. recordstream never
+decides the contract; the caller names the one its loss requires. That matters: a dataset
+yielding int32 label tensors is legal, and `CrossEntropyLoss` refuses it with *"expected scalar
+type Long but found Int"*, so a classifier passes `dtype=torch.int64` and a segmenter does the
+same for its pixel-class mask. What stays task-side is only *which* call to make.
+
+### When the generic rules cannot work: register a task collate
+
+Stacking is task-shaped, and detection is the canonical failure: each record carries a DIFFERENT
+number of boxes, and rule 2 can only give you `Boxes(boxes=[<1 box>, <3 boxes>])` — per-record
+lists no detection model accepts. A detection model family has its own batch contract (stacked
+images + RAGGED per-record target dicts), so the task package registers a collate that produces
+exactly that:
+
+```python
+from recordstream import Image, Boxes, collate, register_collate
+
+@register_collate("detection")
+def detection_collate(items):
+    """The torchvision detection contract: stacked images + ragged per-record targets."""
+    images = torch.stack([torch.as_tensor(np.asarray(r["image"])).permute(2, 0, 1) for r in items])
+    targets = [
+        {"boxes": torch.as_tensor(r["target"].boxes, dtype=torch.float32).reshape(-1, 4),
+         "labels": torch.as_tensor(r["target"].labels, dtype=torch.int64)}
+        for r in items
+    ]
+    metadata = [{k: v for k, v in r.items() if k not in ("image", "target")} for r in items]
+    return {"images": images, "targets": targets, "metadata": metadata}
+
+batch = collate(records, key="detection")     # or: DataLoader(..., collate_fn=get_collate("detection"))
+# images:     [2, 3, 4, 4]                    — uniform, so stacked
+# targets[0]: {'boxes': [1, 4], 'labels': [1]}
+# targets[1]: {'boxes': [3, 4], 'labels': [3]}  — raggedness PRESERVED, per record
+```
+
+The registration is what "solves" detection: the registry lets the task OPT OUT of the generic
+folding entirely and emit its model family's native batch shape — while the engine keeps owning
+only the GROUPING (yielding lists of records) and never grows task knowledge. Registration is
+additive (an import side effect of the task package); a config wires the collate by reference
+(`collate_fn: !ref:mypkg.detection_collate`) like any other slot. See [kinds.md](kinds.md).
+
+## What is NOT here yet (follow-ups)
+
+A torch-`Tensor`-subclass item base (torch payloads currently ride in wrapper items or as plain
+values) and confluid-native item-type discovery. See the root `TASKS.md`.
