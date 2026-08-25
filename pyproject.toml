@@ -74,6 +74,12 @@ dev = [
     # CI installs `.[dev]` (unit-tests AND verify-examples), so torchvision here keeps the
     # bare torchvision-v2 op family + examples exercised in CI without a workflow edit.
     "torchvision",
+    # Same reason: `ops.image._apply_colormap` lazily imports matplotlib for every
+    # non-gray colormap, and the gray path is matplotlib-free BY DESIGN — so without this
+    # the colormap half of ConvertToImage / value_to_image goes untested in CI. It stays
+    # out of `dependencies` deliberately: a consumer rendering only grayscale must not be
+    # made to install a plotting library.
+    "matplotlib",
 ]
 notebook = [
     "matplotlib",
