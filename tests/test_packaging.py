@@ -95,3 +95,32 @@ def test_the_development_status_classifier_matches_the_version() -> None:
     expected = "3 - Alpha" if is_prerelease else "4 - Beta"
 
     assert expected in status[0], f"version {project['version']} does not match classifier {status[0]!r}"
+
+
+def test_the_changelog_is_shipped_in_the_sdist() -> None:
+    """`MANIFEST.in` must carry `CHANGELOG.md` — nothing else pulls it in.
+
+    setuptools builds an sdist from what is *referenced*: `readme` brings README.md,
+    `license-files` brings LICENSE, `packages.find` + `package-data` bring the package.
+    A CHANGELOG is referenced by nothing, so it is silently absent — measured on this
+    project's own sdist before `MANIFEST.in` existed.
+
+    It matters more than a tidiness point here: `[project.urls] Changelog` points at the
+    file on GitHub, so while that repository is private the sdist is the ONLY copy a
+    reader can reach.
+
+    Asserted on the declaration rather than by building an sdist, for the same reason
+    the package-data rules are: building one takes seconds and needs a clean tree, and
+    the declaration is the thing that actually goes stale.
+    """
+    manifest = _REPO / "MANIFEST.in"
+    assert manifest.exists(), "MANIFEST.in is missing; the sdist would ship no CHANGELOG"
+
+    included = {
+        line.split(maxsplit=1)[1].strip()
+        for line in manifest.read_text().splitlines()
+        if line.strip().startswith("include ")
+    }
+    missing = [name for name in ("CHANGELOG.md",) if name not in included]
+
+    assert not missing, f"MANIFEST.in does not include: {missing}"
