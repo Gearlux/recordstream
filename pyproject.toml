@@ -185,12 +185,25 @@ line_length = 120
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 
+# This project is type-checked TWICE with different configs, and only one of them is
+# authoritative for a release. From the workspace root a shared `mypy.ini` supplies these
+# ignores, so a gap here is invisible there; this project's OWN CI runs `mypy .` from the
+# project directory, reads only the table below, and is what a published package must
+# satisfy. Every optional or lazily-imported third party therefore needs an entry HERE,
+# even when the workspace config already carries one.
 [[tool.mypy.overrides]]
 module = [
     "albumentations.*",
     "datasets.*",
     "h5py.*",
+    # Lazily imported inside `ops.image._apply_colormap` (only a non-gray colormap needs
+    # it), so it is not a declared dependency at all — nothing installs it for CI.
+    "matplotlib.*",
+    # The `[keras]` extra. Keras ships no `py.typed`, so it is untyped rather than absent.
+    "keras.*",
     "PIL.*",
+    # The `[vision]` extra, behind a try/except in `ops.numpy.connected_component_boxes`.
+    "scipy.*",
     "torchvision.*",
     "zarr.*",
 ]
