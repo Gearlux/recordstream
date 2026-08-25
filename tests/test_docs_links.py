@@ -12,10 +12,11 @@ Three rules, one per failure mode:
 * an `#anchor` names a heading that exists in that file,
 * every docs page is reachable from the README index.
 
-This project's README links to docs RELATIVELY, which is correct for a project not
-published to PyPI — the absolute-URL rule exists because a PyPI landing page cannot
-resolve a relative link. Those relative links are still covered by the two rules
-above, since the README is in the scanned set.
+The README is the PyPI landing page (``readme = "README.md"``), and PyPI resolves a
+relative link against ``pypi.org``, not against the repository — so two further rules
+apply to it alone: it links to repo files by ABSOLUTE GitHub URL, and each such URL
+names a file that exists here. The ``docs/*.md`` pages are read on GitHub only and
+keep their relative links.
 
 Fenced code blocks are excluded from the scan — see :func:`_strip_code`.
 
@@ -153,3 +154,40 @@ def test_the_slug_rule_matches_githubs() -> None:
     assert _slug("Registering a class you don't own") == "registering-a-class-you-dont-own"
     assert _slug("`flow()` finishes the object") == "flow-finishes-the-object"
     assert _slug("Bare, addressed, glob — the scoping model") == "bare-addressed-glob--the-scoping-model"
+
+
+#: `https://github.com/Gearlux/recordstream/blob/main/<path>` — a link from the README
+#: back into this repository. Any `#anchor` is captured separately so it can be dropped.
+_SELF_REPO_LINK = re.compile(r"https://github\.com/Gearlux/recordstream/blob/main/([^)\s#]+)")
+
+
+def test_the_readme_links_to_repo_files_by_absolute_url() -> None:
+    """The README carries no relative link to a repo file.
+
+    It is the PyPI landing page, and PyPI resolves `docs/storage.md` against
+    `pypi.org/docs/storage.md`, which does not exist. The reader gets a 404 from a
+    link that works perfectly on GitHub, so nothing in the repo can catch it — which
+    is why this rule is a test rather than a review habit.
+
+    Same-page anchors (`#installation`) are fine: they resolve on the rendered page.
+    """
+    relative = [t for t in _links(_README) if not t.startswith("#")]
+
+    assert not relative, (
+        f"README links to repo files relatively; PyPI cannot resolve these: {relative}. "
+        f"Use https://github.com/Gearlux/recordstream/blob/main/<path>."
+    )
+
+
+def test_readme_links_into_this_repo_name_a_file_that_exists() -> None:
+    """An absolute self-link still has to point at something.
+
+    Spelling the link absolutely takes it out of reach of
+    `test_relative_links_name_a_file_that_exists`, so without this rule the rename
+    check silently stops covering the README — trading a PyPI 404 for a GitHub one.
+    """
+    missing = [
+        target for target in _SELF_REPO_LINK.findall(_strip_code(_README.read_text())) if not (_REPO / target).exists()
+    ]
+
+    assert not missing, f"README links to repo files that do not exist: {missing}"

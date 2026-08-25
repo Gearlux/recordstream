@@ -1,11 +1,29 @@
 [project]
 name = "recordstream"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Clean, functional data pipelines for ML research and production."
-authors = [{ name = "Taidal", email = "info@gearlux.ai" }]
+readme = "README.md"
+authors = [{ name = "Gert Behiels" }]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+# Floors are what this package is actually TESTED against, not the oldest release that
+# once worked: `confluid==0.1.0` is provably unsatisfiable here (liquifai requires
+# confluid>=0.2.0), so the old `>=0.1.0` described a combination nobody could install.
 dependencies = [
-    "confluid>=0.1.0",
-    "loggair>=0.1.0",
+    "confluid>=0.3.0",
+    "loggair>=0.2.0",
     "numpy",
     "Pillow",
     "h5py",
@@ -19,9 +37,15 @@ dependencies = [
     # liquifai powers the generic `recordstream run <config.yaml>` CLI (recordstream.cli) that
     # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
     # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
-    "liquifai>=0.1.0",
+    "liquifai>=0.2.0",
 ]
 requires-python = ">=3.12"
+
+[project.urls]
+Homepage = "https://github.com/Gearlux/recordstream"
+Repository = "https://github.com/Gearlux/recordstream.git"
+Issues = "https://github.com/Gearlux/recordstream/issues"
+Changelog = "https://github.com/Gearlux/recordstream/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # The torch-shaped surface, NOT the engine: `recordstream.ops.torch` (ToTensor),
@@ -61,7 +85,7 @@ vision = [
 ]
 
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 # CONFLUID-CONFIGURABLE DISCOVERY
@@ -80,7 +104,7 @@ recordstream-sources = "recordstream.sources"
 recordstream-ops-parallel = "recordstream.ops.parallel"
 recordstream-ops-enable = "recordstream.ops.enable"
 recordstream-ops-random-apply = "recordstream.ops.random_apply"
-# ConfigureOp (per-record parameter injection — the helios Configure pattern); entry-point
+# ConfigureOp (per-record parameter injection — derive an op's parameter from the record); entry-point
 # changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.
 recordstream-ops-configure = "recordstream.ops.configure"
 recordstream-ops-formula = "recordstream.ops.formula"

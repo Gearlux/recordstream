@@ -6,18 +6,18 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordS
 
 ## 🚀 Key Features
 
--   **A record is a plain dict:** the [record model](docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Boxes`, `Label`, `MultiLabel`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
--   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
+-   **A record is a plain dict:** the [record model](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) — a `dict` of typed values (`Image`, `Mask`, `Boxes`, `Label`, `MultiLabel`, …), each owning its own metadata, with key names carrying meaning (`"image"`, `"mask"`, `"bboxes"`). No wrapper container, no role tags.
+-   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
 -   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
--   **Graph pipelines:** readable [`flow:` documents](docs/graph.md) of named steps — `from:` forks, `merge_from:` merges, `bind:` feeds one step's value into another's parameter. An `ops:` list is the same engine's linear spelling; both parse to one step graph.
--   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
--   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
--   **Passive Introspection:** ops declare the value types they [handle / consume / produce](docs/record-model.md) and are discoverable by category for visual editors and schema generators.
+-   **Graph pipelines:** readable [`flow:` documents](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) of named steps — `from:` forks, `merge_from:` merges, `bind:` feeds one step's value into another's parameter. An `ops:` list is the same engine's linear spelling; both parse to one step graph.
+-   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
+-   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
+-   **Passive Introspection:** ops declare the value types they [handle / consume / produce](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) and are discoverable by category for visual editors and schema generators.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
 
 ## 🛠 Quick Start
 
-One pipeline mixing a **bare albumentations Compose** (image + mask + boxes move together in one draw), a **bare torchvision v2 transform**, and a **native op** — no wrappers (mirrors [`examples/record_pipeline.py`](examples/record_pipeline.py)):
+One pipeline mixing a **bare albumentations Compose** (image + mask + boxes move together in one draw), a **bare torchvision v2 transform**, and a **native op** — no wrappers (mirrors [`examples/record_pipeline.py`](https://github.com/Gearlux/recordstream/blob/main/examples/record_pipeline.py)):
 
 ```python
 import albumentations as A
@@ -90,7 +90,7 @@ recordstream run pipeline.yaml --enabled false            # broadcast: every Ena
 Inner ops are not materialized until the wrapper first fires, so gating an expensive chain with
 `enabled: false` costs nothing at startup. In Python the same wrapper is one call —
 `Enable(ops=[...], name="visualize", enabled=False)` — which is what lets a visual editor or a
-generated tool schema set the toggle too (see [docs/architecture.md](docs/architecture.md#6-every-knob-is-a-declared-parameter--the-enable-toggle-2026-07-27)).
+generated tool schema set the toggle too (see [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md#6-every-knob-is-a-declared-parameter--the-enable-toggle-2026-07-27)).
 
 ### Inference as an op (`ModelPredict`)
 
@@ -117,19 +117,19 @@ the same document offline.
 
 | Page | Covers |
 |---|---|
-| [docs/record-model.md](docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
-| [docs/kinds.md](docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
-| [docs/graph.md](docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
-| [docs/sources.md](docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
-| [docs/storage.md](docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
-| [docs/projection.md](docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
-| [docs/predictions.md](docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
-| [docs/image.md](docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), array introspection helpers |
-| [docs/configure.md](docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
-| [docs/runnable.md](docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
-| [docs/workflow.md](docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
-| [docs/augmentation.md](docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
-| [docs/architecture.md](docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
+| [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
+| [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
+| [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
+| [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
+| [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
+| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), array introspection helpers |
+| [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
+| [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
+| [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
+| [docs/augmentation.md](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
+| [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
 
 ## 🧭 Scope: a modality-neutral engine
 
@@ -142,16 +142,18 @@ RecordStream deliberately contains **no domain-specific code** — every op, sou
 
 RecordStream is designed to sit between your data catalog and your training loop, acting as the high-performance "glue" for ML pipelines:
 
-- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability, and [names the dataset it reads](docs/sources.md#identifying-a-dataset) so a run record can point at it (see [docs/sources.md](docs/sources.md)).
+- **Hugging Face** for community datasets and Arrow/Parquet loading — `HuggingFaceSource` turns a `datasets.Dataset` into record dicts of typed values with full metadata traceability, and [names the dataset it reads](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#identifying-a-dataset) so a run record can point at it (see [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md)).
 - **Confluid** for configuration: every pipeline is a YAML document, every op a `!class:` node — including bare library transforms — every run reproducible.
-- **PyTorch**: `Stream` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](docs/kinds.md#batching--collate_records--the-collate-registry-recordstreamcollate) (`collate_records` is the default).
-- **Keras 3**: no `DataLoader` exists to do the batching, so [`RecordSequence`](docs/kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you) is the `keras.utils.PyDataset` half — row order, slicing, per-epoch reshuffle, `collate_records` — and a `transform` callable supplies the batch shape, exactly as `collate_fn` does for torch.
-- **Augmentation libraries**: [albumentations](https://albumentations.ai) and torchvision `transforms.v2` transforms run **as-is** in any ops list — the engine speaks each library's native convention (kwarg vocabulary vs dict walk), so there is nothing to wrap (see [docs/augmentation.md](docs/augmentation.md)).
+- **PyTorch**: `Stream` and `FlowGraph` implement the `Dataset` protocol (`__len__`/`__getitem__`/`.batch`/`.parallel`) and plug straight into a `DataLoader` with a [registry collate](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#batching--collate_records--the-collate-registry-recordstreamcollate) (`collate_records` is the default).
+- **Keras 3**: no `DataLoader` exists to do the batching, so [`RecordSequence`](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#keras-recordsequence--the-batching-half-the-framework-leaves-to-you) is the `keras.utils.PyDataset` half — row order, slicing, per-epoch reshuffle, `collate_records` — and a `transform` callable supplies the batch shape, exactly as `collate_fn` does for torch.
+- **Augmentation libraries**: [albumentations](https://albumentations.ai) and torchvision `transforms.v2` transforms run **as-is** in any ops list — the engine speaks each library's native convention (kwarg vocabulary vs dict walk), so there is nothing to wrap (see [docs/augmentation.md](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md)).
 
 ## 🔧 Installation
 
+RecordStream is on PyPI as a pre-release, so `pip` needs `--pre` to see it:
+
 ```bash
-pip install git+https://github.com/Gearlux/recordstream.git@main
+pip install --pre recordstream
 ```
 
 The core engine is **numpy**, and installs no ML framework. A framework arrives only with the extra
@@ -163,7 +165,7 @@ that needs it:
 | `keras` | `recordstream.keras` — the `RecordSequence` `PyDataset` adapter and the `KERAS_BACKEND` ordering. Keras 3 is an API, so this names no compute engine; it runs on whichever of torch / TensorFlow / JAX you have |
 
 ```bash
-pip install "recordstream[torch] @ git+https://github.com/Gearlux/recordstream.git@main"
+pip install --pre "recordstream[torch]"
 ```
 
 Everything else works without either. A `Stream` is map-style (`__len__`/`__getitem__`), so a

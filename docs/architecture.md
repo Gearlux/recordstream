@@ -868,7 +868,8 @@ def predict_step(self, batch, batch_idx):
 ### Context
 
 `recordstream` declared `torch` as a hard dependency, so `import recordstream` imported ~2GB of
-PyTorch — and matrainer inherited it transitively, declaring no torch of its own. That was fine
+PyTorch — and every package built on it inherited that transitively, declaring no torch of its
+own. That was fine
 while every consumer was a Lightning trainer. It stopped being fine when a second training engine
 landed: a Keras-on-TensorFlow install, or a plain-numpy dataset-conversion job, paid for a
 framework it never called.
