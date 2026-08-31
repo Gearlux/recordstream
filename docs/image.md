@@ -29,6 +29,24 @@ u8 = normalize_to_uint8(arr, vmin=-80.0, vmax=0.0)    # fixed dB window across a
 
 `record_to_image(record, ...)` renders a record's first array-bearing (2-D / 3-D) value the same way — the ad-hoc whole-record preview for viewer tooling. Pillow is a runtime dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
 
+## Per-channel standardization (`Normalize`)
+
+The normalization node between an image conversion and a model — the same math as the
+albumentations transform of the same name (`(x - mean*max_value) / (std*max_value)`), with
+the ImageNet statistics as defaults:
+
+```yaml
+ops:
+  - !class:recordstream.ops.image.ConvertToImage {width: 224, height: 224}
+  - !class:recordstream.ops.image.Normalize {}      # ImageNet mean/std over uint8 input
+  - !class:recordstream.ops.torch.ToTensor {normalize: false}
+```
+
+A bare `!class:albumentations.Normalize` in a YAML `ops:` list computes the identical
+result; this op exists so a **drawn** pipeline has a node for the step. Output keeps the
+item type in float32; a 2-D map with per-channel statistics is refused by name (convert it
+first, or pass single-element `mean`/`std`).
+
 ## Masks (`ConvertToMask`)
 
 The segmentation counterpart, and the same shape of op — read one field, write a differently-typed item under `output`. A segmentation dataset ships its target as a greyscale/paletted PNG whose pixel values *are* the class ids (an Oxford-IIIT Pet trimap, Cityscapes label ids, a VOC segmentation map); this turns that payload into the `int64` `[H, W]` `Mask` every per-pixel loss expects.

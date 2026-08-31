@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from recordstream import Image, Label, Mask, Record, Stream
-from recordstream.ops.contract import ContractError, RecordContract
+from recordstream.ops.contract import ClassNamesOutput, ClassNamesScan, ContractError, RecordContract
 
 
 def classification_record() -> Record:
@@ -130,3 +130,69 @@ class TestInputAndOutputPositions:
         )
         with pytest.raises(ContractError, match=r"classification output: record #0 has no entry 'image'"):
             list(stream)
+
+
+class TestClassNamesOutput:
+    """The graph's OUTPUT declaration. It READS what it was given and derives nothing.
+
+    Three routes, each chosen explicitly by the graph author: type the names, connect something
+    that carries a vocabulary, or connect a walker. This class picks none of them on their
+    behalf -- no scanning fallback, because a walk is seconds per thousand records and would run
+    on every graph open.
+    """
+
+    def test_route_one_the_names_are_typed_in(self) -> None:
+        assert ClassNamesOutput(names=["cat", "dog"]).class_names == ["cat", "dog"]
+        assert ClassNamesOutput(names=["cat", "dog"]).num_classes == 2
+
+    def test_route_two_a_wired_vocabulary_arrives_as_the_list(self) -> None:
+        """A wire is FOLDED into the document as a literal, so the node only ever sees a list."""
+        assert ClassNamesOutput(names=ClassNamesScan(source=[{"class": Label(value="x")}]).class_names).class_names == [
+            "x"
+        ]
+
+    def test_nothing_given_is_empty_never_a_guess(self) -> None:
+        assert ClassNamesOutput().class_names == [] and ClassNamesOutput().num_classes == 0
+
+    def test_zero_arg_construction_is_legal(self) -> None:
+        """A visual editor PLACES it unfilled, so it must build empty."""
+        assert ClassNamesOutput().names == []
+
+    def test_it_holds_only_the_list_and_never_scans(self) -> None:
+        """The CON case that defines this class: it has nothing to walk with."""
+        import inspect
+
+        params = list(inspect.signature(ClassNamesOutput).parameters)
+        assert params == ["names"], "a second input is a second way to be wrong"
+
+
+class TestClassNamesScan:
+    """The walker an author PLACES when a source declares no vocabulary of its own."""
+
+    def test_it_reports_sorted_unique_names(self) -> None:
+        records = [{"class": Label(value="dog")}, {"class": Label(value="cat")}, {"class": Label(value="dog")}]
+        assert ClassNamesScan(source=records).class_names == ["cat", "dog"]
+
+    def test_encoded_labels_report_their_ids_as_strings(self) -> None:
+        """A walk over encoded labels can only honestly report the ids it saw -- which is also
+        what the dataset's own metadata says (MNIST's names really are '0'...'9')."""
+        records = [{"class": Label(value=2)}, {"class": Label(value=0)}, {"class": Label(value=1)}]
+        assert ClassNamesScan(source=records).class_names == ["0", "1", "2"]
+
+    def test_the_label_key_is_configurable(self) -> None:
+        assert ClassNamesScan(source=[{"target": Label(value="x")}], key="target").class_names == ["x"]
+
+    def test_records_without_a_label_are_skipped_not_fatal(self) -> None:
+        assert ClassNamesScan(source=[{"class": Label(value="dog")}, {"image": 1}]).class_names == ["dog"]
+
+    def test_no_source_is_an_empty_vocabulary(self) -> None:
+        assert ClassNamesScan().class_names == [] and ClassNamesScan().num_classes == 0
+
+    def test_the_walk_goes_through_the_projection_protocol(self) -> None:
+        """Key-restricted, so a projection-aware source is asked only for the label column --
+        that is what makes a walk affordable at all."""
+        import inspect
+
+        import recordstream.ops.contract as module
+
+        assert "iter_key" in inspect.getsource(module.ClassNamesScan)

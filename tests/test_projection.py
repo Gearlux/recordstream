@@ -108,3 +108,46 @@ def test_first_value_materializes_a_deferred_source() -> None:
 def test_plain_values_pass_through_verbatim() -> None:
     payload: Dict[str, Any] = {"samplerate": 30.72e6}
     assert first_value(_Source([payload]), "samplerate") == 30.72e6
+
+
+class TestStreamForwardsProjection:
+    """A ``Stream`` with NO ops forwards ``project`` to its source — with ops it must not.
+
+    The generic iterate-then-filter form exists because an op may CONSUME the entry another
+    one produces (the image becomes the label), so a stream with ops has to run its chain.
+    A stream with an EMPTY chain adds nothing to the records, so filtering through it used to
+    throw away the source's efficient path — a label-only walk decoded every image anyway.
+    """
+
+    class _ProjectingSource:
+        def __init__(self) -> None:
+            self.asked: list = []
+
+        def project(self, keys: Any) -> Iterator[Record]:
+            self.asked.append(set(keys))
+            yield {"class": 7}
+
+        def __iter__(self) -> Iterator[Record]:
+            yield {"class": 7, "image": "DECODED"}
+
+    def test_an_ops_free_stream_forwards_to_the_source(self) -> None:
+        from recordstream import Stream
+
+        source = self._ProjectingSource()
+        rows = list(Stream(source=source).project({"class"}))
+        assert source.asked == [{"class"}], "the source's efficient path must be the one that runs"
+        assert rows == [{"class": 7}]
+
+    def test_a_stream_WITH_ops_still_runs_its_chain(self) -> None:
+        """The CON case: the op may produce the requested entry, so the chain must run."""
+        from recordstream import Stream
+
+        source = self._ProjectingSource()
+        stamp = lambda record: {**record, "stamped": True}  # noqa: E731
+        rows = list(Stream(source=source, ops=[stamp]).project({"class", "stamped"}))
+        assert source.asked == [], "forwarding would skip the op that makes the entry"
+        assert rows == [{"class": 7, "stamped": True}]
+
+    def test_an_ops_free_stream_over_a_plain_source_keeps_the_generic_path(self) -> None:
+        rows = list(__import__("recordstream").Stream(source=[{"class": 1, "image": "X"}]).project({"class"}))
+        assert rows == [{"class": 1}]

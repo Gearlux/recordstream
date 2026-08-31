@@ -35,6 +35,26 @@ hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
 
 > **Lazy & zero-arg construction** — `HuggingFaceSource` follows the workspace lazy-init convention: the constructor does no work (no network), so `HuggingFaceSource()` is valid and building one is free. The dataset is downloaded only on first access to the read-only `.dataset` property (cached thereafter; reset `_dataset` to reload), and `.resolved_metadata_features` (the `"*"` expansion) is derived lazily from the loaded columns. `path` is therefore optional at construction and validated lazily — accessing `.dataset` with an empty `path` raises a clear `ValueError`.
 
+## A plain list of files (`FilesSource`)
+
+When the data is just files — someone handed them over, a tool dropped them in a folder —
+`FilesSource` serves each path as one record, and an OP decodes it. The source knows nothing
+about what a file means; the chain shows how a file becomes a record:
+
+```yaml
+pipeline: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.files.FilesSource
+    files: ["/data/incoming/dog3.png", "/data/incoming/IMG_2041.png"]
+  ops:
+    - !class:recordstream.ops.image.ReadImage {}   # {file} -> {file, image}
+```
+
+Each record starts as `{"file": "<path>"}`; `ReadImage` adds the decoded pixels (RGB, HWC
+uint8) and leaves the path as provenance. There is deliberately **no label entry**: files
+arrive unannotated, and whatever labels them adds that entry downstream. A file the imaging
+library cannot open passes through UNCHANGED with a debug log — the record keeps its row and
+one stray text file never costs the run around it. Other file kinds get their own read ops.
+
 ## Train / val / test splitting (`DatasetSplit`)
 
 `DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields records and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.

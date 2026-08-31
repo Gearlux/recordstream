@@ -29,7 +29,7 @@ from recordstream._compat import is_torch_tensor
 from recordstream.items import Boxes
 from recordstream.items import Image as ImageItem
 from recordstream.items import Mask as MaskItem
-from recordstream.items import NDArrayItem, Record, is_item, item_data, item_value
+from recordstream.items import NDArrayItem, Record, is_item, item_data, item_value, with_data
 from recordstream.transform import Transform
 
 logger = get_logger("recordstream.ops.image")
@@ -626,6 +626,86 @@ def draw_text(
     x, y = _text_anchor_xy(position, block_w, block_h, img.width, img.height, margin)
     draw.multiline_text((x - bbox[0], y - bbox[1]), rendered, fill=color, font=font)
     return np.array(img)
+
+
+@configurable(category="op", group="image")
+class ReadImage:
+    """Read the file a record NAMES into an ``Image`` item — ``{file}`` in, ``{file, image}`` out.
+
+    The decoding half of a file-list pipeline: a plain files source delivers paths and this
+    op turns each into pixels (RGB, HWC uint8), leaving the path in place as provenance. A
+    file the imaging library cannot open — or a record without the field at all — passes
+    through UNCHANGED with a debug log: the record keeps its row (a viewer shows it as
+    unreadable) and one stray text file never costs the run around it.
+
+    Args:
+        field: Record entry holding the file path. Defaults to ``"file"``.
+        output: Entry the decoded image lands under. Defaults to ``"image"``.
+    """
+
+    def __init__(self, field: str = "file", output: str = "image") -> None:
+        self.field = field
+        self.output = output
+
+    def __call__(self, record: Record) -> Record:
+        path = record.get(self.field)
+        if path is None:
+            return record
+        try:
+            with Image.open(str(path)) as opened:  # PIL's Image — the item is ImageItem
+                array = np.asarray(opened.convert("RGB"))
+        except Exception:
+            logger.debug(f"ReadImage: cannot read {path!r} as an image; passing the record through")
+            return record
+        return {**record, self.output: ImageItem(array)}
+
+
+@configurable(category="op", group="image")
+class Normalize(Transform):
+    """Per-channel standardization — ``(x / max_value - mean) / std`` on every image.
+
+    The normalization NODE a drawn pipeline needs between an image conversion and a model:
+    the same math as the albumentations transform of the same name (``(x - mean·max) /
+    (std·max)``), which drops into a YAML ``ops:`` list but has no canvas node. Defaults are
+    the ImageNet statistics every pretrained backbone in this workspace was trained under.
+    Output is the SAME item type in float32 — a uint8 ``Image`` comes out a float ``Image``.
+
+    Args:
+        mean: Per-channel mean over ``[0, 1]``-scaled pixels (ImageNet default).
+        std: Per-channel std over ``[0, 1]``-scaled pixels (ImageNet default).
+        max_value: The input's full-scale value (255 for uint8 images).
+        field: Apply only to this record key (still type-gated); blank = every handled value.
+    """
+
+    handles = (ImageItem,)
+
+    def __init__(
+        self,
+        mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
+        std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
+        max_value: float = 255.0,
+        field: str = "",
+    ) -> None:
+        super().__init__(field=field or None)
+        self.mean = tuple(float(v) for v in mean)
+        self.std = tuple(float(v) for v in std)
+        self.max_value = float(max_value)
+
+    def get_params(self, record: Record) -> Dict[str, Any]:
+        return {"mean": self.mean, "std": self.std, "max_value": self.max_value}
+
+
+@Normalize.kernel(ImageItem)
+def _normalize_image(value: Any, params: Dict[str, Any]) -> Any:
+    array = np.asarray(value, dtype=np.float32)
+    mean = np.asarray(params["mean"], dtype=np.float32) * params["max_value"]
+    std = np.asarray(params["std"], dtype=np.float32) * params["max_value"]
+    if array.ndim == 2 and mean.size > 1:
+        raise ValueError(
+            "Normalize: a 2-D map has no channel axis for the per-channel mean — convert it "
+            "first (ConvertToImage) or pass single-element mean/std"
+        )
+    return with_data(value, (array - mean) / std)
 
 
 @configurable(category="op", group="image")

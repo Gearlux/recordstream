@@ -144,6 +144,47 @@ A consuming workspace or visual editor seeds the contract into a graph so the re
 record shape is declared before the first node is wired; the exported document then
 enforces the same contract when it runs offline.
 
+### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
+
+`RecordContract` states what each RECORD carries. A classification pipeline usually has
+something to say about the DATASET too — the ordered class list a consumer needs to show a
+label as a name rather than an integer. `ClassNamesOutput` is that statement, and it READS
+what it is given rather than deriving anything:
+
+```yaml
+# the source knows its own — a HuggingFace ClassLabel carries its names (metadata, no rows read)
+classes: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist, split: test}
+class_names_output: !class:recordstream.ops.contract.ClassNamesOutput
+  classes: !ref:classes                       # -> ['0', '1', … '9']
+```
+
+Three ways to answer it, each chosen explicitly:
+
+| route | how |
+|---|---|
+| state them | `names: [cat, dog]` |
+| connect something that knows them | `classes: !ref:<a source or Stream>` |
+| connect a walker | `classes: !ref:<a ClassNamesScan>` |
+
+`ClassNamesScan` derives a vocabulary by walking a source's label column — for a source whose
+format does not describe one (a folder reader, a CSV):
+
+```yaml
+scan: !class:recordstream.ops.contract.ClassNamesScan {source: !ref:pipeline}
+class_names_output: !class:recordstream.ops.contract.ClassNamesOutput {classes: !ref:scan}
+```
+
+The walk goes through [key projection](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md)
+so a projection-aware source is asked
+only for the label column, and it reports sorted-unique stringified values — the same ordering
+`LabelMap.fit` uses. It is deliberately a **separate class**: a walk costs seconds per thousand
+records, so it happens because someone asked for it, never as a silent fallback inside
+`ClassNamesOutput`.
+
+Note that the consumer holds the **whole object** and reads the attribute itself. That is the
+shape a config document can carry — an attribute reference (`!ref:classes.class_names`) is
+refused, and a selector parameter on the consumer is its replacement.
+
 ## 📚 Documentation
 
 | Page | Covers |
@@ -151,7 +192,7 @@ enforces the same contract when it runs offline.
 | [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
 | [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
 | [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
-| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |

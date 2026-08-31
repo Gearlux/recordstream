@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from recordstream import Boxes, Image, Label, Record
-from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
+from recordstream.ops.structure import CopyField, DropField, PutField, RandomNumber, RenameField, SelectFields
 
 
 def _record() -> Record:
@@ -86,3 +86,60 @@ def test_configurable_marks() -> None:
     for cls in (RenameField, DropField, CopyField, SelectFields):
         assert getattr(cls, "__confluid_category__", None) == "op"
         assert getattr(cls, "__confluid_group__", None) == "structure"
+
+
+class TestRandomNumber:
+    """A number producer — no record anywhere near it."""
+
+    def test_each_call_is_a_fresh_draw_in_range(self) -> None:
+        draw = RandomNumber(low=0.25, high=0.75)
+        values = [draw() for _ in range(5)]
+        assert all(0.25 <= v <= 0.75 for v in values)
+        assert len(set(values)) > 1, "calls must draw fresh values"
+
+    def test_a_seed_makes_the_sequence_reproducible(self) -> None:
+        first = RandomNumber(seed=7)
+        second = RandomNumber(seed=7)
+        assert [first() for _ in range(4)] == [second() for _ in range(4)]
+
+    def test_the_value_output_is_one_draw(self) -> None:
+        """The declared @output a canvas can wire — NOTE it folds to a FROZEN literal at
+        export; wire the NODE itself (the object output) for a fresh draw per record."""
+        value = RandomNumber(low=0.0, high=1.0, seed=1).value
+        assert isinstance(value, float) and 0.0 <= value <= 1.0
+
+    def test_zero_arg_construction_is_legal(self) -> None:
+        assert RandomNumber().low == 0.0
+
+
+class TestPutField:
+    """`record + value + name` — the one generic way to stamp a value into a record."""
+
+    def test_a_plain_value_is_stored_under_the_key(self) -> None:
+        out = PutField(key="score", value=0.7)(_record())
+        assert out["score"].value == 0.7
+        assert set(out) == set(_record()) | {"score"}
+
+    def test_a_CALLABLE_value_is_drawn_PER_RECORD(self) -> None:
+        """The wire that matters: a RandomNumber node feeding PutField must yield a
+        different draw for each record, never one frozen number for the whole dataset."""
+        put = PutField(key="score", value=RandomNumber(seed=7))
+        scores = [put(_record())["score"].value for _ in range(4)]
+        assert len(set(scores)) > 1
+
+    def test_an_existing_key_is_replaced_dict_semantics(self) -> None:
+        """PUT means put: a model re-stamping its own entry on a second pass must not fail.
+        Protecting the gt is the prediction convention's job, not this op's."""
+        out = PutField(key="class", value=1)(_record())
+        assert out["class"].value == 1
+
+    def test_an_empty_key_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="key"):
+            PutField(value=1)(_record())
+
+    def test_a_missing_value_is_refused_not_stored_as_none(self) -> None:
+        with pytest.raises(ValueError, match="value"):
+            PutField(key="score")(_record())
+
+    def test_zero_arg_construction_is_legal(self) -> None:
+        assert PutField().key == ""

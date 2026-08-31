@@ -425,10 +425,21 @@ class Stream:
     def project(self, keys: Collection[str]) -> Iterator[Record]:
         """Yield pipeline-output records carrying only ``keys`` (the projection primitive).
 
-        Implements :class:`recordstream.projection.SupportsProjection`. Stream must run its op
-        chain to produce each record (an op may consume the input), so this is the generic
-        "iterate, then keep only the requested keys" form. Partial: a generator.
+        Implements :class:`recordstream.projection.SupportsProjection`. A stream WITH ops must
+        run its chain to produce each record — an op may consume one entry to make another
+        (the image becomes the label) — so that case is the generic "iterate, then keep only
+        the requested keys" form. A stream with an EMPTY chain adds nothing to the records, so
+        it FORWARDS to its source through :func:`recordstream.projection.project`, which flows
+        a deferred source and takes the source's efficient path when it has one. Without the
+        forward, wrapping a source in a bare ``Stream`` — which is what a saved config does —
+        silently discarded that path: a label-only walk decoded every image anyway.
+        Partial: a generator.
         """
+        if not self.ops and self.source is not None:
+            from recordstream.projection import project as project_source
+
+            yield from project_source(self.source, keys)
+            return
         want = set(keys)
         for record in self:
             yield {k: v for k, v in record.items() if k in want}
