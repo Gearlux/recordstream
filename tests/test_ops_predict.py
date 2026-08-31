@@ -5,7 +5,7 @@ record and reads the stamped fields as layers; ``recordstream run`` executes the
 document offline. The model is duck-typed (any callable), so none of this needs torch.
 """
 
-from typing import Any
+from typing import Any, Dict
 
 import numpy as np
 import pytest
@@ -186,7 +186,8 @@ class TestPredictBatch:
 
         assert ModelPredict().batch_size == 0
         names = list(inspect.signature(ModelPredict.__init__).parameters)
-        assert names[-1] == "batch_size"
+        assert names.index("batch_size") > names.index("score"), "appended after the pre-existing params"
+        assert names.index("frame") > names.index("batch_size"), "each NEW param appends after the last"
 
     def test_segmentation_debatches_per_row(self) -> None:
         def model(batch: Any) -> np.ndarray:
@@ -199,3 +200,89 @@ class TestPredictBatch:
         op = ModelPredict(model=model, kind="segmentation")
         stamped = op.predict_batch([{"image": np.zeros((2, 2))} for _ in range(2)])
         assert int(stamped[0]["predict_mask"][0, 0]) == 0 and int(stamped[1]["predict_mask"][0, 0]) == 1
+
+
+class TestTheFrameKnob:
+    """Detection on a RESIZED copy: `frame` names the entry whose size the boxes map back to.
+
+    A DETR-style wrapper postprocesses to its own square resolution; without the mapping the
+    stamped boxes (and every IoU downstream) live in model space, not the image's.
+    """
+
+    def test_boxes_scale_from_the_model_input_to_the_named_frame(self) -> None:
+        def model(batch: Any) -> Any:
+            return [{"boxes": [[96.0, 96.0, 192.0, 192.0]], "scores": [0.9], "labels": [1]}]
+
+        record = {
+            "image": np.zeros((768, 1536, 3), dtype=np.uint8),  # the ORIGINAL frame
+            "model_input": np.zeros((384, 384, 3), dtype=np.float32),  # what the model saw
+        }
+        out = ModelPredict(model=model, kind="detection", key="model_input", output="target", frame="image")(record)
+        stamped = out["target"]
+        # x scales by 1536/384 = 4, y by 768/384 = 2
+        assert stamped.boxes == [[384.0, 192.0, 768.0, 384.0]]
+        assert stamped.canvas == (768, 1536), "the canvas is the FRAME's, not the model input's"
+        assert stamped.labels == [1] and stamped.scores == [0.9]
+
+    def test_an_empty_frame_keeps_todays_behaviour(self) -> None:
+        def model(batch: Any) -> Any:
+            return [{"boxes": [[10.0, 10.0, 20.0, 20.0]], "scores": [0.5], "labels": [0]}]
+
+        record = {"image": np.zeros((100, 200, 3), dtype=np.uint8)}
+        out = ModelPredict(model=model, kind="detection")(record)
+        assert out["predict"].boxes == [[10.0, 10.0, 20.0, 20.0]] and out["predict"].canvas == (100, 200)
+
+    def test_a_missing_frame_entry_is_refused_by_name(self) -> None:
+        def model(batch: Any) -> Any:
+            return [{"boxes": [[0.0, 0.0, 1.0, 1.0]]}]
+
+        with pytest.raises(ValueError, match="frame"):
+            ModelPredict(model=model, kind="detection", frame="nope")({"image": np.zeros((4, 4))})
+
+    def test_frame_is_appended_last(self) -> None:
+        import inspect
+
+        assert list(inspect.signature(ModelPredict.__init__).parameters)[-1] == "frame"
+
+
+class TestSolidifyIsAHookNotASwap:
+    def test_the_wired_wrapper_stays_the_callable(self) -> None:
+        """A wrapper's solidify() may RETURN its inner network (RF-DETR's does) — adopting
+        it bypasses the wrapper's own pre/post-processing. The build hook runs; the model
+        the graph wired keeps answering."""
+
+        class _Inner:
+            def __call__(self, batch: Any) -> Any:  # pragma: no cover - must never be called
+                raise AssertionError("the inner network must not replace the wrapper")
+
+        class _Wrapper:
+            def __init__(self) -> None:
+                self.built = False
+
+            def solidify(self) -> Any:
+                self.built = True
+                return _Inner()  # returns the inner network, like RF-DETR
+
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, batch: Any) -> Any:
+                return np.array([[0.2, 0.8]])
+
+        wrapper = _Wrapper()
+        out = ModelPredict(model=wrapper, kind="classification")({"image": np.zeros((4, 4))})
+        assert wrapper.built and out["predict"].value == 1
+
+
+class TestDetectionBatchesAreLists:
+    def test_the_model_receives_a_list_not_a_stack(self) -> None:
+        """The torchvision convention: detection forward(images: List[Tensor])."""
+        seen: Dict[str, Any] = {}
+
+        def model(batch: Any) -> Any:
+            seen["type"] = type(batch).__name__
+            return [{"boxes": [[0.0, 0.0, 1.0, 1.0]], "scores": [0.5], "labels": [0]} for _ in batch]
+
+        records = [{"image": np.zeros((4, 4, 3), dtype=np.float32)} for _ in range(2)]
+        out = ModelPredict(model=model, kind="detection").predict_batch(records)
+        assert seen["type"] == "list" and len(out) == 2

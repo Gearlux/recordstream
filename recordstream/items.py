@@ -189,6 +189,10 @@ class Boxes:
             so a geometric transform (flip / resize) has a self-contained frame.
         extras: Auxiliary PER-BOX parallel arrays and box-set measurements keyed by name —
             item-scoped metadata that travels WITH the boxes it describes.
+        classes: Optional class-NAME vocabulary the integer ``labels`` index into — the same
+            convention as ``Label.classes``: the vocabulary travels WITH the encoded data, so
+            an annotation surface can offer the classes up front and a viewer can name a box
+            without a side channel.
     """
 
     boxes: Any = field(default_factory=list)
@@ -196,6 +200,7 @@ class Boxes:
     scores: Optional[Any] = None
     canvas: Optional[Tuple[int, int]] = None
     extras: Dict[str, Any] = field(default_factory=dict)
+    classes: Optional[List[str]] = None
 
 
 def is_class_id(value: Any) -> bool:

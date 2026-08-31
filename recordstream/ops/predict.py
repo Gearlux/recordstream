@@ -8,7 +8,7 @@ The op lives here (not in a viewer or a project package) because it is fully gen
 the model is any callable ``model(batch)``, duck-typed — no torch import of its own.
 """
 
-from typing import Any, Dict, Literal, get_args
+from typing import Any, Dict, Literal, Optional, get_args
 
 import numpy as np
 from confluid import configurable
@@ -126,6 +126,10 @@ class ModelPredict:
         batch_size: How many records a batching RUNNER may hand :meth:`predict_batch` per
             forward. ``0`` (default) = no opinion — the runner's own default decides;
             set it on the node to pin this model's limit. Appended last (see ``score``).
+        frame: Detection only — the record entry whose SIZE the stamped boxes map to.
+            A model fed a resized copy (a DETR postprocesses to its own square) answers in
+            model space; naming the ORIGINAL image here scales boxes and canvas back to it.
+            ``""`` keeps the input's own frame. Appended last (widget order rule).
     """
 
     def __init__(
@@ -137,6 +141,7 @@ class ModelPredict:
         device: DeviceName = "auto",
         score: str = "score",
         batch_size: int = 0,
+        frame: str = "",
     ) -> None:
         if kind not in get_args(PredictKind):
             raise ValueError(f"ModelPredict kind must be one of {get_args(PredictKind)}, got {kind!r}")
@@ -149,6 +154,7 @@ class ModelPredict:
         self.score = score
         self.device = device
         self.batch_size = int(batch_size)
+        self.frame = frame
         self._ready: Any = None
         self._resolved_device: str = ""
 
@@ -173,8 +179,11 @@ class ModelPredict:
             if model is None:
                 raise ValueError("ModelPredict needs 'model' (a callable model wrapper)")
             if hasattr(model, "solidify") and callable(model.solidify):
-                built = model.solidify()
-                model = built if built is not None else model
+                # a BUILD hook, never a replacement: a wrapper's solidify() may return its
+                # inner network (RF-DETR's does), but the WRAPPER is the callable — adopting
+                # the return value bypassed its pre/post-processing (measured: the raw DETR
+                # dict reached the debatcher instead of per-image detections)
+                model.solidify()
             if hasattr(model, "eval") and callable(model.eval):
                 model.eval()
             if hasattr(model, "to") and callable(model.to):
@@ -188,8 +197,12 @@ class ModelPredict:
             import torch  # noqa: F401
 
             with torch.no_grad():
-                if hasattr(batch, "to") and self._resolved_device:
-                    batch = batch.to(self._resolved_device)
+                if self._resolved_device:
+                    if hasattr(batch, "to"):
+                        batch = batch.to(self._resolved_device)
+                    elif isinstance(batch, list):
+                        # a detection batch is a LIST of tensors — each rides to the device
+                        batch = [v.to(self._resolved_device) if hasattr(v, "to") else v for v in batch]
                 return model(batch)
         except ImportError:
             return model(batch)
@@ -209,7 +222,11 @@ class ModelPredict:
         for record in records:
             if self.key not in record:
                 raise ValueError(f"ModelPredict: record has no field {self.key!r} (fields: {sorted(record)})")
-        out = self._call(self._stack([record[self.key] for record in records]))
+        values = [record[self.key] for record in records]
+        # DETECTION models take a LIST of per-image tensors — the torchvision convention
+        # (FasterRCNN, DETR wrappers); everything else gets the stacked batch.
+        batch = list(values) if self.kind == "detection" else self._stack(values)
+        out = self._call(batch)
         stamped: "list[Dict[str, Any]]" = []
         for index, record in enumerate(records):
             if self.kind == "classification":
@@ -218,7 +235,7 @@ class ModelPredict:
                 if self.score:
                     one[self.score] = confidence
             elif self.kind == "detection":
-                one = {**record, self.output: self._detection(out, record[self.key], index)}
+                one = {**record, self.output: self._detection(out, record[self.key], index, record)}
             elif self.kind == "segmentation":
                 one = {**record, f"{self.output}_mask": self._segmentation(out, index)}
             else:
@@ -251,7 +268,7 @@ class ModelPredict:
         index = int(np.argmax(scores))
         return Label(index), Label(float(scores[index]))
 
-    def _detection(self, out: Any, image: Any, index: int = 0) -> Boxes:
+    def _detection(self, out: Any, image: Any, index: int = 0, record: Optional[Dict[str, Any]] = None) -> Boxes:
         first = _nth(out, index)
         boxes = _to_numpy(_fields(first, "boxes")).reshape(-1, 4)
         scores = _to_numpy(_fields(first, "scores")).reshape(-1) if _has(first, "scores") else np.ones(len(boxes))
@@ -260,7 +277,20 @@ class ModelPredict:
             if _has(first, "labels")
             else np.zeros(len(boxes), dtype=int)
         )
-        return Boxes(boxes=boxes.tolist(), labels=labels.tolist(), scores=scores.tolist(), canvas=_image_hw(image))
+        canvas = _image_hw(image)
+        if self.frame:
+            frame_value = (record or {}).get(self.frame)
+            if frame_value is None:
+                raise ValueError(
+                    f"ModelPredict: frame entry {self.frame!r} is not in the record "
+                    f"(entries: {sorted(record or {})}) — it names the image the boxes map back to"
+                )
+            frame_hw = _image_hw(frame_value)
+            sx = frame_hw[1] / canvas[1] if canvas[1] else 1.0
+            sy = frame_hw[0] / canvas[0] if canvas[0] else 1.0
+            boxes = boxes * np.array([sx, sy, sx, sy], dtype=float)
+            canvas = frame_hw
+        return Boxes(boxes=boxes.tolist(), labels=labels.tolist(), scores=scores.tolist(), canvas=canvas)
 
     def _segmentation(self, out: Any, index: int = 0) -> np.ndarray:
         values = out

@@ -47,6 +47,28 @@ result; this op exists so a **drawn** pipeline has a node for the step. Output k
 item type in float32; a 2-D map with per-channel statistics is refused by name (convert it
 first, or pass single-element `mean`/`std`).
 
+## Boxes (`ConvertToBoxes` / `ConvertFromBoxes`)
+
+The record model speaks ONE box format by contract — the `Boxes` item: absolute-pixel,
+half-open `[x0, y0, x1, y1]` (y down), with `labels`, `scores`, `classes` and `canvas`
+beside the rows. That single target is what keeps every consumer interoperable, so the
+conversion pair varies only the OTHER side:
+
+```yaml
+ops:
+  - !class:recordstream.ops.image.ConvertToBoxes    # any source layout -> the canonical
+    field: class          # a HF `objects` dict (seen through its Label wrapper),
+    format: xywh          # a bare [N, 4] array, or a mis-made Boxes; rows in COCO
+                          # xywh / cxcywh / xyxy, `normalized: true` for [0, 1] rows
+  - !class:recordstream.ops.image.ConvertFromBoxes  # the canonical -> a sink's layout
+    format: xywh          # e.g. write reviewed annotations back in the dataset's shape
+    container: objects    # {'bbox', 'category', 'score'} — or `array` for rows only
+```
+
+`ConvertToBoxes` stamps the image's `(H, W)` as the canvas and carries a class vocabulary
+when given one (or when the source item already holds it); a trainer wanting normalized
+cxcywh converts at its own sink/collate — never by storing non-canonical rows in a `Boxes`.
+
 ## Masks (`ConvertToMask`)
 
 The segmentation counterpart, and the same shape of op — read one field, write a differently-typed item under `output`. A segmentation dataset ships its target as a greyscale/paletted PNG whose pixel values *are* the class ids (an Oxford-IIIT Pet trimap, Cityscapes label ids, a VOC segmentation map); this turns that payload into the `int64` `[H, W]` `Mask` every per-pixel loss expects.

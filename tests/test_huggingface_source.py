@@ -1,5 +1,7 @@
 """HuggingFaceSource unit pins that need no Hub access (the dataset cache is stubbed)."""
 
+from typing import Any
+
 from recordstream.sources.huggingface import HuggingFaceSource
 
 
@@ -220,3 +222,44 @@ class TestProjectionNarrowsTheDataset:
         rows = list(source.project({"class", "extra"}))
         assert source._dataset.selected == [["extra", "label"]]
         assert rows[0]["extra"].value == "m"
+
+
+class TestNestedClassNames:
+    """A detection dataset nests its vocabulary inside the objects feature (cppe-5:
+    `objects.category` is the ClassLabel) — the declared output finds it one level down."""
+
+    def _source_with_features(self, features: Any) -> Any:
+        source = HuggingFaceSource(path="x", target_feature="objects")
+        source._dataset = type("D", (), {"features": features})()
+        return source
+
+    def test_a_sequence_of_dict_with_a_classlabel_inside(self) -> None:
+        class _ClassLabel:
+            names = ["mask", "gloves", "gown"]
+
+        class _Sequence:
+            def __init__(self, feature: Any) -> None:
+                self.feature = feature
+
+        features = {"image": object(), "objects": _Sequence({"bbox": object(), "category": _ClassLabel()})}
+        assert self._source_with_features(features).class_names == ["mask", "gloves", "gown"]
+
+    def test_a_plain_dict_feature_with_a_nested_sequence_classlabel(self) -> None:
+        class _ClassLabel:
+            names = ["a", "b"]
+
+        class _Sequence:
+            def __init__(self, feature: Any) -> None:
+                self.feature = feature
+
+        features = {"objects": {"bbox": object(), "category": _Sequence(_ClassLabel())}}
+        assert self._source_with_features(features).class_names == ["a", "b"]
+
+    def test_a_top_level_classlabel_still_wins(self) -> None:
+        class _ClassLabel:
+            names = ["0", "1"]
+
+        assert self._source_with_features({"objects": _ClassLabel()}).class_names == ["0", "1"]
+
+    def test_nothing_nested_stays_empty(self) -> None:
+        assert self._source_with_features({"objects": object()}).class_names == []

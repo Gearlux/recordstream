@@ -198,3 +198,17 @@ class TestResolveEntry:
         assert resolve_item(record, "class", Image, owner="Op", required=False) is None
         assert resolve_item(record, "", Mask, owner="Op", required=False) is None
         assert resolve_item(record, "", Image, owner="Op", required=False) is not None
+
+
+class TestBoxesCarryTheirVocabulary:
+    def test_classes_name_the_integer_labels(self) -> None:
+        from recordstream.items import Boxes
+
+        boxes = Boxes(boxes=[(0, 0, 1, 1)], labels=[1], classes=["drone", "bird"])
+        assert boxes.classes is not None and boxes.labels is not None
+        assert boxes.classes[boxes.labels[0]] == "bird"
+
+    def test_classes_default_to_none_like_labels(self) -> None:
+        from recordstream.items import Boxes
+
+        assert Boxes(boxes=[(0, 0, 1, 1)]).classes is None

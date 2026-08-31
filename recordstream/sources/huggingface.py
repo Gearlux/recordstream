@@ -275,7 +275,21 @@ class HuggingFaceSource:
                 # reports None rather than failing — so an empty answer here is "not known
                 # yet", not "no classes". Loading settles it (and is cached from then on).
                 features = getattr(self.dataset, "features", None)
-        names = getattr((features or {}).get(self.target_feature), "names", None)
+        feature = (features or {}).get(self.target_feature)
+        names = getattr(feature, "names", None)
+        if not names:
+            # A DETECTION target nests its vocabulary one level down: `objects` is a
+            # Sequence/dict of sub-features and the ClassLabel sits inside (cppe-5:
+            # `objects.category`). One level is the HF convention for that layout; the
+            # first sub-feature carrying `names` answers.
+            inner = getattr(feature, "feature", feature)  # Sequence(...) wraps its element type
+            sub_features = inner if isinstance(inner, dict) else getattr(inner, "feature", None)
+            if isinstance(sub_features, dict):
+                for sub in sub_features.values():
+                    element = getattr(sub, "feature", sub)  # each sub may itself be a Sequence
+                    names = getattr(element, "names", None)
+                    if names:
+                        break
         return [str(entry) for entry in names] if names else []
 
     @property
