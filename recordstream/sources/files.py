@@ -24,11 +24,11 @@ class FilesSource:
     consuming workspace passes the list (e.g. files a user dropped) and the chain takes it
     from there.
 
-    One listing rule IS format-aware, by name only: a PAIRED format's companion half
-    (the file whose content rides in with a sibling — decided by the registry's
-    ``consumes()``, a name + sibling-stat test that reads nothing) is kept out of the
-    listing, so ``len()``/ids count one record per pair. With no format packages
-    installed the listing is the plain file list.
+    One listing rule IS format-aware: a PAIRED format's companion half (the file whose
+    content rides in with a sibling — decided by the registry's ``consumes()``, a cheap
+    name-level test that never decodes the data) is kept out of the listing, so
+    ``len()``/ids count one record per pair. With no format packages installed the
+    listing is the plain file list.
 
     Args:
         files: The file paths to serve, in the order to serve them.

@@ -41,12 +41,13 @@ _COPY_PREFIX = re.compile(r"^\d+_")
 class FileFormat(Protocol):
     """The structural contract a file format implements.
 
-    ``matches``/``consumes`` are NAME-level (a suffix test plus at most a sibling
-    ``stat``) because the listing calls them per dropped file; only ``read`` may open a
-    file — or import a heavy backend, which is why a format keeps its backend imports
-    inside ``read`` (the registry scan constructs every format object, so a
-    module-level backend import would break every consumer's discovery bootstrap where
-    that backend is absent).
+    ``matches``/``consumes`` are NAME-level and cheap (a suffix test, a sibling
+    ``stat``, at most a small sidecar-metadata peek for a format whose sidecars name
+    their data file) because the listing calls them per dropped file; only ``read`` may
+    decode the data — or import a heavy backend, which is why a format keeps its
+    backend imports inside ``read`` (the registry scan constructs every format object,
+    so a module-level backend import would break every consumer's discovery bootstrap
+    where that backend is absent).
     """
 
     name: str
@@ -56,7 +57,8 @@ class FileFormat(Protocol):
         ...
 
     def consumes(self, path: Path) -> bool:
-        """Whether ``path`` is a companion half consumed via its sibling (name + stat)."""
+        """Whether ``path`` is a companion half consumed via its sibling (name + stat,
+        at most a sidecar peek — never a data decode)."""
         ...
 
     def read(self, path: Path, *, mmap: bool = True) -> Record:
