@@ -25,17 +25,29 @@ class FilesSource:
     Args:
         files: The file paths to serve, in the order to serve them.
         name: Id prefix a consuming viewer derives record ids from.
+        exclude: Optional filename glob whose matches are NOT served as records — for a
+            PAIRED format whose companion file is consumed via its sibling (name-level,
+            no file reads).
     """
 
-    def __init__(self, files: Optional[List[str]] = None, name: str = "files") -> None:
+    def __init__(self, files: Optional[List[str]] = None, name: str = "files", exclude: str = "") -> None:
         self.files = [str(f) for f in (files or [])]
         self.name = name
+        self.exclude = exclude
+
+    @property
+    def _served(self) -> List[str]:
+        if not self.exclude:
+            return self.files
+        from fnmatch import fnmatch
+
+        return [f for f in self.files if not fnmatch(Path(f).name, self.exclude)]
 
     def __len__(self) -> int:
-        return len(self.files)
+        return len(self._served)
 
     def __getitem__(self, index: int) -> Record:
-        return {"file": str(Path(self.files[index]))}
+        return {"file": str(Path(self._served[index]))}
 
     def __iter__(self) -> Iterator[Record]:
         for index in range(len(self)):

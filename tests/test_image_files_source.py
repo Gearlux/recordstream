@@ -91,3 +91,21 @@ class TestReadImage:
 
     def test_zero_arg_construction_works(self) -> None:
         assert ReadImage().field == "file"
+
+
+class TestTheExcludePattern:
+    def test_excluded_names_are_not_records(self) -> None:
+        """A PAIRED format's companion file (SigMF's .sigmf-data) is not a record of its own —
+        the pair's reader consumes it via its sibling. Filtering NAMES is free (no file reads),
+        so the count and the ids stay honest without walking anything."""
+        from recordstream.sources.files import FilesSource
+
+        source = FilesSource(files=["a.sigmf-meta", "a.sigmf-data", "b.png"], exclude="*.sigmf-data")
+        assert len(source) == 2
+        assert [r["file"] for r in source] == ["a.sigmf-meta", "b.png"]
+        assert source[1] == {"file": "b.png"}
+
+    def test_no_pattern_serves_everything(self) -> None:
+        from recordstream.sources.files import FilesSource
+
+        assert len(FilesSource(files=["a", "b"])) == 2
