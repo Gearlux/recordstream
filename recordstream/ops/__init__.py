@@ -14,6 +14,7 @@ Submodules:
     - recordstream.ops.random_apply: RandomApply (gate any op behind a Bernoulli flip)
     - recordstream.ops.configure: ConfigureOp (per-record parameter injection)
     - recordstream.ops.formula: FormulaOp (math formula over one record entry)
+    - recordstream.ops.formats: ReadFile (decode a {file} record through the file-format registry)
     - recordstream.ops.sink: RecordSinkOp (adapt a DataSink as a pass-through op)
     - recordstream.ops.debug: PrintRecordOp (per-record summary probe)
     - recordstream.ops.contract: RecordContract (pass-through interface contract at a pipeline boundary),
@@ -30,6 +31,7 @@ from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.contract import ClassNamesOutput, ClassNamesScan, ContractError, RecordContract
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
+from recordstream.ops.formats import ReadFile
 from recordstream.ops.formula import FormulaOp
 from recordstream.ops.image import ConvertToImage, ConvertToMask
 from recordstream.ops.numpy import ConnectedComponents, Threshold
@@ -56,6 +58,7 @@ __all__ = [
     "Parallel",
     "PrintRecordOp",
     "RandomApply",
+    "ReadFile",
     "ClassNamesOutput",
     "ClassNamesScan",
     "RecordContract",

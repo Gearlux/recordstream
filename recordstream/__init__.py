@@ -42,6 +42,7 @@ from recordstream.core import (
 # --- the record data model + transforms + item codec ----------------------------------------
 from recordstream.dispatch import dispatch, register_kernel, registered_kernels
 from recordstream.flow import FlowGraph
+from recordstream.formats import FORMAT_GROUP, FileFormat, file_formats, sibling
 from recordstream.io import (
     EncodedField,
     EncodedItem,
@@ -186,6 +187,11 @@ __all__ = [
     "RangeSource",
     "ConcatSource",
     "SplitName",
+    # ---- file formats ----
+    "FORMAT_GROUP",
+    "FileFormat",
+    "file_formats",
+    "sibling",
     # ---- dataset identity ----
     "SupportsDatasetIdentity",
     "dataset_uri",
