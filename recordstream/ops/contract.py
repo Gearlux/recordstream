@@ -14,7 +14,7 @@ boundary in errors ("classification input" vs "classification output"); there is
 deliberately no ``role`` knob — position already IS the role.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from confluid import configurable, output
 
@@ -28,6 +28,15 @@ ANY_TYPE = "*"
 class ContractError(ValueError):
     """A record violated a :class:`RecordContract` — the message names the boundary,
     the record ordinal, the offending entry, and what the record does carry."""
+
+
+class ChainContractError(ValueError):
+    """An op chain cannot hold together — checked by :func:`check_chain` BEFORE it runs.
+
+    The failure this exists to prevent is a SILENT one: an op that reads a record entry an
+    earlier op was supposed to write just returns the record unchanged, so a mis-wired chain
+    produces an empty result rather than an error, and the reader has nothing to go on.
+    """
 
 
 def _describe(record: Record) -> str:
@@ -193,3 +202,112 @@ class ClassNamesScan:
     def __call__(self) -> None:
         """No-arg call: a value producer, not a record op."""
         return None
+
+
+# =======================================================================================
+# The PER-OP interface declaration, and the whole-chain check over it
+# =======================================================================================
+
+
+def _declared(op: Any, name: str, empty: Any) -> Any:
+    """One declaration read off an op, tolerating an op that declares nothing."""
+    return getattr(op, name, empty) or empty
+
+
+def _node_name(op: Any) -> str:
+    return type(op).__name__
+
+
+def flag_producers(ops: Sequence[Any]) -> Dict[str, int]:
+    """``{flag: index of the op that raises it}`` over a chain.
+
+    The map is what makes a gate's reason ANSWERABLE — the report says which node decided a
+    branch, and a visual editor rendering ``requires`` as a fork knows which node's output
+    socket the wire leaves from. :func:`check_chain` refuses a chain where two ops declare one
+    flag, so this map is total over every flag any op declares.
+    """
+    producers: Dict[str, int] = {}
+    for index, op in enumerate(ops):
+        for flag in _declared(op, "flags", ()):
+            producers.setdefault(str(flag), index)
+    return producers
+
+
+def check_chain(ops: Sequence[Any], *, provided: Iterable[str] = (), where: str = "") -> None:
+    """Check that a chain holds together, BEFORE it is run over a record.
+
+    An op may declare its interface as class attributes — ``consumes`` / ``produces``
+    (``{record key: registered item type}``, the same vocabulary :class:`RecordContract` uses,
+    with :data:`ANY_TYPE` for "present, any type"), ``reports`` (its key in an analysis report;
+    ``""`` marks a transform rather than an analysis) and ``flags`` (the boolean findings it
+    raises) — plus the instance parameter ``requires``, naming the one flag that gates it.
+
+    Four things are refused, each of which would otherwise surface as an empty result:
+
+    * a ``consumes`` key no earlier op ``produces`` and ``provided`` does not carry;
+    * a ``requires`` naming a flag no op declares, or one declared only LATER in the chain;
+    * two ops declaring the same flag — ambiguous, so which node decided a branch would have
+      no answer;
+    * two ops reporting under the same name — the later finding would overwrite the earlier.
+
+    Declaring is OPT-IN: an op with none of these attributes is checked for nothing, so a chain
+    written before the mechanism existed passes unchanged. That also means a declaring op must
+    not depend on an UNdeclared op's output — the fix is to declare on the producer, which the
+    refusal says.
+
+    Args:
+        ops: The chain, in execution order.
+        provided: Record keys already present when the chain starts (a graph's input contract).
+        where: Location prefix for the message — a file, a graph name — so a refusal is located.
+    """
+    prefix = f"{where}: " if where else ""
+    available = {str(key) for key in provided}
+    reporters: Dict[str, str] = {}
+    raised: Dict[str, str] = {}
+    # Who writes what, over the WHOLE chain — so an unmet need can say whether the key is
+    # simply absent or merely produced too late, which are different mistakes.
+    written: Dict[str, str] = {}
+    for op in ops:
+        for key in _declared(op, "produces", {}):
+            written.setdefault(str(key), _node_name(op))
+
+    for op in ops:
+        name = _node_name(op)
+        for key in _declared(op, "consumes", {}):
+            if str(key) not in available:
+                later = written.get(str(key))
+                where_from = (
+                    f"{later} produces it, but LATER in the chain — move it before {name}"
+                    if later
+                    else f"the chain has {', '.join(sorted(available)) or 'nothing'} at that point "
+                    "(an op that DOES write it must declare it in `produces`)"
+                )
+                raise ChainContractError(
+                    f"{prefix}{name} needs the record entry {str(key)!r}, which nothing before it "
+                    f"produces — {where_from}"
+                )
+        requires = str(getattr(op, "requires", "") or "")
+        if requires and requires not in raised:
+            known = ", ".join(sorted(raised)) or "none"
+            raise ChainContractError(
+                f"{prefix}{name} is gated on the flag {requires!r}, which no node before it "
+                f"raises — the flags available at that point are: {known}"
+            )
+        for flag in _declared(op, "flags", ()):
+            flag = str(flag)
+            if flag in raised:
+                raise ChainContractError(
+                    f"{prefix}the flag {flag!r} is declared by both {raised[flag]} and {name} — "
+                    "a gate naming it could not say which node decided it, so declare it once"
+                )
+            raised[flag] = name
+        reports = str(_declared(op, "reports", ""))
+        if reports:
+            if reports in reporters:
+                raise ChainContractError(
+                    f"{prefix}both {reporters[reports]} and {name} report under {reports!r} — the "
+                    "second finding would overwrite the first, so give each node its own name"
+                )
+            reporters[reports] = name
+        for key in _declared(op, "produces", {}):
+            available.add(str(key))

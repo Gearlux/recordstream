@@ -144,6 +144,44 @@ A consuming workspace or visual editor seeds the contract into a graph so the re
 record shape is declared before the first node is wired; the exported document then
 enforces the same contract when it runs offline.
 
+### Checking that a chain holds together (`check_chain`)
+
+`RecordContract` answers *"what must reach this point?"*. A chain of many small ops raises a
+different question — *"does this chain hold together at all?"* — and getting it wrong is **silent**:
+an op that reads an entry an earlier op was supposed to write does not raise, it returns the record
+unchanged, so the pipeline runs to completion and answers nothing.
+
+So an op MAY declare its interface as class attributes, and `check_chain` reads them off the op list
+once, before the first record:
+
+```python
+class MeasureSymbolClock:
+    consumes = {"signal": "Signal", "inst_freq": "InstFreq"}   # same {key: item type} vocabulary
+    produces = {"symbol_clock": "SymbolClock"}                 # as RecordContract.fields
+    reports  = "clock"        # its key in an analysis report; "" marks a transform
+    flags    = ()             # the boolean findings it raises
+
+class DecodeBleAdvertising:
+    def __init__(self, requires: str = "") -> None:
+        self.requires = requires        # the ONE flag that gates this op
+```
+
+```python
+from recordstream.ops.contract import check_chain
+
+check_chain(ops, provided={"signal"}, where="view_bte.yaml")
+# ChainContractError: view_bte.yaml: MeasureSymbolClock needs the record entry 'inst_freq',
+# which nothing before it produces — MeasureInstantaneousFrequency produces it, but LATER in
+# the chain — move it before MeasureSymbolClock
+```
+
+Four things are refused: an unmet `consumes`, a `requires` naming a flag nothing raises (or one
+raised only later), two ops declaring one flag, and two ops reporting under one name.
+
+Declaring is **opt-in** — an op with none of these attributes is checked for nothing, so existing
+chains are unaffected. `flag_producers(ops)` gives `{flag: index of the op that raises it}`, total by
+construction, so *"which op decided this branch?"* always has an answer.
+
 ### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
 
 `RecordContract` states what each RECORD carries. A classification pipeline usually has

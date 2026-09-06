@@ -1433,3 +1433,65 @@ stream = Stream(
   a graph state one and mean the other.
 - **Usage** is the README ("Stating a pipeline's interface"); pins live in
   `tests/test_contract.py` (incl. the input+output dual-position group).
+
+## 16. An op declares its interface, and a chain is checked before it runs (`check_chain`, 2026-09-05)
+
+**Context.** Record 15 put a pipeline's interface on the canvas as a pass-through op: you PLACE a
+`RecordContract` at a boundary and it asserts. That answers *"what must reach here?"* and it is the
+right shape for a boundary — but it does not answer *"does this chain hold together?"*, and that is
+the question a chain of a dozen small ops actually raises.
+
+The failure is silent, which is what makes it worth machinery. An op that reads a record entry an
+earlier op was supposed to write does not raise: the key is simply absent, so the op returns the
+record unchanged and the pipeline produces an empty result. In a consuming workspace that surfaces
+as a blank pane with no error anywhere — the reader has nothing to go on, and the boundary contract
+is no help, because the record crossing the boundary is fine.
+
+**Decision.** An op MAY declare its interface as class attributes, and `check_chain(ops)` reads them
+off the op list once, before the first record:
+
+* `consumes` / `produces` — `{record key: registered item type}`, the SAME vocabulary
+  `RecordContract.fields` uses, `"*"` for "present, any type";
+* `reports` — the op's key in an analysis report (`""` marks a transform rather than an analysis);
+* `flags` — the boolean findings it raises, with the instance parameter `requires` naming the one
+  flag that gates an op.
+
+Four things are refused, each of which would otherwise surface as an empty result: a `consumes` key
+nothing earlier produces; a `requires` naming a flag no op declares, or one declared only later; two
+ops declaring one flag; two ops reporting under one name.
+
+Declaring is **opt-in**. An op with none of these attributes is checked for nothing, so every chain
+written before the mechanism keeps working untouched — which also means a declaring op must not
+depend on an undeclared op's output. That is a real limit, and the refusal says so: the fix is to
+declare on the producer.
+
+**Consequences.** A mis-wired chain fails at load with a located message naming the node and the key,
+instead of running to completion and answering nothing. `flag_producers(ops)` is total over every
+declared flag — exactly one producer per flag is what `check_chain` enforces — so "which node decided
+this branch?" always has an answer, for a report and for a visual editor that wants to draw the gate
+as a wire rather than a widget.
+
+The cost is a second vocabulary beside `RecordContract`'s, describing the same kind of fact at a
+different scale. They are deliberately kept in one spelling (`{key: item type}`) so a chain's boundary
+contract stays computable from its ops — unsatisfied `consumes` IS the input contract, terminal
+`produces` IS the output contract.
+
+**Example.**
+
+```python
+class MeasureSymbolClock:
+    consumes = {"signal": "Signal", "inst_freq": "InstFreq"}
+    produces = {"symbol_clock": "SymbolClock"}
+    reports  = "clock"
+    flags    = ()
+
+check_chain(ops, provided={"signal"}, where="view_bte.yaml")
+# ChainContractError: view_bte.yaml: MeasureSymbolClock needs the record entry 'inst_freq',
+# which nothing before it produces — MeasureInstantaneousFrequency produces it, but LATER in
+# the chain — move it before MeasureSymbolClock
+```
+
+**What you may change.** Which failures are refused, and what a message says. What must hold: the
+check is opt-in (an undeclaring op is checked for nothing), the vocabulary stays `RecordContract`'s,
+a flag has exactly one producer, and the refusal is LOCATED — a reader must never have to guess
+which node broke.
