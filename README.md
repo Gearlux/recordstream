@@ -152,7 +152,7 @@ an op that reads an entry an earlier op was supposed to write does not raise, it
 unchanged, so the pipeline runs to completion and answers nothing.
 
 So an op MAY declare its interface as class attributes, and `check_chain` reads them off the op list
-once, before the first record:
+once, before the first record: A visual editor may draw a gate as a wire from the producer's outcome and write `requires` back into the document on export — the document form stays the one shown here.
 
 ```python
 class MeasureSymbolClock:
