@@ -1,5 +1,6 @@
-"""``FilesSource`` — a plain list of file paths, each one record."""
+"""``FilesSource`` — file paths as records: a list you pass, or a folder it lists."""
 
+import os
 from pathlib import Path
 from typing import Iterator, List, Optional, Sequence
 
@@ -35,6 +36,17 @@ class FilesSource:
         name: Id prefix a consuming viewer derives record ids from.
         exclude: Optional filename glob whose matches are NOT served as records — a
             manual filter on top of the registry rule (name-level, no file reads).
+        root: Folder to list instead of passing ``files``. ``~`` and ``$VAR`` are expanded,
+            so a config can say ``$DATA_ROOT/captures``. Empty (default) = list ``files``.
+            Passing both is refused — two answers to "which files" is a config bug, not a
+            merge — and the refusal is repeated at READ time, because a consuming workspace
+            may assign ``files`` on an already-built source (filling it from a drag-and-drop)
+            where a constructor check cannot see it. The scan is lazy: it happens on first
+            use, never in the constructor.
+        pattern: Glob applied under ``root`` (default ``"*"``, that folder's own files).
+            Ignored when ``root`` is empty. Directories the glob matches are skipped —
+            only files become records — and so are dotfiles, because a folder glob picks
+            up ``.DS_Store`` and friends, which are not data and fail to decode.
         formats: Formats whose ``consumes()`` decides the companion exclusion. ``None``
             (default) = every installed format from the registry, resolved lazily; an
             empty list restores the plain listing.
@@ -45,12 +57,54 @@ class FilesSource:
         files: Optional[List[str]] = None,
         name: str = "files",
         exclude: str = "",
+        root: str = "",
+        pattern: str = "*",
         formats: Optional[Sequence[FileFormat]] = None,
     ) -> None:
+        # Lazy / zero-arg: store config only. A root is not scanned here — the constructor
+        # does no I/O, so a folder that does not exist yet is reported on first use.
+        if files and root:
+            raise ValueError(
+                "FilesSource: pass either `files` (an explicit list) or `root` (a folder to "
+                f"list), not both — got {len(files)} file(s) and root={root!r}."
+            )
         self.files = [str(f) for f in (files or [])]
         self.name = name
         self.exclude = exclude
+        self.root = str(root)
+        self.pattern = str(pattern)
         self.formats = formats
+
+    @property
+    def _listed(self) -> List[str]:
+        """The paths before any exclusion — ``files`` as given, or ``root`` scanned now."""
+        if not self.root:
+            return self.files
+        if self.files:
+            # Checked HERE as well as in the constructor: a consuming workspace may fill
+            # `files` on a live source (annotaide sets it from a drag-and-drop), which the
+            # constructor never sees — and silently preferring one over the other would make
+            # the drop look like it did nothing.
+            raise ValueError(
+                f"FilesSource: root={self.root!r} is set AND {len(self.files)} file(s) were "
+                "assigned — this source lists a folder, so it cannot also be given a file "
+                "list. Clear `root` to accept an explicit list, or clear `files` to list the "
+                "folder."
+            )
+        root = Path(os.path.expanduser(os.path.expandvars(self.root)))
+        if not root.is_dir():
+            raise ValueError(f"FilesSource: root {str(root)!r} is not a directory")
+        found = sorted(str(p) for p in root.glob(self.pattern) if p.is_file() and not p.name.startswith("."))
+        if not found:
+            # A silent empty listing is the failure that looks like a broken pipeline three
+            # ops later, so say which folder and which pattern produced nothing.
+            raise ValueError(
+                f"FilesSource: pattern {self.pattern!r} matched no files under {str(root)!r} "
+                "(a pattern is relative to root: '*' is the folder's own files, '*/*' its "
+                "subdirectories, '**/*' everything below it)"
+            )
+        logger.debug(f"FilesSource: {self.pattern!r} under {str(root)!r} listed {len(found)} file(s)")
+        return found
 
     @property
     def _format_list(self) -> Sequence[FileFormat]:
@@ -58,7 +112,7 @@ class FilesSource:
 
     @property
     def _served(self) -> List[str]:
-        served = self.files
+        served = self._listed
         if self.exclude:
             from fnmatch import fnmatch
 

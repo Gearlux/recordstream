@@ -55,6 +55,44 @@ arrive unannotated, and whatever labels them adds that entry downstream. A file 
 library cannot open passes through UNCHANGED with a debug log — the record keeps its row and
 one stray text file never costs the run around it. Other file kinds get their own read ops.
 
+### Pointing it at a folder (`root` + `pattern`)
+
+Instead of listing every path, point `FilesSource` at a folder. `pattern` is an ordinary
+[`Path.glob`](https://docs.python.org/3/library/pathlib.html#pathlib.Path.glob) pattern
+relative to `root`, and that one concept expresses every scope a review needs:
+
+```yaml
+source: !class:recordstream.sources.files.FilesSource
+  root: $DATA_ROOT/captures      # ~ and $VAR are expanded
+  pattern: "*/*"                 # every file one level down
+```
+
+| `pattern` | what it lists |
+|---|---|
+| `"*"` (default) | the folder's own files |
+| `"*/*"` | every immediate subdirectory |
+| `"**/*"` | everything below `root` |
+| `"*/*.json"` | one file kind, across all subdirectories |
+| `"bte_test_1/*"` | **one named subdirectory** — this is the "one directory at a time" scope |
+
+Naming a subdirectory in the pattern *is* the per-directory filter, so there is no second
+knob that means the same thing. Pass `files` **or** `root`, never both — two answers to
+"which files" is a config bug, not a merge, and it is refused at construction.
+
+Two listing rules keep the result usable. **Directories the glob matches are skipped** — only
+files become records. **Dotfiles are never listed**, because a folder glob otherwise picks up
+`.DS_Store` and friends, which are not data and fail to decode. And a pattern matching
+**nothing raises**, naming the folder and the pattern, rather than handing the chain an empty
+listing that surfaces as a confusing failure three ops later:
+
+```
+FilesSource: pattern '*' matched no files under '/data/captures' (a pattern is relative to
+root: '*' is the folder's own files, '*/*' its subdirectories, '**/*' everything below it)
+```
+
+The scan is **lazy** — it happens on first use, never in the constructor — so a folder that
+does not exist yet is reported when the source is read, not when the config is built.
+
 ## Train / val / test splitting (`DatasetSplit`)
 
 `DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields records and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.
