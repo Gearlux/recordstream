@@ -1495,3 +1495,160 @@ check_chain(ops, provided={"signal"}, where="view_bte.yaml")
 check is opt-in (an undeclaring op is checked for nothing), the vocabulary stays `RecordContract`'s,
 a flag has exactly one producer, and the refusal is LOCATED — a reader must never have to guess
 which node broke.
+
+## 17. A file format may answer from its METADATA alone (`scan` + `scan_file`, 2026-09-10)
+
+**Context.** The format registry asked a file exactly one question that costs anything:
+`read` — decode it into a record. For the formats that pair a small metadata file with a large
+data file, that is the expensive question, and it is not the one every consumer has. "Where was
+each of these recordings made?", "how long is each one?", "which of them carry annotations?" are
+answered entirely by the sidecar, and a consumer surveying a whole listing cannot afford a decode
+per file to get there.
+
+Measured on a real capture library: **499 ms** to open one capture against **0.03 ms** to read the
+sidecar beside it. Over 1430 recordings that is twelve minutes versus half a second — the
+difference between a survey that exists and one that does not.
+
+The consumer cannot close that gap itself. It would have to know which files have sidecars, what
+those sidecars are called, and how to read them — which is the format's knowledge, and the whole
+reason the registry exists.
+
+**Decision.** `FileFormat` gains an OPTIONAL capability, `scan(path) -> Record`: what this file's
+metadata says, its sidecar or its header, never its payload. It returns an ordinary record with
+the payload left out, so every op and graph downstream reads a scan exactly like a decode — which
+is what lets a consumer run the SAME analysis chain over a survey as over a recording.
+`scan_file(path, formats=None)` dispatches it: the first format claiming the path, in registry
+order, with the same companion rule `ReadFile` follows.
+
+Optional, and probed structurally — like the write capability the annotation sink dispatches. A
+format that cannot answer cheaply (a raw IQ file whose samples ARE the file) simply does not
+implement it.
+
+**Consequences.** `scan_file` answers `None` — never a `read` — for a companion half, an unclaimed
+file, and a claiming format with no `scan`. The absent fallback is the point: the caller asked the
+cheap question because the expensive one was unaffordable at this scale, so quietly answering the
+expensive one turns a survey of ten thousand files into a decode of ten thousand files. A `scan`
+that RAISES is left to the caller, because whether one malformed sidecar skips or fails a survey
+is the survey's decision, not the registry's. And a scanned record is honestly incomplete: its
+payload is empty, so a consumer that needs samples must ask for them by name.
+
+**Example.**
+
+```python
+from recordstream.formats import scan_file
+
+for path in listing:                       # thousands of files
+    record = scan_file(path)               # sidecar only — no payload decode
+    if record is None:                     # a companion half, or a format that cannot answer
+        continue
+    where = record["signal"].extras.get("gps_latitude")
+```
+
+**What you may change.** Which formats implement it, and what a scanned record carries. What must
+hold: `scan` never decodes a payload, the dispatcher never falls back to `read`, the companion rule
+matches `ReadFile`'s, and the returned record stays an ordinary record so one chain serves both.
+
+## 18. A view source forwards a key-restricted walk (`project_indices`, 2026-09-10)
+
+**Context.** `projection.project(source, keys)` takes a source's own cheap walk only when the
+object handed to it implements the protocol. Every view source here — `RangeSource`,
+`ConcatSource`, `DatasetSplit`'s `_SplitView`, and `JointStream` — wraps a source without looking
+inside a record, and none of them implemented it. So wrapping a projecting source in the thinnest
+possible slice silently discarded its efficient path and fell back to reading every record whole.
+Measured on a source whose records carry ~15 MB of samples, for the same records and the same
+keys: 0.006 s per record straight from the source, 0.423 s through a `RangeSource` around it.
+
+Forwarding is not simply `project(self.source, keys)`, because a view owns WHICH records and in
+what ORDER, while the protocol is iterator-only — there is no "project index i". Two of the four
+wrappers are a plain chain; the other two select by index, and one of those (a split) reorders.
+
+**Decision.** `projection.project_indices(source, keys, indices)` is the shared primitive the
+index wrappers call: it walks the source's own projection once, keeps the wanted positions, and
+yields them in the order asked for. `ConcatSource` and `JointStream` chain `project` per part
+instead — there is no index question there.
+
+Laziness follows the ORDER, because that is the only thing that decides whether it can. Increasing
+indices — a contiguous slice, an unshuffled split — stream straight through holding nothing. An
+index arriving out of order is held until its turn, so a reordered view holds at most the records
+between its own extremes, and what is held is a PROJECTED record: the entries asked for, never the
+payload the projection exists to skip. That asymmetry is what keeps a shuffled view affordable
+where materializing the source is not. The walk stops as soon as the last wanted index is
+delivered, so a window at the front of a large source costs the front of it.
+
+**Consequences.** A wrapper costs what the source under it costs — remeasured on the same corpus,
+0.423 s → 0.004 s per record. A source without the protocol keeps the ordinary fallback, per part,
+so nothing requires the protocol. What a `RangeSource` cannot avoid is walking the records before
+`start`: it pays the projected cost for them rather than a full read, which is the honest limit of
+an iterator-shaped protocol and is documented rather than hidden.
+
+**Example.**
+
+```python
+from recordstream.projection import project
+from recordstream.sources.range import RangeSource
+
+# the SOURCE's own project() runs; the window is sliced out of it
+list(project(RangeSource(source=indexable, start=1, stop=4), ("class",)))
+# [{'class': 1}, {'class': 2}, {'class': 3}]
+```
+
+**What you may change.** Which wrappers forward, how much a reordered view is willing to hold.
+What must hold: a view yields its own records in its own order, it never makes a key-restricted
+walk more expensive than the source's, a source without the protocol still works, and the walk
+stops at the last index it needs.
+
+## 19. A chain that reads files can answer from metadata, verified per record (`for_projection`, 2026-09-10)
+
+**Context.** `Stream.project` forwards to its source only when `ops` is empty — correctly, since
+an op may consume the entry another produces. But the shape a file-reading workspace actually
+uses is `FilesSource → ReadFile → RenameField`, and there the chain *is* the cost: measured over
+a 1430-recording capture library, a filter term costing 143.5 ms per record decoded, where the
+sidecar beside each file answers the same question in 0.37 ms. The cheap machinery already
+existed (`scan` / `scan_file`, §17); the projection could not reach it.
+
+Two things stood in the way, and both were found by measuring rather than reasoning.
+
+An op cannot know which keys are wanted — that is the caller's question — so it cannot decide
+whether a cheap answer suffices. And a scan is not simply "the record minus the payload": both
+shipped formats *keep* the payload's entry with an empty array, because the rate, the centre and
+the position live on that item and a survey needs them. Measured, `scan` reports 0 samples where
+`read` reports 1,000,001 and 100,000,000 — so a filter about the samples would have been answered
+from an empty capture, confidently and wrongly.
+
+**Decision.** An op may offer a cheaper variant of ITSELF (`for_projection()`); the stream runs
+that chain and verifies the result per record, re-running the real chain when it falls short.
+The verification is `formats.answers`, which counts a placeholder as an absence — and a format
+states which entries it stands in for (`scan_stands_in`), which `scan_answered` marks.
+
+Three details are load-bearing, each of them a measured failure first:
+
+- The placeholder is **marked, not removed**. Removing it broke the next op outright
+  (`RenameField: unknown key 'signal'`), because a chain is written against the record a full
+  read produces.
+- The marker rides the **value**, not the key. The same chain renames that entry two steps
+  later, so a caller checking a name would be checking the wrong one.
+- A cheap chain that **raises** is the same verdict as one that falls short. An op reaching for
+  something the cheap step could not supply is expected, not exceptional; its answer is the real
+  chain's.
+
+**Consequences.** Measured end to end on that library, one filter term: 3.4 min → 0.5 s, with 41
+records falling back because they carry no annotations at all — the cheap answer is right about
+them, and "did you get what you asked for?" cannot tell *absent* from *not read*. That is the
+price of a rule with no promises in it, and it is per record rather than per walk. The cheap path
+is refused where the stream would not run sequentially (workers, a chunk size, a stream-level
+op): each would have to be re-derived to stay faithful, and the measured case needs none of them.
+
+**Example.**
+
+```python
+stream = Stream(source=FilesSource(root=captures, pattern="*/*.json"),
+                ops=[ReadFile(), RenameField(src="signal", dst="input")])
+
+list(project(stream, ("regions",)))   # sidecars only — no capture decoded
+list(project(stream, ("input",)))     # every capture read; the marker said the scan could not
+```
+
+**What you may change.** Which ops offer a cheap variant, what a format stands in for, when the
+cheap path is refused. What must hold: a placeholder is marked on the value and counts as an
+absence, a record the cheap chain drops is not re-run (dropping is a decision about the file, not
+the keys), and a cheap chain that cannot finish yields to the real one instead of to an error.
