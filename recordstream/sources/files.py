@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence
+from typing import Any, Iterator, List, Optional, Sequence, Tuple
 
 from confluid import configurable
 from loggair import get_logger
@@ -69,6 +69,9 @@ class FilesSource:
                 f"list), not both — got {len(files)} file(s) and root={root!r}."
             )
         self.files = [str(f) for f in (files or [])]
+        # The resolved listing, keyed on what decides it (see `_served`). Runtime state,
+        # not configuration — it is never dumped and never a constructor parameter.
+        self._served_cache: Optional[Tuple[Any, List[str]]] = None
         self.name = name
         self.exclude = exclude
         self.root = str(root)
@@ -112,14 +115,43 @@ class FilesSource:
 
     @property
     def _served(self) -> List[str]:
-        served = self._listed
+        """The files this source actually serves — the listing less the excludes and less
+        every companion half a format consumes.
+
+        MEMOISED against the inputs that decide it, because deciding is not free: each
+        candidate is put to every format's ``consumes``, and a paired format answers by
+        STATTING for its sibling. Re-deciding per access made ``source[i]`` O(n) with
+        filesystem I/O and ``__iter__`` O(n²) — measured on a real 1430-file library,
+        **13.4 ms per index**, so a walk touching each file once spent 19 s inside a listing
+        it had already computed.
+
+        The key is the LISTING IT FILTERED — ``_listed``'s own result, with the exclude and
+        the formats — never a flag and never an explicit invalidate. That choice is what makes
+        the memo safe for both kinds of source, and neither is hypothetical: a consumer FILLS
+        ``files`` in place (a drop appends to the very list this source is serving), and a
+        ``root`` source is documented to scan the folder NOW, so a file appearing in it must
+        still appear here. Keying on the file list alone would have frozen the second kind —
+        a root source's ``files`` is empty and its key would never change, so the folder would
+        have been scanned once and never again.
+
+        The glob for a root source therefore still runs per access, exactly as before; what
+        the memo removes is the part that dominated — a ``consumes`` call per file per format,
+        each of them a stat.
+        """
+        listed = self._listed
+        formats = self._format_list
+        key = (tuple(listed), self.exclude, id(formats) if formats else 0, len(formats))
+        cached = self._served_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        served = listed
         if self.exclude:
             from fnmatch import fnmatch
 
             served = [f for f in served if not fnmatch(Path(f).name, self.exclude)]
-        formats = self._format_list
         if formats:
             served = [f for f in served if not any(fmt.consumes(Path(f)) for fmt in formats)]
+        self._served_cache = (key, served)
         return served
 
     def __len__(self) -> int:

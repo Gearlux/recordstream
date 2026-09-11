@@ -1,7 +1,7 @@
 """``DatasetSplit`` — reproducible train/val/test views over an indexable source."""
 
 import random
-from typing import Any, Dict, Iterator, List, Literal, Optional, get_args
+from typing import Any, Collection, Dict, Iterator, List, Literal, Optional, get_args
 
 from confluid import configurable
 
@@ -160,6 +160,10 @@ class DatasetSplit:
         """Cached test-split view (≈ ``test_fraction`` of the source)."""
         return self._view("test")
 
+    def project(self, keys: Collection[str]) -> Iterator[Record]:
+        """Yield the SELECTED view's records carrying only ``keys`` (see :meth:`_SplitView.project`)."""
+        yield from self._view(self.split or "train").project(keys)
+
     def __iter__(self) -> Iterator[Record]:
         return iter(self._view(self.split or "train"))
 
@@ -184,6 +188,26 @@ class _SplitView:
     def __init__(self, source: Any, indices: List[int]) -> None:
         self.source = source
         self.indices = indices
+
+    def project(self, keys: Collection[str]) -> Iterator[Record]:
+        """Yield this view's records carrying only ``keys`` — through the SOURCE's own walk.
+
+        Implements :class:`recordstream.projection.SupportsProjection`. A split reorders and
+        restricts; it never looks inside a record, so it has no reason to make a
+        key-restricted walk more expensive than the one it wraps — and without this it did,
+        because :func:`~recordstream.projection.project` takes a source's cheap path only
+        when the object handed to it has one. This is the walk behind
+        :func:`~recordstream.projection.num_classes` over a split view, which is exactly the
+        question that should not decode an image.
+
+        The shuffled order is the part that costs something: an out-of-order index is held
+        until its turn, so a shuffled view holds projected records — the entries asked for,
+        never the payloads — between its own extremes. An unshuffled view (the degenerate
+        no-fraction split) streams straight through. Partial: a generator.
+        """
+        from recordstream.projection import project_indices
+
+        yield from project_indices(self.source, keys, self.indices)
 
     def __iter__(self) -> Iterator[Record]:
         for idx in self.indices:

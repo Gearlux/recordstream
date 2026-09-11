@@ -93,6 +93,92 @@ root: '*' is the folder's own files, '*/*' its subdirectories, '**/*' everything
 The scan is **lazy** — it happens on first use, never in the constructor — so a folder that
 does not exist yet is reported when the source is read, not when the config is built.
 
+### Asking a file what it says, without opening it
+
+Some questions about a listing are not worth a decode. *Where was each of these recordings
+made? How long is each one? Which of them carry annotations?* — for a format that pairs a small
+metadata file with a large data file, all of that is in the sidecar, and opening the data file to
+reach it is the expensive way round. Measured on one real capture library: **499 ms** to open a
+capture against **0.03 ms** to read the sidecar beside it, so a survey of 1430 recordings is
+twelve minutes one way and half a second the other.
+
+A format may therefore answer from its metadata alone, and `scan_file` asks it to:
+
+```python
+from recordstream.formats import scan_file
+
+for path in listing:
+    record = scan_file(path)          # the sidecar or the header — never the payload
+    if record is None:                # a companion half, or a format that cannot answer cheaply
+        continue
+    print(record["signal"].samplerate)
+```
+
+What comes back is an ordinary record with the payload left out, so the ops and graphs you
+already have read a scan exactly like a decode — the same chain can survey a listing and analyse
+one recording.
+
+`None` means nobody could answer cheaply, and it is never a decode in disguise: a format that
+cannot read its metadata separately (a raw sample file, where the samples *are* the file) simply
+does not offer this, and you ask it for the real thing by name when you need the data.
+
+To offer it from your own format, add one method beside `read`:
+
+```python
+class MyFormat:
+    name = "mine"
+
+    #: Entries `scan` fills with a PLACEHOLDER rather than the real thing. Optional; omit it
+    #: when your cheap answer stands in for nothing.
+    scan_stands_in = ("signal",)
+
+    def scan(self, path: Path) -> Record:
+        """What <path>'s sidecar says — no payload decode."""
+```
+
+`scan_stands_in` exists because a scan often *keeps* the payload's entry rather than dropping
+it: the rate, the centre and the position live on that item, so a survey wants it there — with
+an empty array behind it. Measured on two shipped formats, `scan` reports **0 samples** where
+`read` reports **1,000,001** and **100,000,000**. That makes the entry present but not
+*answered*, which a survey may ignore and a filter may not:
+
+```python
+from recordstream.formats import answers, scan_answered
+
+record = scan_answered(path)          # the same record, placeholders MARKED
+answers(record, ("regions",))         # True  — the sidecar really says this
+answers(record, ("signal",))          # False — read the file if you need the samples
+```
+
+The marker rides the *value*, not the key, so a chain that renames the entry cannot lose it.
+
+### A chain that reads files can answer cheaply too
+
+A `Stream` with ops has to run its chain — an op may consume one entry to make another — so a
+key-restricted walk through one used to decode every record. `ReadFile` now offers a cheap
+variant of itself, and `Stream.project` runs that chain, checks whether the record carries what
+was asked for, and re-runs the real chain per record when it does not:
+
+```python
+stream = Stream(source=FilesSource(root=captures, pattern="*/*.json"),
+                ops=[ReadFile(), RenameField(src="signal", dst="input")])
+
+for record in project(stream, ("regions",)):   # the sidecars answer; no capture is decoded
+    ...
+```
+
+Measured on a 1430-recording library, one filter term: **3.4 min → 0.5 s**, with 41 records
+falling back because they carry no annotations at all. A chain whose ops offer nothing cheap
+behaves exactly as before, and so does one that would run with workers or a chunk size.
+
+To offer it from your own op, return a cheaper version of yourself:
+
+```python
+class MyOp:
+    def for_projection(self) -> "MyOp":
+        """A variant producing the same record minus what it cannot make cheaply."""
+```
+
 ## Train / val / test splitting (`DatasetSplit`)
 
 `DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields records and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.
@@ -171,6 +257,38 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 > `_target_:` source is built at load time and is what the slot wants. The examples above use
 > `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
 > loaded source.
+
+## A view forwards a key-restricted walk
+
+A walk that names only some record keys (`recordstream.projection.project`) takes a source's own
+cheap path — the one that skips building what nobody asked for — only when the object it is handed
+implements `project(keys)`. Every view source here does, so a slice, a split or a concatenation
+costs what the source underneath it costs and nothing more:
+
+```python
+from recordstream.projection import project
+from recordstream.sources.range import RangeSource
+
+# reads each record's labels; never decodes an image or a waveform
+for record in project(RangeSource(source=big, start=0, stop=1000), ("class",)):
+    ...
+```
+
+Measured on a source whose records carry ~15 MB of samples, for the same records and the same
+keys: **0.006 s** per record straight from the source, **0.423 s** through a wrapper that did not
+forward — a wrapper that only slices has no business making a walk more expensive than the one it
+wraps.
+
+Two things follow from a projected walk being an ITERATOR rather than an index:
+
+- **A `RangeSource` still walks the records before `start`**, at the projected cost rather than a
+  full read, and stops at `stop`.
+- **A shuffled `DatasetSplit` view holds records until their turn comes** — projected records, the
+  entries you asked for, never the payloads the projection exists to skip. An unshuffled view (a
+  split with no fraction set) streams straight through.
+
+`ConcatSource` and `JointStream` chain each part's own projection, so a part that projects cheaply
+does, and one that does not keeps the ordinary fallback for itself alone.
 
 ## Identifying a dataset
 
