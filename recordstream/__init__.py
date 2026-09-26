@@ -10,6 +10,8 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 """
 
 # --- shared infrastructure -----------------------------------------------------------------
+from importlib.metadata import PackageNotFoundError, version
+
 from recordstream.batch import (
     batch_boxes,
     batch_metadata,
@@ -108,6 +110,13 @@ from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, 
 from recordstream.transform import FunctionTransform, Pipeline, Transform, as_transform
 from recordstream.uri import SupportsDatasetIdentity, dataset_uri, dataset_uris, dataset_url
 from recordstream.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
+
+try:
+    # Single source of truth: the installed distribution's metadata, i.e. pyproject.toml's
+    # `version` (the distribution is `recordstream`). Never type the number in here as well.
+    __version__ = version("recordstream")
+except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
+    __version__ = "0.0.0.dev0"
 
 __all__ = [
     # ---- record data model ----

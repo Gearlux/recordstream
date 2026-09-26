@@ -78,6 +78,14 @@ jobs:
         assert float(out[0]["image"].max()) == 1.0
         assert out[0]["class"].value == "a"
         assert len(stream) == 1 and stream[0]["class"].value == "a"   # map-style protocol
+        # `__version__` is the RELEASED number: read from the wheel's own metadata, which the
+        # tag guard above matched to pyproject.toml. Missing or typed-in-and-stale fails here,
+        # before anything reaches PyPI.
+        import os
+        import recordstream
+
+        tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+        assert recordstream.__version__ == version("recordstream") == tag, (recordstream.__version__, version("recordstream"), tag)
         print("wheel smoke-test OK, version:", version("recordstream"))
         EOF
     - uses: actions/upload-artifact@v4

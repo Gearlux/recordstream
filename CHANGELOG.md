@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`recordstream.__version__`** reports the installed version, read from the package metadata
+  (`importlib.metadata.version("recordstream")`), so it always matches `pyproject.toml`; an uninstalled
+  source tree reports `0.0.0.dev0`.
 - `recordstream.ops.contract.RecordContract` — a pass-through interface op asserting what
   each record carries at the boundary where it sits (`fields`: record key → registered
   item type name, `"*"` = present with any type). One class serves input and output
