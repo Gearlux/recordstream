@@ -31,9 +31,9 @@ jobs:
     name: Build & verify distribution
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Set up Python 3.12
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: "3.12"
     - name: Install packaging toolchain
@@ -88,7 +88,7 @@ jobs:
         assert recordstream.__version__ == version("recordstream") == tag, (recordstream.__version__, version("recordstream"), tag)
         print("wheel smoke-test OK, version:", version("recordstream"))
         EOF
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: dist
         path: dist/
@@ -101,7 +101,7 @@ jobs:
     permissions:
       id-token: write  # required for PyPI Trusted Publishing (OIDC)
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: dist
         path: dist/
