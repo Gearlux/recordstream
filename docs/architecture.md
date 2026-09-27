@@ -150,6 +150,38 @@ ops:
 - **The `typedrecord-v1` tag and the no-back-compat rule are contracts** — changing the on-disk
   layout means a NEW tag and a re-generation story, never a silent dual-read path.
 
+### Amendment: an array item carries its attributes through pickle (2026-09-27)
+
+`__array_finalize__` carries an item's attributes through every numpy construction path, but
+pickling is not one of them. numpy's `ndarray.__reduce__` stores the array only. On load it
+rebuilds the object through a bare `ndarray.__new__` (never `NDArrayItem.__new__`), and
+`__array_finalize__` receives no source object. So every declared attribute fell back to its
+class default. Pickling is how a record crosses a spawn worker, and it broke silently in both
+directions. Measured: an `Image` with `layout="CHW"` arrived in the worker as `"HWC"`, an
+`Image` built in the worker came back as `"HWC"`, and a `db` spectrogram reached a
+`.parallel(2)` worker as `scaling="none"`, which a dB-only op then refused. Serial runs never
+pickle and were unaffected, which is why nothing showed it.
+
+`NDArrayItem` therefore defines `__reduce__` / `__setstate__`: numpy's own state, plus a dict of
+the `_item_attrs` values, restored after numpy's `__setstate__`. It sits on the base class, so an
+array item type registered by a domain package gets it without writing anything. Storage is a
+separate path and does not use it: backends go through the item codec (`recordstream/io.py`),
+which already wrote the attributes explicitly, and the directory backend loads with
+`allow_pickle=False`. So the fix changes no on-disk format.
+
+```python
+import pickle
+from recordstream import Image
+
+img = Image(rgb_chw, layout="CHW")
+pickle.loads(pickle.dumps(img)).layout   # "CHW" (was "HWC", the class default)
+```
+
+What you may change: a subclass may override either method, but it must EXTEND the base ones
+(call `super()` and add to the state), never replace them. The pins in `tests/test_items.py`
+(`TestPickle`) round-trip every registered array item type at every pickle protocol, and through
+`Stream(...).parallel(2)` and `FlowGraph(...).parallel(2)`.
+
 ---
 
 ## 2. Batching is two-stage; collation is a pluggable registry (`recordstream.collate`, 2026-07-17)

@@ -16,6 +16,14 @@ All notable changes to this project are documented here. The format follows
   boundaries, decided by position in the ops list; a violation raises `ContractError`
   naming the boundary, record ordinal, offending entry, and the entries present.
 
+### Fixed
+- **Array items keep their attributes through pickling**, so they survive a spawn worker
+  (`Stream(...).parallel(n)`, `FlowGraph.parallel`, a DataLoader worker) in both directions.
+  Before, every declared attribute came back as its class default: an `Image` with
+  `layout="CHW"` arrived as `"HWC"` without an error, and a `db` spectrogram arrived as
+  `scaling="none"`. Every `NDArrayItem` subclass inherits the fix. Storage was never
+  affected, because it goes through the item codec.
+
 ## [0.1.0a1] — 2026-08-25
 
 First public pre-release. The surface it ships:
