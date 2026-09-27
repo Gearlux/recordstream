@@ -6,11 +6,14 @@ package exercise for real) are covered here with small test-local item types, so
 tested without importing a domain package.
 """
 
+import pickle
 from dataclasses import dataclass
+from typing import Type
 
 import numpy as np
 import pytest
 
+from recordstream import FlowGraph, Record, Stream, Transform
 from recordstream.items import (
     Boxes,
     Image,
@@ -69,6 +72,66 @@ class TestArrayItems:
 
     def test_mask_has_no_extra_attrs(self) -> None:
         assert isinstance(Mask(np.zeros((4, 4))), NDArrayItem)
+
+
+#: Every array item type this suite sees at collection time (the registered ones — Image, Mask —
+#: plus the unregistered multi-attribute ``_Multi``), so a new core array item is covered unasked.
+_ARRAY_ITEM_TYPES = [t for t in item_types() if issubclass(t, NDArrayItem)] + [_Multi]
+
+
+class _EchoAndBuild(Transform):
+    """Runs INSIDE a spawn worker: reports the layout it RECEIVED and builds a fresh CHW Image.
+
+    Module-level so the spawn routes can pickle it by reference.
+    """
+
+    def __call__(self, record: Record) -> Record:
+        return {**record, "seen_layout": record["image"].layout, "built": Image(np.zeros((3, 2, 2)), layout="CHW")}
+
+
+class TestPickle:
+    """numpy's own pickle carries only the array; an item must carry its declared attrs too.
+
+    The failure this pins was silent: a CHW ``Image`` crossing a spawn worker arrived as
+    ``layout == "HWC"`` (the class default), because unpickling rebuilds the array without
+    ``__new__`` and ``__array_finalize__`` sees no source object.
+    """
+
+    @pytest.mark.parametrize("item_type", _ARRAY_ITEM_TYPES, ids=lambda t: t.__name__)
+    @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+    def test_every_array_item_round_trips_with_its_attrs(self, item_type: Type[NDArrayItem], protocol: int) -> None:
+        # A mutable, nested value unequal to every class default — proves the value itself travels.
+        attrs = {name: {"owner": item_type.__name__, "attr": name} for name in item_type._item_attrs}
+        item = item_type(np.arange(12, dtype=np.float32).reshape(3, 4), **attrs)
+
+        back = pickle.loads(pickle.dumps(item, protocol=protocol))
+
+        assert type(back) is item_type
+        assert np.array_equal(back, item) and back.dtype == item.dtype and back.shape == item.shape
+        assert {name: getattr(back, name) for name in item_type._item_attrs} == attrs
+
+    def test_a_non_contiguous_view_round_trips_with_its_attrs(self) -> None:
+        view = Image(np.arange(4 * 4 * 3).reshape(4, 4, 3), layout="CHW")[::2, 1:3]
+        assert not view.flags.c_contiguous
+
+        back = pickle.loads(pickle.dumps(view))
+
+        assert type(back) is Image and back.layout == "CHW" and np.array_equal(back, view)
+
+    @pytest.mark.parametrize("route", ["Stream", "FlowGraph"])
+    def test_attrs_cross_a_spawn_worker_in_both_directions(self, route: str) -> None:
+        records = [{"image": Image(np.zeros((3, 2, 2)), layout="CHW")} for _ in range(2)]
+        runner = (
+            Stream(source=records, ops=[_EchoAndBuild()])
+            if route == "Stream"
+            else FlowGraph(source=records, flow={"echo": _EchoAndBuild()})
+        )
+
+        out = list(runner.parallel(2))
+
+        assert [r["seen_layout"] for r in out] == ["CHW", "CHW"]  # parent -> worker
+        assert [r["built"].layout for r in out] == ["CHW", "CHW"]  # born in the worker -> parent
+        assert [r["image"].layout for r in out] == ["CHW", "CHW"]  # parent -> worker -> parent
 
 
 class TestWrapperItems:

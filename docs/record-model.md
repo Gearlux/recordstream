@@ -58,8 +58,9 @@ ITEM rather than a `Label` holding a list, because only the type distinguishes a
 multi-label target from an ordinary sequence value that happens to sit under the target key.
 
 Items are **hybrid**: array-backed items (`Image`, `Mask`) subclass `NDArrayItem` — an `np.ndarray`
-subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` — so a
-type-agnostic operation touches them as an array; structured items (`Boxes`, `Label`, `MultiLabel`)
+subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` AND
+pickling (so an `Image(..., layout="CHW")` is still CHW inside a `.parallel(n)` spawn worker and
+on its way back) — so a type-agnostic operation touches them as an array; structured items (`Boxes`, `Label`, `MultiLabel`)
 are dataclass wrappers (a bounding-box set is not an array). A uniform payload accessor hides the difference from
 kernels:
 
