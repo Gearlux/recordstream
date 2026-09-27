@@ -2,10 +2,11 @@
 RecordStream operations (record-dict ops).
 
 Submodules:
-    - recordstream.ops.numpy: Threshold, ConnectedComponents (+ threshold_array /
-      connected_component_boxes / resolve_expression helpers)
-    - recordstream.ops.torch: ToTensor (+ to_tensor helper)
-    - recordstream.ops.image: ConvertToImage, ConvertToMask (+ value_to_image / normalize_to_uint8 …)
+    - recordstream.ops.numpy: Threshold, ConnectedComponents, Scale (value range), ToType (element
+      type) (+ threshold_array / connected_component_boxes / resolve_expression helpers)
+    - recordstream.ops.torch: ToTensor — array -> CHW tensor, nothing else (+ to_tensor helper)
+    - recordstream.ops.image: ConvertToImage, ConvertToMask, ConvertMode (channel layout)
+      (+ value_to_image / normalize_to_uint8 …)
     - recordstream.ops.target: EncodeTarget, DecodeTarget,
       CocoToTorchVisionDetection, MasksToDetectionBoxes
     - recordstream.ops.structure: RenameField, DropField, CopyField, SelectFields
@@ -14,8 +15,11 @@ Submodules:
     - recordstream.ops.random_apply: RandomApply (gate any op behind a Bernoulli flip)
     - recordstream.ops.configure: ConfigureOp (per-record parameter injection)
     - recordstream.ops.formula: FormulaOp (math formula over one record entry)
+    - recordstream.ops.formats: ReadFile (decode a {file} record through the file-format registry)
     - recordstream.ops.sink: RecordSinkOp (adapt a DataSink as a pass-through op)
     - recordstream.ops.debug: PrintRecordOp (per-record summary probe)
+    - recordstream.ops.contract: RecordContract (pass-through interface contract at a pipeline boundary),
+      ClassNamesOutput (the dataset-level class vocabulary a graph declares as an output)
 
 The sequential composer ``Pipeline`` lives in :mod:`recordstream.transform` (package-root
 export) — one list mixing native ops with bare albumentations / torchvision-v2 transforms.
@@ -25,11 +29,13 @@ import importlib
 from typing import Any, Dict, List, Tuple
 
 from recordstream.ops.configure import ConfigureOp
+from recordstream.ops.contract import ClassNamesOutput, ClassNamesScan, ContractError, RecordContract
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
+from recordstream.ops.formats import ReadFile
 from recordstream.ops.formula import FormulaOp
-from recordstream.ops.image import ConvertToImage, ConvertToMask
-from recordstream.ops.numpy import ConnectedComponents, Threshold
+from recordstream.ops.image import ConvertMode, ConvertToImage, ConvertToMask
+from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.sink import RecordSinkOp
@@ -40,6 +46,8 @@ __all__ = [
     "CocoToTorchVisionDetection",
     "ConfigureOp",
     "ConnectedComponents",
+    "ContractError",
+    "ConvertMode",
     "ConvertToImage",
     "ConvertToMask",
     "CopyField",
@@ -52,11 +60,17 @@ __all__ = [
     "Parallel",
     "PrintRecordOp",
     "RandomApply",
+    "ReadFile",
+    "ClassNamesOutput",
+    "ClassNamesScan",
+    "RecordContract",
     "RenameField",
     "RecordSinkOp",
+    "Scale",
     "SelectFields",
     "Threshold",
     "ToTensor",
+    "ToType",
 ]
 
 

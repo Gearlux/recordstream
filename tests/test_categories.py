@@ -12,11 +12,12 @@ from confluid.registry import get_registry
 from recordstream import Pipeline
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
 from recordstream.ops.configure import ConfigureOp
+from recordstream.ops.contract import RecordContract
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
-from recordstream.ops.image import ConvertToImage, ConvertToMask
-from recordstream.ops.numpy import ConnectedComponents, Threshold
+from recordstream.ops.image import ConvertMode, ConvertToImage, ConvertToMask
+from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.sink import RecordSinkOp
@@ -52,6 +53,9 @@ def test_op_classes_tagged() -> None:
     for cls in (
         Threshold,
         ConnectedComponents,
+        Scale,
+        ToType,
+        ConvertMode,
         ToTensor,
         ConvertToImage,
         ConvertToMask,
@@ -71,6 +75,7 @@ def test_op_classes_tagged() -> None:
         CopyField,
         SelectFields,
         PrintRecordOp,
+        RecordContract,
     ):
         assert cls.__confluid_category__ == "op", cls.__name__
 
@@ -93,8 +98,12 @@ def test_op_group_tags() -> None:
     assert ToTensor.__confluid_group__ == "torch"
     assert ConvertToImage.__confluid_group__ == "image"
     assert ConvertToMask.__confluid_group__ == "image"
+    assert Scale.__confluid_group__ == "numpy"
+    assert ToType.__confluid_group__ == "numpy"
+    assert ConvertMode.__confluid_group__ == "image"
     assert SelectFields.__confluid_group__ == "structure"
     assert PrintRecordOp.__confluid_group__ == "debug"
+    assert RecordContract.__confluid_group__ == "contract"
     assert EncodeTarget.__confluid_group__ == "structure"
     assert DecodeTarget.__confluid_group__ == "structure"
     assert CocoToTorchVisionDetection.__confluid_group__ == "structure"

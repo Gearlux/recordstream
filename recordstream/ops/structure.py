@@ -7,11 +7,12 @@ All ops are lazy / zero-arg constructible (config validated in ``__call__``) and
 ``@configurable(category="op", group="structure")`` so they surface as canvas nodes.
 """
 
-from typing import List, Optional
+import random
+from typing import Any, List, Optional
 
-from confluid import configurable
+from confluid import configurable, output
 
-from recordstream.items import Record
+from recordstream.items import Label, Record
 
 __all__ = ["RenameField", "DropField", "CopyField", "SelectFields"]
 
@@ -83,6 +84,75 @@ class CopyField:
         if self.src not in record:
             raise KeyError(f"CopyField: unknown key {self.src!r} (keys: {list(record)})")
         return {**record, self.dst: record[self.src]}
+
+
+@configurable(category="value", group="structure", random=True)
+class RandomNumber:
+    """A uniformly random number — a producer, with no record anywhere near it.
+
+    The stand-in for any number a graph needs before the real source of it exists — the
+    canonical use is a confidence score fed into :class:`PutField`. Wire the NODE itself into
+    the consumer for a fresh draw per record; the ``value`` output is a single draw, and a
+    visual editor folds it into the document as one FROZEN literal (documented there), which
+    is almost never what a per-record score means.
+
+    Args:
+        low: Lower bound of the draw.
+        high: Upper bound of the draw.
+        seed: Set for a reproducible sequence — one generator per instance, so the same seed
+            yields the same draws in order. ``None`` = fresh randomness.
+    """
+
+    def __init__(self, low: float = 0.0, high: float = 1.0, seed: Optional[int] = None) -> None:
+        self.low = float(low)
+        self.high = float(high)
+        self.seed = seed
+        self._rng: Optional[random.Random] = None  # per-instance, first-use (zero-arg rule)
+
+    def __call__(self) -> float:
+        """One fresh draw."""
+        if self._rng is None:
+            self._rng = random.Random(self.seed)
+        return self._rng.uniform(self.low, self.high)
+
+    @property
+    @output
+    def value(self) -> float:
+        """A single draw, as a wireable output. Folds to a frozen literal at export."""
+        return self()
+
+
+@configurable(category="op", group="structure")
+class PutField:
+    """Put a value into the record under ``key`` — record + value + name, nothing else.
+
+    The one generic way to stamp a value into a record, whatever produces it: a
+    :class:`RandomNumber`, a model's confidence, a constant. A CALLABLE value is called PER
+    RECORD (that is what makes a wired producer draw fresh values for every record instead of
+    one frozen number for the whole dataset); anything else is stored as given.
+
+    ``key`` uses dict semantics — an existing entry is replaced. Put means put: a model
+    re-stamping its own entry on a second pass must not fail, and protecting the ground truth
+    is the prediction convention's business, not this op's.
+
+    Args:
+        key: The record entry to write.
+        value: What to store — a plain value, or a callable drawn per record.
+    """
+
+    def __init__(self, key: str = "", value: Optional[Any] = None) -> None:
+        self.key = key
+        # `Any` because the whole point is accepting whatever produces the value -- a number,
+        # a producer node, a model output. Naming a type would exclude the next source.
+        self.value = value
+
+    def __call__(self, record: Record) -> Record:
+        if not self.key:
+            raise ValueError("PutField: 'key' (the record entry to write) is required")
+        if self.value is None:
+            raise ValueError("PutField: 'value' is required — wire a producer or set a number")
+        drawn = self.value() if callable(self.value) else self.value
+        return {**record, self.key: Label(drawn)}
 
 
 @configurable(category="op", group="structure")

@@ -19,6 +19,7 @@ Maintenance rules:
 |---|---|---|---|
 | Data model | `items.py`, `io.py` | A record is a plain `dict` of typed values; one codec serializes any value | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Native ops | `transform.py`, `dispatch.py`, `ops/*` | Type-dispatched `Transform`s (kernels, `field=`) + structural/compose ops | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
+| Algorithms | `algorithm.py` | Declared params / inputs / outputs; the op, constructor, schema and chain contract derived | [§21](#21-an-algorithm-declares-its-params-inputs-and-outputs-the-op-is-derived-algorithm-2026-09-27) + [algorithm.md](algorithm.md) |
 | Library interop | `core._apply_op`, `register_op_family` | External libraries run as-is via the op-family dispatch — no adapters | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Engines | `core/` (`Stream`/`JointStream`), `flow/` (`FlowGraph`) | One op-application chokepoint, four routes; one per-record kernel behind two authoring forms | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30), [§5](#5-the-engines-own-callable-wrappers-live-in-core-2026-07-20-still-true-after-the-2026-08-01-package-split) |
 | Graph wiring | `flow/steps.py`, `flow/parse.py` | Fan-out/fan-in/cross-step values are step GRAMMAR (`from:`/`merge_from:`/`bind:`), never ops | [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30) |
@@ -78,7 +79,7 @@ Collapse to ONE carrier and ONE op engine:
 - **`Pipeline(transforms=[...])`** (`recordstream/transform.py`) is THE sequential composer; every
   composing op routes inner ops through `_apply_op`, so bare library transforms nest anywhere a
   native op does.
-- **Tensors are plain values.** `ToTensor` writes a LIVE CHW-float `torch.Tensor` under its key —
+- **Tensors are plain values.** `ToTensor` writes a LIVE CHW `torch.Tensor` (the payload's own element type) under its key —
   a record value can be anything (`collate_records` stacks tensors natively, storage converts via
   `to_numpy` on write, a downstream tv2 op transforms them as-is). An `Image` itself cannot hold
   a tensor (`NDArrayItem.__new__` runs `np.asarray`); a typed tensor ITEM base is a tracked
@@ -149,6 +150,38 @@ ops:
   [record-model.md](record-model.md) → "A new library family".
 - **The `typedrecord-v1` tag and the no-back-compat rule are contracts** — changing the on-disk
   layout means a NEW tag and a re-generation story, never a silent dual-read path.
+
+### Amendment: an array item carries its attributes through pickle (2026-09-27)
+
+`__array_finalize__` carries an item's attributes through every numpy construction path, but
+pickling is not one of them. numpy's `ndarray.__reduce__` stores the array only. On load it
+rebuilds the object through a bare `ndarray.__new__` (never `NDArrayItem.__new__`), and
+`__array_finalize__` receives no source object. So every declared attribute fell back to its
+class default. Pickling is how a record crosses a spawn worker, and it broke silently in both
+directions. Measured: an `Image` with `layout="CHW"` arrived in the worker as `"HWC"`, an
+`Image` built in the worker came back as `"HWC"`, and a `db` spectrogram reached a
+`.parallel(2)` worker as `scaling="none"`, which a dB-only op then refused. Serial runs never
+pickle and were unaffected, which is why nothing showed it.
+
+`NDArrayItem` therefore defines `__reduce__` / `__setstate__`: numpy's own state, plus a dict of
+the `_item_attrs` values, restored after numpy's `__setstate__`. It sits on the base class, so an
+array item type registered by a domain package gets it without writing anything. Storage is a
+separate path and does not use it: backends go through the item codec (`recordstream/io.py`),
+which already wrote the attributes explicitly, and the directory backend loads with
+`allow_pickle=False`. So the fix changes no on-disk format.
+
+```python
+import pickle
+from recordstream import Image
+
+img = Image(rgb_chw, layout="CHW")
+pickle.loads(pickle.dumps(img)).layout   # "CHW" (was "HWC", the class default)
+```
+
+What you may change: a subclass may override either method, but it must EXTEND the base ones
+(call `super()` and add to the state), never replace them. The pins in `tests/test_items.py`
+(`TestPickle`) round-trip every registered array item type at every pickle protocol, and through
+`Stream(...).parallel(2)` and `FlowGraph(...).parallel(2)`.
 
 ---
 
@@ -1367,3 +1400,430 @@ mask_2d[y0:y1, x0:x1]   # half-open: covers the component exactly
   second meaning for `Boxes` — that is the mistake this record exists to prevent.
 - **Usage** is [docs/record-model.md](record-model.md); the batch read-back is `batch_boxes`
   ([docs/kinds.md](kinds.md)).
+
+## 15. A pipeline interface is a pass-through op, not a socket type (`RecordContract`, 2026-08-25)
+
+### Context
+
+A pipeline built in a visual editor (or authored as YAML) has an implicit contract with its
+host: the records it delivers must carry certain entries with certain item types — a
+classification consumer needs an `Image` under `image` and a `Label` under `class`. Nothing
+stated that contract. A wrong graph loaded cleanly, exported cleanly, and failed only
+downstream — as an empty review queue or a training run with no targets — far from the
+place the mistake was made. Two alternative homes for the contract were considered: a typed
+socket vocabulary in the editor (statically narrow the stream wire per record schema), and a
+host-side check at apply time (peek a record after loading the document).
+
+### Decision
+
+The contract is an **op**: `recordstream.ops.contract.RecordContract`, a pass-through
+`Record -> Record` callable that checks each record against a declared `fields` map
+(record key → registered item type name, `"*"` = present with any type) and raises a
+located `ContractError` on the first violation. **Position decides the role** — the first
+op in a chain states what the host must feed (input contract), the last what the pipeline
+guarantees (output contract) — so ONE class serves both boundaries and there is no `role`
+knob. Socket-level typing was rejected because every op is a generic `Record -> Record`:
+no static claim survives one op between source and boundary, so a socket schema would be
+enforcement theater. A host-side-only check was rejected because it leaves the contract
+invisible in the graph (nothing to see or edit) and unenforced when the exported document
+runs elsewhere; as an op, the contract rides the document into every executor.
+
+### Consequences
+
+- The item registry is the type vocabulary (`get_item_type` / `item_type_names` — already
+  documented as the enumerable socket-type vocabulary), so a domain package's registered
+  item is contractable with zero core changes.
+- The check runs on EVERY record (a dict lookup + `isinstance` per declared entry) — a
+  violation names the exact record ordinal, not just "somewhere in the stream".
+- A conversion that emits plain values (a live tensor) is expressible via `"*"` —
+  presence-only, no item type demanded.
+- A host that seeds a graph places a pre-configured contract node at the boundary; the
+  editor's user sees the required shape before wiring the first node.
+
+### Example
+
+```python
+from recordstream import Stream
+from recordstream.ops.contract import RecordContract
+
+stream = Stream(
+    source=my_source,
+    ops=[
+        RecordContract(fields={"raw": "*"}, name="denoise input"),        # first = input contract
+        wrap_raw_as_image,
+        RecordContract(fields={"image": "Image"}, name="denoise output"),  # last = output guarantee
+    ],
+)
+# a record without "raw" fails AT THE INPUT boundary:
+# ContractError: denoise input: record #0 has no entry 'raw' (expected *); present: class[Label]
+```
+
+### What you may change (and where it's documented)
+
+- **Add checks** (shape, dtype, value range) as new declared parameters on the op — never a
+  second contract class per task.
+- **Do not add a `role` parameter**: position already is the role, and a role knob would let
+  a graph state one and mean the other.
+- **Usage** is the README ("Stating a pipeline's interface"); pins live in
+  `tests/test_contract.py` (incl. the input+output dual-position group).
+
+## 16. An op declares its interface, and a chain is checked before it runs (`check_chain`, 2026-09-05)
+
+**Context.** Record 15 put a pipeline's interface on the canvas as a pass-through op: you PLACE a
+`RecordContract` at a boundary and it asserts. That answers *"what must reach here?"* and it is the
+right shape for a boundary — but it does not answer *"does this chain hold together?"*, and that is
+the question a chain of a dozen small ops actually raises.
+
+The failure is silent, which is what makes it worth machinery. An op that reads a record entry an
+earlier op was supposed to write does not raise: the key is simply absent, so the op returns the
+record unchanged and the pipeline produces an empty result. In a consuming workspace that surfaces
+as a blank pane with no error anywhere — the reader has nothing to go on, and the boundary contract
+is no help, because the record crossing the boundary is fine.
+
+**Decision.** An op MAY declare its interface as class attributes, and `check_chain(ops)` reads them
+off the op list once, before the first record:
+
+* `consumes` / `produces` — `{record key: registered item type}`, the SAME vocabulary
+  `RecordContract.fields` uses, `"*"` for "present, any type";
+* `reports` — the op's key in an analysis report (`""` marks a transform rather than an analysis);
+* `flags` — the boolean findings it raises, with the instance parameter `requires` naming the one
+  flag that gates an op.
+
+Four things are refused, each of which would otherwise surface as an empty result: a `consumes` key
+nothing earlier produces; a `requires` naming a flag no op declares, or one declared only later; two
+ops declaring one flag; two ops reporting under one name.
+
+Declaring is **opt-in**. An op with none of these attributes is checked for nothing, so every chain
+written before the mechanism keeps working untouched — which also means a declaring op must not
+depend on an undeclared op's output. That is a real limit, and the refusal says so: the fix is to
+declare on the producer.
+
+**Consequences.** A mis-wired chain fails at load with a located message naming the node and the key,
+instead of running to completion and answering nothing. `flag_producers(ops)` is total over every
+declared flag — exactly one producer per flag is what `check_chain` enforces — so "which node decided
+this branch?" always has an answer, for a report and for a visual editor that wants to draw the gate
+as a wire rather than a widget.
+
+The cost is a second vocabulary beside `RecordContract`'s, describing the same kind of fact at a
+different scale. They are deliberately kept in one spelling (`{key: item type}`) so a chain's boundary
+contract stays computable from its ops — unsatisfied `consumes` IS the input contract, terminal
+`produces` IS the output contract.
+
+**Example.**
+
+```python
+class MeasureSymbolClock:
+    consumes = {"signal": "Signal", "inst_freq": "InstFreq"}
+    produces = {"symbol_clock": "SymbolClock"}
+    reports  = "clock"
+    flags    = ()
+
+check_chain(ops, provided={"signal"}, where="view_bte.yaml")
+# ChainContractError: view_bte.yaml: MeasureSymbolClock needs the record entry 'inst_freq',
+# which nothing before it produces — MeasureInstantaneousFrequency produces it, but LATER in
+# the chain — move it before MeasureSymbolClock
+```
+
+**What you may change.** Which failures are refused, and what a message says. What must hold: the
+check is opt-in (an undeclaring op is checked for nothing), the vocabulary stays `RecordContract`'s,
+a flag has exactly one producer, and the refusal is LOCATED — a reader must never have to guess
+which node broke.
+
+## 17. A file format may answer from its METADATA alone (`scan` + `scan_file`, 2026-09-10)
+
+**Context.** The format registry asked a file exactly one question that costs anything:
+`read` — decode it into a record. For the formats that pair a small metadata file with a large
+data file, that is the expensive question, and it is not the one every consumer has. "Where was
+each of these recordings made?", "how long is each one?", "which of them carry annotations?" are
+answered entirely by the sidecar, and a consumer surveying a whole listing cannot afford a decode
+per file to get there.
+
+Measured on a real capture library: **499 ms** to open one capture against **0.03 ms** to read the
+sidecar beside it. Over 1430 recordings that is twelve minutes versus half a second — the
+difference between a survey that exists and one that does not.
+
+The consumer cannot close that gap itself. It would have to know which files have sidecars, what
+those sidecars are called, and how to read them — which is the format's knowledge, and the whole
+reason the registry exists.
+
+**Decision.** `FileFormat` gains an OPTIONAL capability, `scan(path) -> Record`: what this file's
+metadata says, its sidecar or its header, never its payload. It returns an ordinary record with
+the payload left out, so every op and graph downstream reads a scan exactly like a decode — which
+is what lets a consumer run the SAME analysis chain over a survey as over a recording.
+`scan_file(path, formats=None)` dispatches it: the first format claiming the path, in registry
+order, with the same companion rule `ReadFile` follows.
+
+Optional, and probed structurally — like the write capability the annotation sink dispatches. A
+format that cannot answer cheaply (a raw IQ file whose samples ARE the file) simply does not
+implement it.
+
+**Consequences.** `scan_file` answers `None` — never a `read` — for a companion half, an unclaimed
+file, and a claiming format with no `scan`. The absent fallback is the point: the caller asked the
+cheap question because the expensive one was unaffordable at this scale, so quietly answering the
+expensive one turns a survey of ten thousand files into a decode of ten thousand files. A `scan`
+that RAISES is left to the caller, because whether one malformed sidecar skips or fails a survey
+is the survey's decision, not the registry's. And a scanned record is honestly incomplete: its
+payload is empty, so a consumer that needs samples must ask for them by name.
+
+**Example.**
+
+```python
+from recordstream.formats import scan_file
+
+for path in listing:                       # thousands of files
+    record = scan_file(path)               # sidecar only — no payload decode
+    if record is None:                     # a companion half, or a format that cannot answer
+        continue
+    where = record["signal"].extras.get("gps_latitude")
+```
+
+**What you may change.** Which formats implement it, and what a scanned record carries. What must
+hold: `scan` never decodes a payload, the dispatcher never falls back to `read`, the companion rule
+matches `ReadFile`'s, and the returned record stays an ordinary record so one chain serves both.
+
+## 18. A view source forwards a key-restricted walk (`project_indices`, 2026-09-10)
+
+**Context.** `projection.project(source, keys)` takes a source's own cheap walk only when the
+object handed to it implements the protocol. Every view source here — `RangeSource`,
+`ConcatSource`, `DatasetSplit`'s `_SplitView`, and `JointStream` — wraps a source without looking
+inside a record, and none of them implemented it. So wrapping a projecting source in the thinnest
+possible slice silently discarded its efficient path and fell back to reading every record whole.
+Measured on a source whose records carry ~15 MB of samples, for the same records and the same
+keys: 0.006 s per record straight from the source, 0.423 s through a `RangeSource` around it.
+
+Forwarding is not simply `project(self.source, keys)`, because a view owns WHICH records and in
+what ORDER, while the protocol is iterator-only — there is no "project index i". Two of the four
+wrappers are a plain chain; the other two select by index, and one of those (a split) reorders.
+
+**Decision.** `projection.project_indices(source, keys, indices)` is the shared primitive the
+index wrappers call: it walks the source's own projection once, keeps the wanted positions, and
+yields them in the order asked for. `ConcatSource` and `JointStream` chain `project` per part
+instead — there is no index question there.
+
+Laziness follows the ORDER, because that is the only thing that decides whether it can. Increasing
+indices — a contiguous slice, an unshuffled split — stream straight through holding nothing. An
+index arriving out of order is held until its turn, so a reordered view holds at most the records
+between its own extremes, and what is held is a PROJECTED record: the entries asked for, never the
+payload the projection exists to skip. That asymmetry is what keeps a shuffled view affordable
+where materializing the source is not. The walk stops as soon as the last wanted index is
+delivered, so a window at the front of a large source costs the front of it.
+
+**Consequences.** A wrapper costs what the source under it costs — remeasured on the same corpus,
+0.423 s → 0.004 s per record. A source without the protocol keeps the ordinary fallback, per part,
+so nothing requires the protocol. What a `RangeSource` cannot avoid is walking the records before
+`start`: it pays the projected cost for them rather than a full read, which is the honest limit of
+an iterator-shaped protocol and is documented rather than hidden.
+
+**Example.**
+
+```python
+from recordstream.projection import project
+from recordstream.sources.range import RangeSource
+
+# the SOURCE's own project() runs; the window is sliced out of it
+list(project(RangeSource(source=indexable, start=1, stop=4), ("class",)))
+# [{'class': 1}, {'class': 2}, {'class': 3}]
+```
+
+**What you may change.** Which wrappers forward, how much a reordered view is willing to hold.
+What must hold: a view yields its own records in its own order, it never makes a key-restricted
+walk more expensive than the source's, a source without the protocol still works, and the walk
+stops at the last index it needs.
+
+## 19. A chain that reads files can answer from metadata, verified per record (`for_projection`, 2026-09-10)
+
+**Context.** `Stream.project` forwards to its source only when `ops` is empty — correctly, since
+an op may consume the entry another produces. But the shape a file-reading workspace actually
+uses is `FilesSource → ReadFile → RenameField`, and there the chain *is* the cost: measured over
+a 1430-recording capture library, a filter term costing 143.5 ms per record decoded, where the
+sidecar beside each file answers the same question in 0.37 ms. The cheap machinery already
+existed (`scan` / `scan_file`, §17); the projection could not reach it.
+
+Two things stood in the way, and both were found by measuring rather than reasoning.
+
+An op cannot know which keys are wanted — that is the caller's question — so it cannot decide
+whether a cheap answer suffices. And a scan is not simply "the record minus the payload": both
+shipped formats *keep* the payload's entry with an empty array, because the rate, the centre and
+the position live on that item and a survey needs them. Measured, `scan` reports 0 samples where
+`read` reports 1,000,001 and 100,000,000 — so a filter about the samples would have been answered
+from an empty capture, confidently and wrongly.
+
+**Decision.** An op may offer a cheaper variant of ITSELF (`for_projection()`); the stream runs
+that chain and verifies the result per record, re-running the real chain when it falls short.
+The verification is `formats.answers`, which counts a placeholder as an absence — and a format
+states which entries it stands in for (`scan_stands_in`), which `scan_answered` marks.
+
+Three details are load-bearing, each of them a measured failure first:
+
+- The placeholder is **marked, not removed**. Removing it broke the next op outright
+  (`RenameField: unknown key 'signal'`), because a chain is written against the record a full
+  read produces.
+- The marker rides the **value**, not the key. The same chain renames that entry two steps
+  later, so a caller checking a name would be checking the wrong one.
+- A cheap chain that **raises** is the same verdict as one that falls short. An op reaching for
+  something the cheap step could not supply is expected, not exceptional; its answer is the real
+  chain's.
+
+**Consequences.** Measured end to end on that library, one filter term: 3.4 min → 0.5 s, with 41
+records falling back because they carry no annotations at all — the cheap answer is right about
+them, and "did you get what you asked for?" cannot tell *absent* from *not read*. That is the
+price of a rule with no promises in it, and it is per record rather than per walk. The cheap path
+is refused where the stream would not run sequentially (workers, a chunk size, a stream-level
+op): each would have to be re-derived to stay faithful, and the measured case needs none of them.
+
+**Example.**
+
+```python
+stream = Stream(source=FilesSource(root=captures, pattern="*/*.json"),
+                ops=[ReadFile(), RenameField(src="signal", dst="input")])
+
+list(project(stream, ("regions",)))   # sidecars only — no capture decoded
+list(project(stream, ("input",)))     # every capture read; the marker said the scan could not
+```
+
+**What you may change.** Which ops offer a cheap variant, what a format stands in for, when the
+cheap path is refused. What must hold: a placeholder is marked on the value and counts as an
+absence, a record the cheap chain drops is not re-run (dropping is a decision about the file, not
+the keys), and a cheap chain that cannot finish yields to the real one instead of to an error.
+
+## 20. `ToTensor` converts; the channel layout, the value range and the element type are ops of their own (2026-09-27)
+
+**Context.** `ToTensor` used to do four jobs: transpose to CHW, turn an array into a tensor, force
+a channel layout (`mode`), and rescale (`normalize`, on by default). The rescale could not know the
+input's range, so it guessed: `uint8` ÷ 255, and any other value whose maximum was above 1 also
+÷ 255. The guess is wrong for data that is already scaled — an ImageNet-standardized image
+(`-2.12 .. 2.64`) came out `-0.008 .. 0.010`, a linear-power spectrogram (`0.001 .. 800`) came out
+`0 .. 3.14`, and nothing raised. The workspace's own configs had learned to write
+`normalize: false` after a standardization, which is the symptom of a default that is wrong.
+
+**Decision.** `ToTensor` converts an array to a CHW tensor of the same element type and nothing
+else. Each value change is a separately named, separately placed op, run on numpy before it:
+`ConvertMode` (channel layout, through PIL), `Scale` (value range, `[source_min, source_max]` →
+`[target_min, target_max]`) and `ToType` (element type, values unchanged). Each refuses what it
+cannot do honestly instead of guessing: `Scale` with a blank bound on a float (a float has no full
+range), `ToType` complex → real and values an integer type cannot hold, `ConvertMode` anything but
+`uint8`.
+
+Two choices inside that are deliberate:
+
+- **A blank `field` means every `Image` and nothing else.** A `Mask` beside it holds class ids;
+  scaling one turns every id into a fraction and a later integer cast turns them all into zero,
+  silently. Reaching a mask, a spectrogram or a signal's payload takes an explicit `field`.
+- **`Scale`'s blank source range is the integer TYPE's range**, not the data's. The data's own
+  min/max would change the brightness per image — a different normalization for every record.
+  The cost is the con case: a 12-bit sensor stored as `uint16` must name `source_max: 4095`.
+
+**Consequences.** A chain now says what it does to its values in its own ops list, the same
+spelling for torch and channels-last engines (a Keras chain omits `ToTensor` and keeps `Scale`,
+where it used to lose the rescale along with the transpose). A chain that relied on the old
+default gets a `uint8` tensor, which a model refuses loudly (measured on a `Conv2d`: `Input type (unsigned char) and bias type (float) should be the same`) rather
+than training on wrong values. A saved canvas holding a `ToTensor` node loses its first two widgets
+(`normalize`, `mode`), so its remaining widget values read shifted; no shipped canvas holds one.
+
+**Example.**
+
+```yaml
+ops:
+  - !class:recordstream.ops.image.ConvertMode {mode: RGB}   # RGBA / grayscale rows -> 3 channels
+  - !class:recordstream.ops.numpy.Scale {}                  # uint8 0..255 -> float32 0..1
+  - !class:recordstream.ops.torch.ToTensor {}               # HWC -> CHW, nothing else
+```
+
+**What you may change.** The element types `ToType` offers, the modes `ConvertMode` offers, new
+value ops of the same shape. What must hold: `ToTensor` changes no value, and no op guesses an
+input's range from its values.
+
+## 21. An algorithm declares its params, inputs and outputs; the op is derived (`Algorithm`, 2026-09-27)
+
+**Context.** An op that reads named record entries and writes named entries (a measurement, a
+filter, a type-changing conversion) had to say the same thing up to five times: a constructor
+parameter per slot to name its entry (`field`, `<input>_field`, `output`), a `resolve_item` call per
+input, a hand-kept `consumes` / `produces` for the chain checker (§16), a private `_last_*` field
+behind a confluid `@output` property so a later step could read the value, and finally the
+computation. Nothing checked that the copies agreed. Measured on a consumer's hand-written
+noise-floor op: 34 lines of code, of which the computation was 8. The same op rewritten as an
+algorithm is 10 lines and gives the same number (`-100.0449` dB on the same spectrogram, 14.81 ms
+against 14.87 ms per record; 2.6 µs of added cost per record with the computation removed).
+
+The second pressure came from tools. A generated per-node tool (an LLM re-running one node with new
+settings) needs three lists: the settings it may change, the entries the node reads, and what it
+returns. Before this record, only the first was derivable from the class.
+
+**Decision.** An `Algorithm` subclass declares three kinds of slot as class attributes and writes
+`compute()`:
+
+* `name: type = Param(default=..., doc=...)` is a setting. The base generates a keyword-only
+  constructor from the params, plus `keys`, with a real `__signature__`, annotations and an `Args:`
+  docstring. `to_pydantic`, `parse_param_docs`, `dump` and confluid's validation therefore see an
+  ordinary constructor, and confluid needed no change.
+* `name: type = Input(doc=...)` is read from the record entry `name`.
+* `name: type = Output(doc=..., replaces=...)` is written to the record entry `name`, or back into
+  the entry an input was read from. The base installs one read-only confluid `@output` property per
+  output, holding the last computed value, so `bind: step.name` works unchanged.
+
+`compute()` reads params and inputs as `self.<name>` and returns every output by name. The base
+provides `run(**inputs)` (standalone), `__call__(record)` (the op), `consumes` / `produces` (derived,
+following `keys` and `replaces`) and `algorithm_spec()`.
+
+Alternatives rejected, each measured or shown on a concrete case:
+
+* **Decorators (`@param`, `@input`).** Python only allows decorators on functions and classes, not on
+  attributes.
+* **Annotation markers (`percentile: Param[float] = 25.0`).** They read well, but a type checker
+  cannot tell from an annotation that an input is not a constructor argument. With
+  `dataclass_transform`, mypy demanded `spectrogram` and `noise_floor_db` as arguments and refused
+  the correct call `NoiseFloor(percentile=30.0)`; without it, mypy checks no call at all. Field
+  specifiers carry `init: Literal[False]`, and mypy then reports exactly the typo, the wrong type,
+  and an input passed to the constructor.
+* **`compute()` assigning outputs (`self.background = ...`).** An output would need a setter, and
+  confluid treats a settable property as a configuration knob, so every output would appear as a
+  setting in every form and schema.
+* **One `<slot>_field` parameter per slot** (the earlier convention for multi-input ops). It adds one
+  setting per slot to every form and tool schema. One `keys` mapping carries the same information
+  and is validated against the declared slot names.
+* **Finding an input by type when its entry is missing** (the "blank field = first of that type"
+  rule of `resolve_item`). Existing pipelines would need no change, but which entry an op reads would
+  then be decided only while it runs, and `check_chain` could no longer say before a run what a
+  pipeline needs. Inputs are found by name only; a pipeline that names the entry differently says so
+  once, with `keys` or a `RenameField`.
+* **In-place writing configured in every YAML (`keys: {kept: boxes}`).** It works, but an op whose job
+  is to replace what it read would, whenever one config forgot the line, quietly add a second entry
+  next to the original. `Output(replaces="boxes")` declares it once, in the class.
+
+**Consequences.** The "type-changing op" shape of §1 (subclass `Transform`, override `__call__`) is
+superseded for new ops: reading named entries and writing named entries is an algorithm. `Transform`
+with kernels stays for "every value of a type" ops, and library transforms still run as they are.
+Existing hand-written ops keep working and migrate one at a time. `run()` puts the inputs on a
+shallow copy of the object, so the configured instance never holds a record's arrays, and the op
+pickles into spawn workers like any other object. The generated constructor is regenerated only for
+the first algorithm class and for a subclass that adds a param. Regenerating it otherwise would
+discard the validation wrapper confluid's `@configurable` put on the parent's constructor.
+
+Two limits are accepted. The word "input" means two things: confluid's `input_specs()` lists
+**constructor** arguments (for an algorithm, the params and `keys`), while an algorithm's record
+inputs come from `algorithm_spec()`. And `keys` is declared to the type checker under
+`TYPE_CHECKING` on `Algorithm`, which sits below a private decorated base class, because a type
+checker collects fields only from classes derived from the decorated one.
+
+**Example.**
+
+```python
+class BackgroundLevel(Algorithm):
+    percentile: float = Param(default=25.0, doc="Percentile rank across the per-row medians.")
+    image: Image = Input(doc="The image to read.")
+    background: float = Output(doc="The background level.")
+
+    def compute(self):
+        per_row = np.median(np.asarray(self.image, dtype=np.float64), axis=1)
+        return {"background": float(np.percentile(per_row, self.percentile))}
+
+BackgroundLevel(percentile=30.0).run(image=image)           # {'background': 10.0}
+BackgroundLevel(keys={"image": "photo"})({"photo": image})  # {'photo': ..., 'background': 10.0}
+BackgroundLevel().consumes                                   # {'image': 'Image'}
+```
+
+**What you may change.** New slot options (a per-slot `doc` format, a unit), more derived views of
+the declarations (a generated tool description), better messages. What must hold: the author never
+touches a record; every tool-facing view is derived from the three declarations, never declared a
+second time; outputs stay read-only; inputs are found by name only; `compute()` returns every output.
+Usage: [algorithm.md](algorithm.md).

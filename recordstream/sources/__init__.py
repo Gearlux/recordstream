@@ -9,6 +9,7 @@ to a module-path import, and this package re-exports every name — but generate
 the enrichment table key on the submodule path, because that is what ``cls.__module__`` says.
 
 Submodules:
+    - recordstream.sources.files: FilesSource (a plain list of file paths)
     - recordstream.sources.huggingface: HuggingFaceSource (+ the METADATA_ALL_FEATURES sentinel)
     - recordstream.sources.split: DatasetSplit (+ the SplitName Literal)
     - recordstream.sources.range: RangeSource (a contiguous ``[start:stop)`` slice)
@@ -21,6 +22,7 @@ second pass — the one that surfaces these nodes — walks exactly this ``__all
 """
 
 from recordstream.sources.concat import ConcatSource
+from recordstream.sources.files import FilesSource
 from recordstream.sources.huggingface import METADATA_ALL_FEATURES, HuggingFaceSource
 from recordstream.sources.range import RangeSource
 from recordstream.sources.split import DatasetSplit, SplitName
@@ -29,6 +31,7 @@ __all__ = [
     "ConcatSource",
     "DatasetSplit",
     "HuggingFaceSource",
+    "FilesSource",
     "METADATA_ALL_FEATURES",
     "RangeSource",
     "SplitName",

@@ -29,7 +29,8 @@ from recordstream._compat import is_torch_tensor
 from recordstream.items import Boxes
 from recordstream.items import Image as ImageItem
 from recordstream.items import Mask as MaskItem
-from recordstream.items import NDArrayItem, Record, is_item, item_data, item_value
+from recordstream.items import NDArrayItem, Record, is_item, item_data, item_value, with_data
+from recordstream.ops.numpy import entries_to_change
 from recordstream.transform import Transform
 
 logger = get_logger("recordstream.ops.image")
@@ -629,6 +630,411 @@ def draw_text(
 
 
 @configurable(category="op", group="image")
+class ReadImage:
+    """Read the file a record NAMES into an ``Image`` item — ``{file}`` in, ``{file, image}`` out.
+
+    The decoding half of a file-list pipeline: a plain files source delivers paths and this
+    op turns each into pixels (RGB, HWC uint8), leaving the path in place as provenance. A
+    file the imaging library cannot open — or a record without the field at all — passes
+    through UNCHANGED with a debug log: the record keeps its row (a viewer shows it as
+    unreadable) and one stray text file never costs the run around it.
+
+    Args:
+        field: Record entry holding the file path. Defaults to ``"file"``.
+        output: Entry the decoded image lands under. Defaults to ``"image"``.
+    """
+
+    def __init__(self, field: str = "file", output: str = "image") -> None:
+        self.field = field
+        self.output = output
+
+    def __call__(self, record: Record) -> Record:
+        path = record.get(self.field)
+        if path is None:
+            return record
+        try:
+            with Image.open(str(path)) as opened:  # PIL's Image — the item is ImageItem
+                array = np.asarray(opened.convert("RGB"))
+        except Exception:
+            logger.debug(f"ReadImage: cannot read {path!r} as an image; passing the record through")
+            return record
+        return {**record, self.output: ImageItem(array)}
+
+
+#: Source coordinate layouts :class:`ConvertToBoxes` reads. The TARGET never varies — the
+#: ``Boxes`` item is absolute-pixel half-open xyxy BY CONTRACT, which is what keeps every
+#: consumer (viewers, geometry ops, sinks) interoperable.
+BoxFormat = Literal["xyxy", "xywh", "cxcywh"]
+
+
+@configurable(category="op", group="image")
+class ConvertToBoxes:
+    """Any common box shape into THE canonical ``Boxes`` item — the boxes counterpart of
+    :class:`ConvertToImage` / :class:`ConvertToMask`.
+
+    Reads the entry under ``field`` (or the first box-ish entry when blank): a detection
+    dict (``bbox``/``boxes`` rows with ``category``/``label(s)`` and optional scores — the
+    HuggingFace ``objects`` layout, seen through a ``Label`` wrapper), a bare ``[N, 4]``
+    array, or an existing ``Boxes`` whose rows were stated in another layout. Rows convert
+    from ``format`` (``xywh`` = COCO corner+size, ``cxcywh`` = center+size, ``xyxy`` = the
+    identity), scaled up by the image size first when ``normalized``. The result lands under
+    ``output`` as ``Boxes(xyxy, labels, scores, canvas=(H, W), classes)`` — the ONE format
+    the record model speaks; a consumer wanting another layout (a trainer's normalized
+    cxcywh) converts at its own sink/collate, never by storing non-canonical rows here.
+
+    Args:
+        field: Record entry holding the raw boxes; blank = the first box-ish entry.
+        output: Entry the canonical ``Boxes`` lands under (the contract's target by default).
+        format: The SOURCE row layout. The target is always absolute-pixel xyxy.
+        normalized: Rows are in [0, 1] of the image size — scaled up before converting.
+        classes: Class-NAME vocabulary the integer labels index into; stamped onto the item
+            so annotation surfaces and viewers can name the boxes.
+    """
+
+    def __init__(
+        self,
+        field: str = "",
+        output: str = "target",
+        format: BoxFormat = "xyxy",
+        normalized: bool = False,
+        classes: Optional[List[str]] = None,
+    ) -> None:
+        if format not in get_args(BoxFormat):
+            raise ValueError(f"ConvertToBoxes format must be one of {get_args(BoxFormat)}, got {format!r}")
+        self.field = field
+        self.output = output
+        self.format: BoxFormat = format
+        self.normalized = bool(normalized)
+        self.classes = list(classes or [])
+
+    @staticmethod
+    def _unwrap(value: Any) -> Any:
+        return getattr(value, "value", value)
+
+    @classmethod
+    def _boxish(cls, value: Any) -> bool:
+        raw = cls._unwrap(value)
+        if isinstance(raw, dict):
+            return "bbox" in raw or "boxes" in raw
+        if hasattr(raw, "boxes"):
+            return True
+        arr = np.asarray(raw, dtype=object)
+        if arr.dtype == object:
+            try:
+                arr = np.asarray(raw, dtype=float)
+            except (TypeError, ValueError):
+                return False
+        return arr.ndim == 2 and arr.shape[-1] == 4
+
+    def __call__(self, record: Record) -> Record:
+        key = self.field
+        if key:
+            if key not in record or not self._boxish(record[key]):
+                raise ValueError(
+                    f"ConvertToBoxes: entry {key!r} holds no boxes "
+                    f"(a bbox/boxes container, an [N, 4] array, or a Boxes item)"
+                )
+        else:
+            key = next((k for k, v in record.items() if self._boxish(v)), "")
+            if not key:
+                raise ValueError(
+                    "ConvertToBoxes: no box-ish entry in the record "
+                    f"(entries: {sorted(record)}) — name one with 'field'"
+                )
+        raw = self._unwrap(record[key])
+        labels = scores = None
+        item_classes = list(self.classes)
+        if isinstance(raw, dict):
+            rows = raw.get("bbox", raw.get("boxes"))
+            labels = raw.get("category", raw.get("categories", raw.get("label", raw.get("labels"))))
+            scores = raw.get("score", raw.get("scores"))
+        elif hasattr(raw, "boxes"):
+            rows = raw.boxes
+            labels = getattr(raw, "labels", None)
+            scores = getattr(raw, "scores", None)
+            item_classes = item_classes or list(getattr(raw, "classes", None) or [])
+        else:
+            rows = raw
+        arr = np.asarray(rows, dtype=float).reshape(-1, 4)
+        height, width = _record_image_hw(record)
+        if self.normalized:
+            arr = arr * np.array([width, height, width, height], dtype=float)
+        if self.format == "xywh":
+            arr = np.stack([arr[:, 0], arr[:, 1], arr[:, 0] + arr[:, 2], arr[:, 1] + arr[:, 3]], axis=1)
+        elif self.format == "cxcywh":
+            half_w, half_h = arr[:, 2] / 2.0, arr[:, 3] / 2.0
+            arr = np.stack([arr[:, 0] - half_w, arr[:, 1] - half_h, arr[:, 0] + half_w, arr[:, 1] + half_h], axis=1)
+        return {
+            **record,
+            self.output: Boxes(
+                boxes=arr.tolist(),
+                labels=None if labels is None else list(labels),
+                scores=None if scores is None else list(scores),
+                canvas=(height, width),
+                classes=item_classes or None,
+            ),
+        }
+
+
+#: Container shapes :class:`ConvertFromBoxes` writes — the HF ``objects`` dict, or bare rows.
+BoxContainer = Literal["objects", "array"]
+
+
+@configurable(category="op", group="image")
+class ConvertFromBoxes:
+    """The INVERSE of :class:`ConvertToBoxes`: canonical ``Boxes`` back into a source's layout.
+
+    What a SINK round trip needs — annotations reviewed in the one canonical format go back
+    out in the shape the dataset speaks (an HF ``objects`` dict in COCO rows, a bare array,
+    normalized YOLO rows). ``format``/``normalized`` mean the same as on the forward op but
+    describe the OUTPUT here; ``container`` picks the wrapper: ``objects`` = a dict with
+    ``bbox`` + ``category`` (+ ``score`` when the item carries scores), ``array`` = rows only.
+
+    Args:
+        field: Record entry holding the canonical ``Boxes`` (the contract's target).
+        output: Entry the converted value lands under (the source's own key).
+        format: The OUTPUT row layout.
+        normalized: Write rows in [0, 1] of the item's canvas (else the record's image size).
+        container: The wrapper around the rows.
+    """
+
+    def __init__(
+        self,
+        field: str = "target",
+        output: str = "class",
+        format: BoxFormat = "xyxy",
+        normalized: bool = False,
+        container: BoxContainer = "objects",
+    ) -> None:
+        if format not in get_args(BoxFormat):
+            raise ValueError(f"ConvertFromBoxes format must be one of {get_args(BoxFormat)}, got {format!r}")
+        if container not in get_args(BoxContainer):
+            raise ValueError(f"ConvertFromBoxes container must be one of {get_args(BoxContainer)}, got {container!r}")
+        self.field = field
+        self.output = output
+        self.format: BoxFormat = format
+        self.normalized = bool(normalized)
+        self.container: BoxContainer = container
+
+    def __call__(self, record: Record) -> Record:
+        item = record.get(self.field)
+        if item is None or not hasattr(item, "boxes"):
+            raise ValueError(
+                f"ConvertFromBoxes: entry {self.field!r} holds no Boxes item "
+                f"(entries: {sorted(record)}) — point 'field' at the canonical boxes"
+            )
+        arr = np.asarray(item.boxes, dtype=float).reshape(-1, 4)
+        if self.format == "xywh":
+            arr = np.stack([arr[:, 0], arr[:, 1], arr[:, 2] - arr[:, 0], arr[:, 3] - arr[:, 1]], axis=1)
+        elif self.format == "cxcywh":
+            width, height = arr[:, 2] - arr[:, 0], arr[:, 3] - arr[:, 1]
+            arr = np.stack([arr[:, 0] + width / 2.0, arr[:, 1] + height / 2.0, width, height], axis=1)
+        if self.normalized:
+            frame = getattr(item, "canvas", None) or _record_image_hw(record)
+            arr = arr / np.array([frame[1], frame[0], frame[1], frame[0]], dtype=float)
+        rows = [[float(v) for v in row] for row in arr]
+        if self.container == "array":
+            return {**record, self.output: rows}
+        objects: Dict[str, Any] = {"bbox": rows}
+        if getattr(item, "labels", None) is not None:
+            objects["category"] = [int(v) if float(v).is_integer() else v for v in np.asarray(item.labels).tolist()]
+        if getattr(item, "scores", None) is not None:
+            objects["score"] = [float(v) for v in np.asarray(item.scores).tolist()]
+        return {**record, self.output: objects}
+
+
+def box_iou(a: Any, b: Any) -> np.ndarray:
+    """Pairwise IoU of two xyxy row sets — ``[len(a), len(b)]``. Pure arithmetic, no items."""
+    rows_a = np.asarray(a, dtype=float).reshape(-1, 4)
+    rows_b = np.asarray(b, dtype=float).reshape(-1, 4)
+    x0 = np.maximum(rows_a[:, None, 0], rows_b[None, :, 0])
+    y0 = np.maximum(rows_a[:, None, 1], rows_b[None, :, 1])
+    x1 = np.minimum(rows_a[:, None, 2], rows_b[None, :, 2])
+    y1 = np.minimum(rows_a[:, None, 3], rows_b[None, :, 3])
+    intersection = np.clip(x1 - x0, 0, None) * np.clip(y1 - y0, 0, None)
+    area_a = (rows_a[:, 2] - rows_a[:, 0]) * (rows_a[:, 3] - rows_a[:, 1])
+    area_b = (rows_b[:, 2] - rows_b[:, 0]) * (rows_b[:, 3] - rows_b[:, 1])
+    union = area_a[:, None] + area_b[None, :] - intersection
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.asarray(np.where(union > 0, intersection / union, 0.0))
+
+
+def match_boxes(
+    truth: Any,
+    truth_labels: Any,
+    predicted: Any,
+    predicted_labels: Any,
+    iou_threshold: float,
+    class_aware: bool = True,
+) -> Dict[str, Any]:
+    """GREEDY best-first matching of predictions to truth — the review pass's verdicts.
+
+    Pairs form in descending-IoU order, each side used at most once, only at/above
+    ``iou_threshold`` (and only within the same label when ``class_aware`` — a drone box
+    must not excuse a missed bird). Returns ``{"matched": [(truth_i, pred_i, iou)], "fn":
+    [unmatched truth indices], "fp": [unmatched prediction indices]}``.
+    """
+    truth_rows = np.asarray(truth, dtype=float).reshape(-1, 4)
+    predicted_rows = np.asarray(predicted, dtype=float).reshape(-1, 4)
+    if not len(truth_rows) or not len(predicted_rows):
+        return {"matched": [], "fn": list(range(len(truth_rows))), "fp": list(range(len(predicted_rows)))}
+    iou = box_iou(truth_rows, predicted_rows)
+    if class_aware:
+        labels_t = list(truth_labels or [])
+        labels_p = list(predicted_labels or [])
+        for ti in range(len(truth_rows)):
+            for pi in range(len(predicted_rows)):
+                lt = labels_t[ti] if ti < len(labels_t) else None
+                lp = labels_p[pi] if pi < len(labels_p) else None
+                if lt != lp:
+                    iou[ti, pi] = 0.0
+    matched: List[Any] = []
+    used_t: set = set()
+    used_p: set = set()
+    order = np.dstack(np.unravel_index(np.argsort(-iou, axis=None), iou.shape))[0]
+    for ti, pi in order:
+        score = float(iou[ti, pi])
+        if score < iou_threshold:
+            break
+        if ti in used_t or pi in used_p:
+            continue
+        matched.append((int(ti), int(pi), score))
+        used_t.add(int(ti))
+        used_p.add(int(pi))
+    return {
+        "matched": matched,
+        "fn": [i for i in range(len(truth_rows)) if i not in used_t],
+        "fp": [i for i in range(len(predicted_rows)) if i not in used_p],
+    }
+
+
+def size_bucket(box: Any, thresholds: "Tuple[float, float]" = (1024.0, 9216.0)) -> str:
+    """COCO's size vocabulary for one xyxy box: area < 32² = small, < 96² = medium, else large."""
+    x0, y0, x1, y1 = (float(v) for v in box)
+    area = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+    if area < float(thresholds[0]):
+        return "small"
+    if area < float(thresholds[1]):
+        return "medium"
+    return "large"
+
+
+def _record_image_hw(record: Record) -> "Tuple[int, int]":
+    """The record's image (H, W) — the boxes' reference frame and the normalized scale."""
+    for value in record.values():
+        arr = np.asarray(value) if not hasattr(value, "shape") else value
+        shape = tuple(getattr(arr, "shape", ()))
+        if len(shape) >= 2 and not hasattr(value, "boxes"):
+            if len(shape) == 3 and shape[0] in (1, 3) and shape[-1] not in (1, 3):
+                return int(shape[1]), int(shape[2])
+            return int(shape[0]), int(shape[1])
+    return (0, 0)
+
+
+@configurable(category="op", group="image")
+class Normalize(Transform):
+    """Per-channel standardization — ``(x / max_value - mean) / std`` on every image.
+
+    The normalization NODE a drawn pipeline needs between an image conversion and a model:
+    the same math as the albumentations transform of the same name (``(x - mean·max) /
+    (std·max)``), which drops into a YAML ``ops:`` list but has no canvas node. Defaults are
+    the ImageNet statistics every pretrained backbone in this workspace was trained under.
+    Output is the SAME item type in float32 — a uint8 ``Image`` comes out a float ``Image``.
+
+    Args:
+        mean: Per-channel mean over ``[0, 1]``-scaled pixels (ImageNet default).
+        std: Per-channel std over ``[0, 1]``-scaled pixels (ImageNet default).
+        max_value: The input's full-scale value (255 for uint8 images).
+        field: Apply only to this record key (still type-gated); blank = every handled value.
+    """
+
+    handles = (ImageItem,)
+
+    def __init__(
+        self,
+        mean: Tuple[float, float, float] = (0.485, 0.456, 0.406),
+        std: Tuple[float, float, float] = (0.229, 0.224, 0.225),
+        max_value: float = 255.0,
+        field: str = "",
+    ) -> None:
+        super().__init__(field=field or None)
+        self.mean = tuple(float(v) for v in mean)
+        self.std = tuple(float(v) for v in std)
+        self.max_value = float(max_value)
+
+    def get_params(self, record: Record) -> Dict[str, Any]:
+        return {"mean": self.mean, "std": self.std, "max_value": self.max_value}
+
+
+@Normalize.kernel(ImageItem)
+def _normalize_image(value: Any, params: Dict[str, Any]) -> Any:
+    array = np.asarray(value, dtype=np.float32)
+    mean = np.asarray(params["mean"], dtype=np.float32) * params["max_value"]
+    std = np.asarray(params["std"], dtype=np.float32) * params["max_value"]
+    if array.ndim == 2 and mean.size > 1:
+        raise ValueError(
+            "Normalize: a 2-D map has no channel axis for the per-channel mean — convert it "
+            "first (ConvertToImage) or pass single-element mean/std"
+        )
+    return with_data(value, (array - mean) / std)
+
+
+#: The channel layouts :class:`ConvertMode` produces — PIL's names for them.
+ImageMode = Literal["RGB", "RGBA", "L"]
+IMAGE_MODES: Tuple[str, ...] = get_args(ImageMode)
+
+
+@configurable(category="op", group="image")
+class ConvertMode(Transform):
+    """Force one channel layout — RGBA → RGB, grayscale → RGB, RGB → L — and change nothing else.
+
+    A mixed-mode dataset (RGB, RGBA and grayscale rows side by side) reaches a model with ragged
+    channel counts unless something forces one layout; this is that op. The conversion is PIL's,
+    and PIL holds ``uint8`` pixels only, so a non-``uint8`` image is REFUSED rather than passed
+    through untouched: run ``ConvertMode`` before :class:`~recordstream.ops.numpy.Scale` /
+    :class:`~recordstream.ops.numpy.ToType`, which make floats.
+
+    Args:
+        mode: The channel layout to produce (PIL's name for it).
+        field: The one entry to convert; blank = every Image, never a Mask.
+    """
+
+    handles = (ImageItem,)
+
+    def __init__(self, mode: ImageMode = "RGB", field: str = "") -> None:
+        super().__init__()
+        self.mode = mode
+        self.field = field
+
+    def __call__(self, record: Record) -> Record:
+        out = dict(record)
+        for key in entries_to_change("ConvertMode", record, self.field):
+            out[key] = self._convert(key, record[key])
+        return out
+
+    def _convert(self, key: str, value: Any) -> Any:
+        if hasattr(value, "convert") and not isinstance(value, np.ndarray):  # a PIL image
+            return value.convert(self.mode)
+        if isinstance(value, ImageItem) and getattr(value, "layout", "HWC") == "CHW":
+            raise ValueError(
+                f"ConvertMode: {key!r} is declared CHW — PIL reads channels-last pixels; "
+                "run ConvertMode before ToTensor"
+            )
+        array = item_data(value)
+        if not isinstance(array, np.ndarray):
+            raise ValueError(f"ConvertMode: {key!r} holds a {type(value).__name__}, not an image")
+        if array.dtype != np.uint8:
+            raise ValueError(
+                f"ConvertMode: {key!r} is {array.dtype} — PIL modes hold uint8 pixels; "
+                "run ConvertMode before Scale or ToType"
+            )
+        # A trailing singleton channel axis defeats `fromarray` — squeeze it to the 2-D form.
+        plane = array[..., 0] if (array.ndim == 3 and array.shape[2] == 1) else array
+        converted = np.array(Image.fromarray(plane).convert(self.mode))
+        return converted if value is array else with_data(value, converted)
+
+
+@configurable(category="op", group="image")
 class ConvertToImage(Transform):
     """An array-bearing field → an ``Image`` item.
 
@@ -828,6 +1234,9 @@ class ConvertToMask(Transform):
 __all__ = [
     "Colormap",
     "COLORMAPS",
+    "ConvertMode",
+    "ImageMode",
+    "IMAGE_MODES",
     "ConvertToImage",
     "ConvertToMask",
     "normalize_to_uint8",

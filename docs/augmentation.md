@@ -79,13 +79,15 @@ For a plain deterministic resize of the `Boxes` form there is `ResizeDetection`
 image (PIL or uint8 array) to a fixed `(height, width)` AND scales the `Boxes` boxes by the
 same factors in one coupled step, recording the new frame in `canvas`. Fixed-input-size
 detectors need it; detectors that resize internally simply omit it. Run it BEFORE any float
-conversion (e.g. before `ToTensor`):
+conversion (before `Scale` or `ToType`):
 
 ```yaml
 ops:
   - !class:recordstream.ops.target.CocoToTorchVisionDetection { bbox_format: xywh, label_offset: 1 }
   - !class:recordstream.ops.target.ResizeDetection { width: 256, height: 256 }
-  - !class:recordstream.ops.torch.ToTensor { mode: RGB, normalize: true }
+  - !class:recordstream.ops.image.ConvertMode { mode: RGB }
+  - !class:recordstream.ops.numpy.Scale {}
+  - !class:recordstream.ops.torch.ToTensor {}
 ```
 
 ### Boxes carry the frame they are stated in

@@ -5,7 +5,7 @@
 #
 # Publishes the `recordstream` distribution to PyPI when a version tag is pushed:
 #
-#   git tag v0.1.0a1 && git push origin v0.1.0a1
+#   git tag v0.1.0a2 && git push origin v0.1.0a2
 #
 # Uses PyPI Trusted Publishing (OIDC, no stored API token). One-time setup on
 # https://pypi.org/manage/account/publishing/ — add a "pending publisher":
@@ -17,7 +17,7 @@
 #
 # Publish ORDER: loggair -> confluid -> liquifai are all on PyPI already, and
 # this package declares floors on all three, so it publishes after them. The
-# visual-editor package declares `recordstream>=0.1.0a1`, so it publishes after
+# visual-editor package declares `recordstream>=0.1.0a2`, so it publishes after
 # THIS one.
 # =========================================================================
 name: Release to PyPI
@@ -31,9 +31,9 @@ jobs:
     name: Build & verify distribution
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Set up Python 3.12
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: "3.12"
     - name: Install packaging toolchain
@@ -78,9 +78,17 @@ jobs:
         assert float(out[0]["image"].max()) == 1.0
         assert out[0]["class"].value == "a"
         assert len(stream) == 1 and stream[0]["class"].value == "a"   # map-style protocol
+        # `__version__` is the RELEASED number: read from the wheel's own metadata, which the
+        # tag guard above matched to pyproject.toml. Missing or typed-in-and-stale fails here,
+        # before anything reaches PyPI.
+        import os
+        import recordstream
+
+        tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+        assert recordstream.__version__ == version("recordstream") == tag, (recordstream.__version__, version("recordstream"), tag)
         print("wheel smoke-test OK, version:", version("recordstream"))
         EOF
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v7
       with:
         name: dist
         path: dist/
@@ -93,7 +101,7 @@ jobs:
     permissions:
       id-token: write  # required for PyPI Trusted Publishing (OIDC)
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         name: dist
         path: dist/

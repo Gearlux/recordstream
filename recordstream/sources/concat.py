@@ -1,7 +1,7 @@
 """``ConcatSource`` — several indexable sources presented end to end as one."""
 
 import bisect
-from typing import Any, Iterator, List, Optional
+from typing import Any, Collection, Iterator, List, Optional
 
 from confluid import configurable
 
@@ -66,6 +66,20 @@ class ConcatSource:
         j = bisect.bisect_right(self.offsets, index)
         start = self.offsets[j - 1] if j > 0 else 0
         return _pass_through(self.sources[j][index - start])
+
+    def project(self, keys: Collection[str]) -> Iterator[Record]:
+        """Yield every sub-source's records carrying only ``keys``, in sub-source order.
+
+        Implements :class:`recordstream.projection.SupportsProjection` by chaining each part's
+        OWN projection, so a concatenation of sources that project cheaply projects cheaply —
+        and a part that does not keeps the ordinary fallback, per part. Concatenating is all
+        this class does; without forwarding it turned every sub-source's cheap walk into a
+        full read. Partial: a generator.
+        """
+        from recordstream.projection import project
+
+        for src in self.sources:
+            yield from project(src, keys)
 
     def __iter__(self) -> Iterator[Record]:
         for src in self.sources:

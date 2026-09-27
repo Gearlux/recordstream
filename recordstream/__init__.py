@@ -10,6 +10,9 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 """
 
 # --- shared infrastructure -----------------------------------------------------------------
+from importlib.metadata import PackageNotFoundError, version
+
+from recordstream.algorithm import Algorithm, AlgorithmSlot, AlgorithmSpec, Input, Output, Param, algorithm_spec
 from recordstream.batch import (
     batch_boxes,
     batch_metadata,
@@ -42,6 +45,7 @@ from recordstream.core import (
 # --- the record data model + transforms + item codec ----------------------------------------
 from recordstream.dispatch import dispatch, register_kernel, registered_kernels
 from recordstream.flow import FlowGraph
+from recordstream.formats import FORMAT_GROUP, FileFormat, file_formats, sibling
 from recordstream.io import (
     EncodedField,
     EncodedItem,
@@ -108,6 +112,13 @@ from recordstream.transform import FunctionTransform, Pipeline, Transform, as_tr
 from recordstream.uri import SupportsDatasetIdentity, dataset_uri, dataset_uris, dataset_url
 from recordstream.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
 
+try:
+    # Single source of truth: the installed distribution's metadata, i.e. pyproject.toml's
+    # `version` (the distribution is `recordstream`). Never type the number in here as well.
+    __version__ = version("recordstream")
+except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
+    __version__ = "0.0.0.dev0"
+
 __all__ = [
     # ---- record data model ----
     "Record",
@@ -132,6 +143,14 @@ __all__ = [
     "Pipeline",
     "FunctionTransform",
     "as_transform",
+    # ---- algorithms: declared params / inputs / outputs, the op derived ----
+    "Algorithm",
+    "Param",
+    "Input",
+    "Output",
+    "AlgorithmSlot",
+    "AlgorithmSpec",
+    "algorithm_spec",
     "dispatch",
     "register_kernel",
     "registered_kernels",
@@ -186,6 +205,11 @@ __all__ = [
     "RangeSource",
     "ConcatSource",
     "SplitName",
+    # ---- file formats ----
+    "FORMAT_GROUP",
+    "FileFormat",
+    "file_formats",
+    "sibling",
     # ---- dataset identity ----
     "SupportsDatasetIdentity",
     "dataset_uri",

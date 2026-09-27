@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -8,55 +8,39 @@ from recordstream.items import NDArrayItem, Record, item_data
 from recordstream.transform import Transform
 
 
-def to_tensor(img: Any, normalize: bool = True, mode: Optional[str] = None) -> torch.Tensor:
-    """Convert a PIL image / NumPy array to a CHW ``torch.Tensor``.
-
-    ``mode`` (e.g. ``"RGB"``, forcing 3 channels) coerces a PIL payload directly — and a
-    ``uint8`` ARRAY payload through a PIL round-trip, because a decoding source may hand over
-    the already-arrayed pixels: a mixed-mode dataset (RGB + RGBA + grayscale rows) then reaches
-    the model with ragged channel counts unless the coercion applies to arrays too. (Found the
-    hard way: cppe-5 ships 3-, 4- and 1-channel images, and a ``mode="RGB"`` that silently
-    skipped arrays crashed torchvision's normalize mid-epoch with a channel mismatch.) A
-    non-``uint8`` array with ``mode`` set is left as-is — PIL cannot represent it faithfully.
+def to_tensor(img: Any) -> torch.Tensor:
+    """Convert a PIL image / NumPy array to a CHW ``torch.Tensor`` of the SAME element type.
 
     An ``[H, W, C]`` array is transposed to ``[C, H, W]`` (a 2-D array gets a leading channel
-    axis). With ``normalize`` an integer / 0-255-float payload is scaled into ``[0, 1]``.
+    axis); a PIL image is read as its array first. Nothing else happens: ``uint8`` pixels stay
+    ``uint8`` ``0..255``. The value changes are ops of their own —
+    :class:`~recordstream.ops.image.ConvertMode` (channel layout), :class:`~recordstream.ops.numpy.Scale`
+    (range) and :class:`~recordstream.ops.numpy.ToType` (element type) — because a conversion that
+    also rescaled had to GUESS the input's range, and guessed an already-standardized image into
+    ``[-0.008, 0.010]``.
     """
     if hasattr(img, "convert"):
-        if mode is not None:
-            img = img.convert(mode)
         img = np.array(img)
-    elif mode is not None and isinstance(img, np.ndarray) and img.dtype == np.uint8:
-        from PIL import Image as PILImage
-
-        # A trailing singleton channel axis defeats `fromarray` — squeeze it to the 2-D form.
-        arr = img[..., 0] if (img.ndim == 3 and img.shape[2] == 1) else img
-        img = np.array(PILImage.fromarray(arr).convert(mode))
-
     if isinstance(img, np.ndarray):
         if img.ndim == 3:
             img = img.transpose(2, 0, 1)
         elif img.ndim == 2:
             img = img[np.newaxis, :]
-        tensor = torch.from_numpy(img)
-    else:
-        tensor = torch.as_tensor(img)
-
-    if normalize and tensor.dtype == torch.uint8:
-        tensor = tensor.float() / 255.0
-    elif normalize and tensor.max() > 1.0:
-        tensor = tensor / 255.0
-    return tensor
+        return torch.from_numpy(img)
+    return torch.as_tensor(img)
 
 
 @configurable(category="op", group="torch")
 class ToTensor(Transform):
-    """An array-bearing field → a LIVE CHW-float ``torch.Tensor`` record value.
+    """An array-bearing field → a LIVE CHW ``torch.Tensor`` record value, same element type.
 
     Reads the payload of an array-bearing field (blank ``field`` picks the first array/PIL-bearing
     item — typically the :class:`~recordstream.Image` a :class:`~recordstream.ops.image.ConvertToImage`
-    produced), runs the HWC→CHW transpose + ``normalize`` conversion (:func:`to_tensor`), and writes
-    the resulting ``torch.Tensor`` back AS-IS. By default it REPLACES the resolved field in place
+    produced), runs the HWC→CHW conversion (:func:`to_tensor`) and writes the resulting
+    ``torch.Tensor`` back AS-IS. It CONVERTS and nothing else: ``uint8`` pixels arrive as a
+    ``uint8`` tensor. Put :class:`~recordstream.ops.image.ConvertMode`,
+    :class:`~recordstream.ops.numpy.Scale` or :class:`~recordstream.ops.numpy.ToType` before it for
+    a channel layout, a value range or an element type. By default it REPLACES the resolved field in place
     (``output`` blank); set ``output`` to write a NEW key instead. Any other key passes
     through untouched.
 
@@ -67,8 +51,6 @@ class ToTensor(Transform):
     ``NDArrayItem`` coerces through ``np.asarray`` and cannot hold a live tensor.
 
     Args:
-        normalize: When ``True`` (default), scale integer pixel inputs into the ``[0, 1]`` float range.
-        mode: Optional PIL mode to convert a PIL payload to (e.g. ``"RGB"`` forces 3 channels); ``None`` = as-is.
         field: Name of the source field to tensorize; blank (default) picks the first array/PIL-bearing item.
         output: Key the tensor is written to; blank (default) replaces the source field in place.
     """
@@ -77,16 +59,8 @@ class ToTensor(Transform):
     consumes = (NDArrayItem,)
     produces = (torch.Tensor,)
 
-    def __init__(
-        self,
-        normalize: bool = True,
-        mode: Optional[str] = None,
-        field: str = "",
-        output: str = "",
-    ) -> None:
+    def __init__(self, field: str = "", output: str = "") -> None:
         super().__init__()
-        self.normalize = bool(normalize)
-        self.mode = mode
         self.field = field
         self.output = output
 
@@ -105,7 +79,7 @@ class ToTensor(Transform):
     def __call__(self, record: Record) -> Record:
         key = self._find_field(record)
         data = item_data(record[key])
-        tensor = to_tensor(data, self.normalize, self.mode)
+        tensor = to_tensor(data)
         out_key = self.output or key
         return {**record, out_key: tensor}
 

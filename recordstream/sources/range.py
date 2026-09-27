@@ -1,6 +1,6 @@
 """``RangeSource`` — a contiguous ``[start:stop)`` index slice over an indexable source."""
 
-from typing import Any, Iterator, List, Optional
+from typing import Any, Collection, Iterator, List, Optional
 
 from confluid import configurable
 from loggair import get_logger
@@ -58,6 +58,25 @@ class RangeSource:
             self._indices = list(range(s, e))
             logger.debug("RangeSource: size=%d source_size=%d", len(self._indices), n)
         return self._indices
+
+    def project(self, keys: Collection[str]) -> Iterator[Record]:
+        """Yield this window's records carrying only ``keys`` — through the SOURCE's own walk.
+
+        Implements :class:`recordstream.projection.SupportsProjection`. Slicing is all this
+        class does, so it has no reason to make a key-restricted walk more expensive than the
+        one it wraps — and without this it did exactly that, because
+        :func:`~recordstream.projection.project` takes a source's cheap path only when the
+        object handed to it has one. Measured over a source whose records carry 15 MB of
+        samples: 0.006 s per record straight from it, 0.423 s through this wrapper, for the
+        same records and the same keys.
+
+        Records BEFORE ``start`` are still walked — a projected walk is an iterator, not an
+        index — but at the projected cost rather than a full read, and the walk stops at
+        ``stop``. Partial: a generator.
+        """
+        from recordstream.projection import project_indices
+
+        yield from project_indices(self.source, keys, self.indices)
 
     def __iter__(self) -> Iterator[Record]:
         for idx in self.indices:

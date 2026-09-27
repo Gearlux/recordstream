@@ -1,13 +1,14 @@
 import operator
 import os
 import re
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union, get_args
 
 import numpy as np
 from confluid import configurable
 from loggair import get_logger
 
-from recordstream.items import Boxes, Mask, NDArrayItem, Record, item_data
+from recordstream._compat import is_torch_tensor
+from recordstream.items import Boxes, Image, Mask, NDArrayItem, Record, item_data, with_data
 from recordstream.transform import Transform
 
 logger = get_logger(__name__)
@@ -310,12 +311,177 @@ class ConnectedComponents(Transform):
         return {**record, self.output: Boxes(boxes=list(boxes), canvas=(mask.shape[0], mask.shape[1]))}
 
 
+def entries_to_change(op_name: str, record: Record, field: Optional[str]) -> List[str]:
+    """The record keys an array op changes — ONE rule for ``Scale`` / ``ToType`` / ``ConvertMode``.
+
+    A blank ``field`` means every :class:`~recordstream.Image`, and deliberately NOTHING else: a
+    ``Mask`` beside it holds class ids that must stay integers, and scaling one silently turns
+    every id into a fraction. A named ``field`` is the explicit way to reach any other entry — a
+    mask, a spectrogram, a signal's payload.
+    """
+    if field:
+        if field not in record:
+            raise ValueError(f"{op_name}: field {field!r} not in record (keys: {list(record)})")
+        return [field]
+    return [key for key, value in record.items() if isinstance(value, Image)]
+
+
+def _payload(op_name: str, key: str, value: Any) -> np.ndarray:
+    """The array an entry carries, or a refusal naming what it carries instead."""
+    data = item_data(value)
+    if isinstance(data, np.ndarray):
+        return data
+    if is_torch_tensor(data):
+        raise ValueError(f"{op_name}: {key!r} is already a torch tensor — run {op_name} before ToTensor")
+    raise ValueError(f"{op_name}: {key!r} holds a {type(value).__name__}, not an array")
+
+
+def _replace(value: Any, payload: np.ndarray, new: np.ndarray) -> Any:
+    """``new`` in ``value``'s place: a plain array stays plain, an item keeps its type and attrs."""
+    return new if value is payload else with_data(value, new)
+
+
+@configurable(category="op", group="numpy")
+class Scale(Transform):
+    """Map one value range onto another — ``[source_min, source_max]`` → ``[target_min, target_max]``.
+
+    Changes the RANGE and nothing else: no clipping (a value outside the source range lands
+    outside the target range), no channel change. The result is floating point — ``float32`` for
+    an integer input, the input's own float type otherwise — because a range like ``0..1`` cannot
+    be held in an integer. To change the element type without touching the values, use
+    :class:`ToType`.
+
+    A blank source bound is the integer type's full range, so a bare ``Scale()`` takes ``uint8``
+    pixels to ``0..1``. A 12-bit sensor stored as ``uint16`` names its own range
+    (``source_max: 4095``) — left blank it would scale by ``65535`` and read dark. A float has no
+    full range, so a blank bound on a float payload is REFUSED rather than guessed: guessing
+    ("anything above 1 must be 0..255") is exactly what squashed standardized images to ~0.
+
+    Args:
+        source_min: The input value that maps to ``target_min``; blank = the integer type's minimum.
+        source_max: The input value that maps to ``target_max``; blank = the integer type's maximum.
+        target_min: The output value ``source_min`` maps to.
+        target_max: The output value ``source_max`` maps to.
+        field: The one entry to scale (any array); blank = every Image, never a Mask.
+    """
+
+    handles = (NDArrayItem,)
+
+    def __init__(
+        self,
+        source_min: Optional[float] = None,
+        source_max: Optional[float] = None,
+        target_min: float = 0.0,
+        target_max: float = 1.0,
+        field: str = "",
+    ) -> None:
+        super().__init__()
+        self.source_min = source_min
+        self.source_max = source_max
+        self.target_min = target_min
+        self.target_max = target_max
+        self.field = field
+
+    def __call__(self, record: Record) -> Record:
+        out = dict(record)
+        for key in entries_to_change("Scale", record, self.field):
+            payload = _payload("Scale", key, record[key])
+            out[key] = _replace(record[key], payload, self._scale(key, payload))
+        return out
+
+    def _scale(self, key: str, array: np.ndarray) -> np.ndarray:
+        if np.iscomplexobj(array):
+            raise ValueError(
+                f"Scale: {key!r} is complex — complex values have no order to take a range over; "
+                "take the magnitude or the real part first"
+            )
+        low, high = self.source_min, self.source_max
+        if low is None or high is None:
+            if not np.issubdtype(array.dtype, np.integer):
+                raise ValueError(
+                    f"Scale: {key!r} is {array.dtype} — only an integer type has a full range to default "
+                    "to; give source_min and source_max"
+                )
+            info = np.iinfo(array.dtype)
+            low = info.min if low is None else low
+            high = info.max if high is None else high
+        low, high = float(low), float(high)
+        if low == high:
+            raise ValueError(f"Scale: source_min and source_max are both {low} — an empty range cannot be mapped")
+        out_type = array.dtype if np.issubdtype(array.dtype, np.floating) else np.dtype(np.float32)
+        # Divide by the source span BEFORE multiplying by the target one: for the default 0..1
+        # target that is exactly ``x / 255`` for uint8 — bit-identical to the rescale ToTensor used to do.
+        span = float(self.target_max) - float(self.target_min)
+        scaled = (array.astype(out_type) - low) / (high - low) * span + float(self.target_min)
+        return np.asarray(scaled, dtype=out_type)
+
+
+#: The element types :class:`ToType` casts to — numpy's own names, one spelling per type
+#: (``float64``, never also ``double``). Closed so both GUIs render a dropdown from it.
+ElementType = Literal["float16", "float32", "float64", "complex64", "complex128", "uint8", "int16", "int32", "int64"]
+ELEMENT_TYPES: Tuple[str, ...] = get_args(ElementType)
+
+
+@configurable(category="op", group="numpy")
+class ToType(Transform):
+    """Cast to a named element type — and nothing else: the values are not rescaled.
+
+    ``uint8`` pixels cast to ``float64`` stay ``0..255``; use :class:`Scale` to change the range.
+    Two casts numpy performs silently and wrongly are REFUSED instead: complex → real (numpy drops
+    the imaginary part) and a value an integer type cannot hold (numpy wraps it round — ``300``
+    becomes ``44`` as ``uint8``), NaN and infinity included. A fraction cast to an integer type is
+    truncated toward zero, as numpy does (``2.7`` → ``2``).
+
+    Args:
+        dtype: The element type to cast to.
+        field: The one entry to cast (any array); blank = every Image, never a Mask.
+    """
+
+    handles = (NDArrayItem,)
+
+    def __init__(self, dtype: ElementType = "float32", field: str = "") -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.field = field
+
+    def __call__(self, record: Record) -> Record:
+        out = dict(record)
+        for key in entries_to_change("ToType", record, self.field):
+            payload = _payload("ToType", key, record[key])
+            out[key] = _replace(record[key], payload, self._cast(key, payload))
+        return out
+
+    def _cast(self, key: str, array: np.ndarray) -> np.ndarray:
+        target = np.dtype(self.dtype)
+        if np.iscomplexobj(array) and target.kind != "c":
+            raise ValueError(
+                f"ToType: {key!r} is complex; {self.dtype} would drop the imaginary part — "
+                "take the magnitude or the real part first"
+            )
+        if target.kind in "iu" and array.size:
+            if np.issubdtype(array.dtype, np.floating) and not np.isfinite(array).all():
+                raise ValueError(f"ToType: {key!r} holds NaN or infinity, which {self.dtype} cannot represent")
+            info = np.iinfo(target)
+            low, high = array.min(), array.max()
+            if low < info.min or high > info.max:
+                raise ValueError(
+                    f"ToType: {key!r} holds {low} .. {high}, which {self.dtype} ({info.min} .. {info.max}) "
+                    "cannot hold — Scale it into that range first"
+                )
+        return array.astype(target)
+
+
 __all__ = [
     "resolve_expression",
     "threshold_array",
     "connected_component_boxes",
+    "entries_to_change",
+    "ElementType",
+    "ELEMENT_TYPES",
     "LowComparison",
     "HighComparison",
     "Threshold",
     "ConnectedComponents",
+    "Scale",
+    "ToType",
 ]

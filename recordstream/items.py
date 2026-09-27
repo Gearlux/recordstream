@@ -152,6 +152,26 @@ class NDArrayItem(np.ndarray):
         for name in getattr(type(self), "_item_attrs", ()):
             setattr(self, name, getattr(obj, name, getattr(type(self), name, None)))
 
+    # Pickling. numpy's own reduce carries ONLY the array: unpickling rebuilds it without
+    # ``__new__``, and ``__array_finalize__`` sees no source object, so every declared attribute
+    # silently fell back to its class default — a CHW ``Image`` crossing a spawn worker
+    # (``Stream(...).parallel(n)``, ``FlowGraph.parallel``, a DataLoader worker) arrived as HWC.
+    # The declared attributes ride next to numpy's state instead. Storage never takes this path:
+    # it goes through the item codec (``recordstream.io``). A subclass overriding either method
+    # MUST extend these, not replace them.
+    def __reduce__(self) -> Tuple[Any, Any, Tuple[Any, Dict[str, Any]]]:
+        reconstruct, args, array_state = cast(Tuple[Any, Any, Any], super().__reduce__())
+        attrs = {name: getattr(self, name, None) for name in type(self)._item_attrs}
+        return reconstruct, args, (array_state, attrs)
+
+    # The override is deliberately narrower than numpy's: the state is the pair THIS class's
+    # ``__reduce__`` produced, never numpy's bare tuple.
+    def __setstate__(self, state: Tuple[Any, Dict[str, Any]]) -> None:  # type: ignore[override]
+        array_state, attrs = state
+        super().__setstate__(array_state)
+        for name, value in attrs.items():
+            setattr(self, name, value)
+
 
 @register_item
 class Image(NDArrayItem):
@@ -189,6 +209,10 @@ class Boxes:
             so a geometric transform (flip / resize) has a self-contained frame.
         extras: Auxiliary PER-BOX parallel arrays and box-set measurements keyed by name —
             item-scoped metadata that travels WITH the boxes it describes.
+        classes: Optional class-NAME vocabulary the integer ``labels`` index into — the same
+            convention as ``Label.classes``: the vocabulary travels WITH the encoded data, so
+            an annotation surface can offer the classes up front and a viewer can name a box
+            without a side channel.
     """
 
     boxes: Any = field(default_factory=list)
@@ -196,6 +220,7 @@ class Boxes:
     scores: Optional[Any] = None
     canvas: Optional[Tuple[int, int]] = None
     extras: Dict[str, Any] = field(default_factory=dict)
+    classes: Optional[List[str]] = None
 
 
 def is_class_id(value: Any) -> bool:
