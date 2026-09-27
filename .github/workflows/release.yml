@@ -5,7 +5,7 @@
 #
 # Publishes the `recordstream` distribution to PyPI when a version tag is pushed:
 #
-#   git tag v0.1.0a1 && git push origin v0.1.0a1
+#   git tag v0.1.0a2 && git push origin v0.1.0a2
 #
 # Uses PyPI Trusted Publishing (OIDC, no stored API token). One-time setup on
 # https://pypi.org/manage/account/publishing/ — add a "pending publisher":
@@ -17,7 +17,7 @@
 #
 # Publish ORDER: loggair -> confluid -> liquifai are all on PyPI already, and
 # this package declares floors on all three, so it publishes after them. The
-# visual-editor package declares `recordstream>=0.1.0a1`, so it publishes after
+# visual-editor package declares `recordstream>=0.1.0a2`, so it publishes after
 # THIS one.
 # =========================================================================
 name: Release to PyPI

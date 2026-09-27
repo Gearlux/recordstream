@@ -258,5 +258,5 @@ class TestResizeDetection:
         from recordstream.ops.target import ResizeDetection
 
         record = {"image": Image(np.zeros((8, 8, 3), dtype=np.float32))}
-        with pytest.raises(TypeError, match="before ToTensor"):
+        with pytest.raises(TypeError, match="before Scale or ToType"):
             ResizeDetection(width=4, height=4)(record)

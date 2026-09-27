@@ -186,30 +186,32 @@ construction, so *"which op decided this branch?"* always has an answer.
 
 `RecordContract` states what each RECORD carries. A classification pipeline usually has
 something to say about the DATASET too — the ordered class list a consumer needs to show a
-label as a name rather than an integer. `ClassNamesOutput` is that statement, and it READS
-what it is given rather than deriving anything:
+label as a name rather than an integer. `ClassNamesOutput` is that statement. It holds one
+thing, the list, and derives nothing:
 
 ```yaml
-# the source knows its own — a HuggingFace ClassLabel carries its names (metadata, no rows read)
-classes: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist, split: test}
 class_names_output: !class:recordstream.ops.contract.ClassNamesOutput
-  classes: !ref:classes                       # -> ['0', '1', … '9']
+  names: [cat, dog]                           # in class-id order
 ```
 
-Three ways to answer it, each chosen explicitly:
+The list gets there one of three ways, each chosen explicitly:
 
 | route | how |
 |---|---|
-| state them | `names: [cat, dog]` |
-| connect something that knows them | `classes: !ref:<a source or Stream>` |
-| connect a walker | `classes: !ref:<a ClassNamesScan>` |
+| state them | type `names: [cat, dog]` |
+| take them from a source that knows them | wire the source's `class_names` output into `names` — `HuggingFaceSource` reads its `ClassLabel` names from the dataset metadata, no rows read |
+| take them from a walker | wire a `ClassNamesScan`'s `class_names` output into `names` |
 
 `ClassNamesScan` derives a vocabulary by walking a source's label column — for a source whose
 format does not describe one (a folder reader, a CSV):
 
-```yaml
-scan: !class:recordstream.ops.contract.ClassNamesScan {source: !ref:pipeline}
-class_names_output: !class:recordstream.ops.contract.ClassNamesOutput {classes: !ref:scan}
+```python
+from recordstream import Label
+from recordstream.ops.contract import ClassNamesOutput, ClassNamesScan
+
+records = [{"class": Label(value="dog")}, {"class": Label(value="cat")}, {"class": Label(value="dog")}]
+output = ClassNamesOutput(names=ClassNamesScan(source=records).class_names)
+output.class_names  # ['cat', 'dog']
 ```
 
 The walk goes through [key projection](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md)
@@ -219,9 +221,10 @@ only for the label column, and it reports sorted-unique stringified values — t
 records, so it happens because someone asked for it, never as a silent fallback inside
 `ClassNamesOutput`.
 
-Note that the consumer holds the **whole object** and reads the attribute itself. That is the
-shape a config document can carry — an attribute reference (`!ref:classes.class_names`) is
-refused, and a selector parameter on the consumer is its replacement.
+**In a document, a wire is a literal.** A config document cannot reference one object's
+attribute from another — `names: !ref:scan.class_names` is refused when the document loads — so
+in a document the vocabulary is always the list itself. A visual editor that lets you draw the
+wire evaluates it when it saves the graph and writes the resulting list into `names`.
 
 ## 📚 Documentation
 
@@ -234,7 +237,7 @@ refused, and a selector parameter on the consumer is its replacement.
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
-| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), array introspection helpers |
+| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
 | [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
 | [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
 | [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
