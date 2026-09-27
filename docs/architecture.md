@@ -78,7 +78,7 @@ Collapse to ONE carrier and ONE op engine:
 - **`Pipeline(transforms=[...])`** (`recordstream/transform.py`) is THE sequential composer; every
   composing op routes inner ops through `_apply_op`, so bare library transforms nest anywhere a
   native op does.
-- **Tensors are plain values.** `ToTensor` writes a LIVE CHW-float `torch.Tensor` under its key —
+- **Tensors are plain values.** `ToTensor` writes a LIVE CHW `torch.Tensor` (the payload's own element type) under its key —
   a record value can be anything (`collate_records` stacks tensors natively, storage converts via
   `to_numpy` on write, a downstream tv2 op transforms them as-is). An `Image` itself cannot hold
   a tensor (`NDArrayItem.__new__` runs `np.asarray`); a typed tensor ITEM base is a tracked
@@ -1684,3 +1684,50 @@ list(project(stream, ("input",)))     # every capture read; the marker said the 
 cheap path is refused. What must hold: a placeholder is marked on the value and counts as an
 absence, a record the cheap chain drops is not re-run (dropping is a decision about the file, not
 the keys), and a cheap chain that cannot finish yields to the real one instead of to an error.
+
+## 20. `ToTensor` converts; the channel layout, the value range and the element type are ops of their own (2026-09-27)
+
+**Context.** `ToTensor` used to do four jobs: transpose to CHW, turn an array into a tensor, force
+a channel layout (`mode`), and rescale (`normalize`, on by default). The rescale could not know the
+input's range, so it guessed: `uint8` ÷ 255, and any other value whose maximum was above 1 also
+÷ 255. The guess is wrong for data that is already scaled — an ImageNet-standardized image
+(`-2.12 .. 2.64`) came out `-0.008 .. 0.010`, a linear-power spectrogram (`0.001 .. 800`) came out
+`0 .. 3.14`, and nothing raised. The workspace's own configs had learned to write
+`normalize: false` after a standardization, which is the symptom of a default that is wrong.
+
+**Decision.** `ToTensor` converts an array to a CHW tensor of the same element type and nothing
+else. Each value change is a separately named, separately placed op, run on numpy before it:
+`ConvertMode` (channel layout, through PIL), `Scale` (value range, `[source_min, source_max]` →
+`[target_min, target_max]`) and `ToType` (element type, values unchanged). Each refuses what it
+cannot do honestly instead of guessing: `Scale` with a blank bound on a float (a float has no full
+range), `ToType` complex → real and values an integer type cannot hold, `ConvertMode` anything but
+`uint8`.
+
+Two choices inside that are deliberate:
+
+- **A blank `field` means every `Image` and nothing else.** A `Mask` beside it holds class ids;
+  scaling one turns every id into a fraction and a later integer cast turns them all into zero,
+  silently. Reaching a mask, a spectrogram or a signal's payload takes an explicit `field`.
+- **`Scale`'s blank source range is the integer TYPE's range**, not the data's. The data's own
+  min/max would change the brightness per image — a different normalization for every record.
+  The cost is the con case: a 12-bit sensor stored as `uint16` must name `source_max: 4095`.
+
+**Consequences.** A chain now says what it does to its values in its own ops list, the same
+spelling for torch and channels-last engines (a Keras chain omits `ToTensor` and keeps `Scale`,
+where it used to lose the rescale along with the transpose). A chain that relied on the old
+default gets a `uint8` tensor, which a model refuses loudly (measured on a `Conv2d`: `Input type (unsigned char) and bias type (float) should be the same`) rather
+than training on wrong values. A saved canvas holding a `ToTensor` node loses its first two widgets
+(`normalize`, `mode`), so its remaining widget values read shifted; no shipped canvas holds one.
+
+**Example.**
+
+```yaml
+ops:
+  - !class:recordstream.ops.image.ConvertMode {mode: RGB}   # RGBA / grayscale rows -> 3 channels
+  - !class:recordstream.ops.numpy.Scale {}                  # uint8 0..255 -> float32 0..1
+  - !class:recordstream.ops.torch.ToTensor {}               # HWC -> CHW, nothing else
+```
+
+**What you may change.** The element types `ToType` offers, the modes `ConvertMode` offers, new
+value ops of the same shape. What must hold: `ToTensor` changes no value, and no op guesses an
+input's range from its values.

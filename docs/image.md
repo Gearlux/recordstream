@@ -29,6 +29,40 @@ u8 = normalize_to_uint8(arr, vmin=-80.0, vmax=0.0)    # fixed dB window across a
 
 `record_to_image(record, ...)` renders a record's first array-bearing (2-D / 3-D) value the same way — the ad-hoc whole-record preview for viewer tooling. Pillow is a runtime dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
 
+## Channel layout, range and type (`ConvertMode`, `Scale`, `ToType`)
+
+`ToTensor` converts an array to a CHW tensor of the **same** element type and does nothing else —
+`uint8` pixels arrive as a `uint8` tensor. Each value change is an op of its own, placed before it:
+
+| op | changes | example |
+|---|---|---|
+| `recordstream.ops.image.ConvertMode` | the channel layout (PIL's `RGB` / `RGBA` / `L`) | RGBA → RGB, grayscale → RGB |
+| `recordstream.ops.numpy.Scale` | the value range, `[source_min, source_max]` → `[target_min, target_max]` | `uint8` `0..255` → `0..1` |
+| `recordstream.ops.numpy.ToType` | the element type, values unchanged | `uint8` → `float64` (still `0..255`) |
+
+```yaml
+ops:
+  - !class:recordstream.ops.image.ConvertMode {mode: RGB}   # a dataset mixing RGB, RGBA and grayscale rows
+  - !class:recordstream.ops.numpy.Scale {}                  # uint8 0..255 -> float32 0..1
+  - !class:recordstream.ops.torch.ToTensor {}               # HWC -> CHW, float32 stays float32
+```
+
+- **`Scale`** defaults a blank source bound to the integer type's full range, so a bare `Scale {}`
+  takes `uint8` to `0..1`. A 12-bit sensor stored as `uint16` names its own range
+  (`Scale {source_max: 4095}`) — left blank it would divide by `65535` and read dark. A float has
+  no full range, so a blank bound on a float is refused, never guessed. Nothing is clipped, and the
+  result is floating point (`float32` for an integer input).
+- **`ToType {dtype: ...}`** casts to one of `float16`, `float32`, `float64`, `complex64`,
+  `complex128`, `uint8`, `int16`, `int32`, `int64`. It refuses the two casts numpy would get
+  silently wrong — complex → real (drops the imaginary part) and a value an integer type cannot
+  hold (wraps round) — and truncates a fraction toward zero, as numpy does.
+- **`ConvertMode`** goes through PIL, which holds `uint8` pixels only, so it runs before `Scale`
+  or `ToType`; a float image is refused with that instruction.
+
+All three change every `Image` in the record when `field` is blank — never a `Mask`, whose class
+ids must stay integers — and exactly the named entry when `field` is set (a mask, a spectrogram,
+a signal's payload).
+
 ## Per-channel standardization (`Normalize`)
 
 The normalization node between an image conversion and a model — the same math as the
@@ -39,7 +73,7 @@ the ImageNet statistics as defaults:
 ops:
   - !class:recordstream.ops.image.ConvertToImage {width: 224, height: 224}
   - !class:recordstream.ops.image.Normalize {}      # ImageNet mean/std over uint8 input
-  - !class:recordstream.ops.torch.ToTensor {normalize: false}
+  - !class:recordstream.ops.torch.ToTensor {}
 ```
 
 A bare `!class:albumentations.Normalize` in a YAML `ops:` list computes the identical

@@ -3,7 +3,7 @@
 Pins the native transforms that build a classification pipeline's model INPUT array and its
 encoded TARGET ``Label`` on plain record dicts:
 
-* :class:`recordstream.ops.torch.ToTensor` — array-bearing key → a LIVE CHW-float ``torch.Tensor``
+* :class:`recordstream.ops.torch.ToTensor` — array-bearing key → a LIVE CHW ``torch.Tensor`` of the same element type
   (a plain record value);
 * :class:`recordstream.ops.target.EncodeTarget` / ``DecodeTarget`` — class-name ↔ class-id ``Label``.
 
@@ -18,6 +18,7 @@ from confluid.registry import get_registry, resolve_class
 
 from recordstream import Image, Label, Mask, collate_records, item_data
 from recordstream.ops.image import ConvertToImage
+from recordstream.ops.numpy import Scale
 from recordstream.ops.target import DecodeTarget, EncodeTarget
 from recordstream.ops.torch import ToTensor, to_tensor
 
@@ -33,60 +34,53 @@ def _hwc_uint8() -> np.ndarray:
 # ToTensor
 # --------------------------------------------------------------------------- #
 class TestToTensor:
-    def test_produces_chw_float_tensor(self) -> None:
+    """``ToTensor`` CONVERTS: an array (or PIL image) becomes a CHW tensor of the SAME element type.
+
+    It used to scale too (``normalize``), dividing by 255 whenever the largest value was above 1 —
+    which squashed an already-standardized image to ``[-0.008, 0.010]`` with no error. Range and
+    type are now ``Scale`` / ``ToType``, and the channel coercion is ``ConvertMode``.
+    """
+
+    def test_produces_a_chw_tensor_of_the_payloads_own_type(self) -> None:
         arr = _hwc_uint8()
-        out = ToTensor()({"image": Image(arr)})
-        tensor = out["image"]
+        tensor = ToTensor()({"image": Image(arr)})["image"]
         assert isinstance(tensor, torch.Tensor)
         assert tuple(tensor.shape) == (3, 4, 5)  # HWC -> CHW
+        assert tensor.dtype == torch.uint8
+        assert np.array_equal(tensor.numpy(), arr.transpose(2, 0, 1)), "the values are not scaled"
+
+    def test_a_standardized_image_is_passed_through_unscaled(self) -> None:
+        """The CON case that removed ``normalize``: these values used to come out divided by 255."""
+        arr = np.array([[[-2.12, 0.0, 2.64]]], dtype=np.float32)
+        tensor = ToTensor()({"image": Image(arr)})["image"]
         assert tensor.dtype == torch.float32
-        assert float(tensor.max()) <= 1.0  # normalized
+        assert np.allclose(tensor.numpy().ravel(), [-2.12, 0.0, 2.64])
+
+    def test_a_2d_array_gets_a_leading_channel_axis(self) -> None:
+        tensor = to_tensor(np.zeros((4, 5), dtype=np.uint8))
+        assert tuple(tensor.shape) == (1, 4, 5)
+
+    def test_a_pil_image_is_converted(self) -> None:
+        from PIL import Image as PILImage
+
+        tensor = to_tensor(PILImage.fromarray(_hwc_uint8()))
+        assert tuple(tensor.shape) == (3, 4, 5) and tensor.dtype == torch.uint8
+
+    def test_a_uint16_image_converts(self) -> None:
+        """The removed rescale called ``max()`` on the tensor, which torch has no kernel for on uint16."""
+        tensor = to_tensor(np.array([[[0, 2048, 4095]]], dtype=np.uint16))
+        assert tensor.dtype == torch.uint16 and tuple(tensor.shape) == (3, 1, 1)
+
+    def test_it_takes_no_normalize_and_no_mode(self) -> None:
+        import inspect
+
+        assert list(inspect.signature(ToTensor).parameters) == ["field", "output"]
+        assert list(inspect.signature(to_tensor).parameters) == ["img"]
 
     def test_parity_with_to_tensor_helper(self) -> None:
         arr = _hwc_uint8()
         out = ToTensor()({"image": Image(arr)})
-        expected = to_tensor(arr).numpy()
-        assert np.array_equal(np.asarray(out["image"]), expected)
-
-    def test_parity_no_normalize(self) -> None:
-        arr = _hwc_uint8()
-        out = ToTensor(normalize=False)({"image": Image(arr)})
-        expected = to_tensor(arr, normalize=False).numpy()
-        assert np.array_equal(np.asarray(out["image"]), expected)
-
-    # `mode=` must coerce ARRAY payloads too, not only PIL ones: a decoding source hands over
-    # already-arrayed pixels, and a mixed-mode dataset (cppe-5 ships RGB + RGBA + grayscale rows)
-    # then reaches the model with ragged channel counts — a channel-mismatch crash MID-EPOCH,
-    # after the 3-channel rows trained fine. Found the hard way; these pin the array path.
-    def test_mode_rgb_coerces_a_4_channel_uint8_array(self) -> None:
-        rgba = (np.arange(4 * 5 * 4).reshape(4, 5, 4) % 256).astype(np.uint8)
-        tensor = to_tensor(rgba, mode="RGB")
-        assert tuple(tensor.shape) == (3, 4, 5)
-
-    def test_mode_rgb_coerces_a_2d_grayscale_uint8_array(self) -> None:
-        gray = (np.arange(4 * 5).reshape(4, 5) % 256).astype(np.uint8)
-        tensor = to_tensor(gray, mode="RGB")
-        assert tuple(tensor.shape) == (3, 4, 5)
-
-    def test_mode_rgb_coerces_a_singleton_channel_uint8_array(self) -> None:
-        gray1 = (np.arange(4 * 5).reshape(4, 5, 1) % 256).astype(np.uint8)
-        tensor = to_tensor(gray1, mode="RGB")
-        assert tuple(tensor.shape) == (3, 4, 5)
-
-    def test_mode_rgb_leaves_a_3_channel_array_byte_identical(self) -> None:
-        arr = _hwc_uint8()
-        assert np.array_equal(to_tensor(arr, mode="RGB").numpy(), to_tensor(arr).numpy())
-
-    def test_mode_is_left_alone_for_a_non_uint8_array(self) -> None:
-        # PIL cannot represent a float RGBA faithfully — the coercion is deliberately uint8-only.
-        rgba = np.random.rand(4, 5, 4).astype(np.float32)
-        tensor = to_tensor(rgba, mode="RGB", normalize=False)
-        assert tuple(tensor.shape) == (4, 4, 5)
-
-    def test_op_mode_reaches_the_array_path(self) -> None:
-        rgba = (np.arange(4 * 5 * 4).reshape(4, 5, 4) % 256).astype(np.uint8)
-        out = ToTensor(mode="RGB")({"image": Image(rgba)})
-        assert tuple(out["image"].shape) == (3, 4, 5)
+        assert np.array_equal(np.asarray(out["image"]), to_tensor(arr).numpy())
 
     def test_output_is_a_plain_live_tensor(self) -> None:
         # The record model holds arbitrary values: the tensor rides AS-IS (no Image wrap — an
@@ -123,7 +117,7 @@ class TestToTensor:
             ToTensor()({"lbl": Label("cat")})
 
     def test_record_collate_stacks_payloads(self) -> None:
-        # The record collate stacks the CHW-float Image payloads into a batched array.
+        # The record collate stacks the CHW tensors into a batched array.
         a = ToTensor()({"image": Image(_hwc_uint8())})
         b = ToTensor()({"image": Image(_hwc_uint8())})
         batch = collate_records([a, b])
@@ -197,8 +191,9 @@ class TestEncodeDecodeTarget:
 def test_classification_input_and_target_chain() -> None:
     # Source-shaped record: an HWC image + a class-NAME label — key names carry meaning.
     record = {"image": Image(_hwc_uint8()), "class": Label("cat", classes=list(_MAP))}
-    # Build the model INPUT (CHW float) and the encoded TARGET id.
-    out = EncodeTarget(mapping=_MAP, field="class")(ToTensor(field="image")(record))
+    # Build the model INPUT (0..1 floats, CHW) and the encoded TARGET id. The range is Scale's job;
+    # ToTensor only converts.
+    out = EncodeTarget(mapping=_MAP, field="class")(ToTensor(field="image")(Scale()(record)))
 
     # Input entry: a LIVE CHW-float tensor (a plain record value).
     assert isinstance(out["image"], torch.Tensor)

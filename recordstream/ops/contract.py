@@ -14,11 +14,11 @@ boundary in errors ("classification input" vs "classification output"); there is
 deliberately no ``role`` knob — position already IS the role.
 """
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, get_args
 
 from confluid import configurable, output
 
-from recordstream.items import Record, get_item_type
+from recordstream.items import Record, get_item_type, item_type_names
 
 #: Declared-type sentinel meaning "the entry must be PRESENT, any type" — for a boundary
 #: past a conversion that emits plain values (e.g. a live tensor, which no item wraps).
@@ -97,23 +97,22 @@ class ClassNamesOutput:
     DATASET, so it cannot be a per-record op. A consuming workspace needs the ordered class list
     to show a label as a NAME rather than an integer.
 
-    It READS, it never derives. There are three ways to give it an answer, and the graph author
-    picks one explicitly — this class decides nothing on their behalf:
+    It holds ONE thing, the list in :attr:`names`, and derives nothing. The graph author picks how
+    the list gets there — this class decides nothing on their behalf:
 
-    1. **type them** — set :attr:`names` directly;
-    2. **connect something that carries a vocabulary** — set :attr:`classes` to any object with a
-       ``class_names`` attribute (a :class:`~recordstream.Stream`, a source that knows its own,
-       a walker like :class:`ClassNamesScan`);
-    3. **connect a walker** — :class:`ClassNamesScan` derives them by walking a source, for
-       a source that declares none.
+    1. **type them** — ``names: [cat, dog]``;
+    2. **take them from a source that knows its own** — wire the source's ``class_names`` output
+       into ``names`` (a HuggingFace source reads its ``ClassLabel`` names from the metadata);
+    3. **take them from a walker** — wire a :class:`ClassNamesScan`'s ``class_names`` output into
+       ``names``, for a source that declares none.
+
+    A wire becomes a LITERAL in the saved document: a document cannot reference one object's
+    attribute from another (``!ref:scan.class_names`` is refused on load), so a visual editor
+    evaluates the wire when it saves and writes the list into ``names``. There is deliberately
+    no second input holding the producer: a second input is a second way to be wrong.
 
     Nothing here scans a dataset. A walk is seconds per thousand records and would run on every
     graph open, so it is a node the author PLACES (route 3), never a fallback this one takes.
-
-    ``classes`` holds the whole object rather than a reference to its attribute because that is
-    the only shape a config document can carry: attribute references (``!ref:src.class_names``)
-    were removed from the config layer, and the documented replacement is exactly this — a
-    selector parameter on the CONSUMER, referencing the whole object.
 
     ``constant=True`` so a visual editor hoists it to its own top-level key rather than inlining
     it, which is what makes it readable back out of the exported document.
@@ -202,6 +201,148 @@ class ClassNamesScan:
     def __call__(self) -> None:
         """No-arg call: a value producer, not a record op."""
         return None
+
+
+# =======================================================================================
+# The GRAPH-level contract: what one graph takes from its host and must deliver back
+# =======================================================================================
+
+#: The slot kinds a graph contract may declare, in the words a visual editor types its sockets
+#: with. A registered item type name (``Image``, ``Label``, ``Boxes``, …) is a legal kind too:
+#: the item registry is the open half, this set is the closed half.
+GraphSlotKind = Literal["Stream", "Source", "Sink", "Op", "Record", "List[str]", "str", "int", "float", "bool"]
+GRAPH_SLOT_KINDS: Tuple[str, ...] = get_args(GraphSlotKind)
+
+
+def _slot_kind_known(kind: str) -> bool:
+    return kind in GRAPH_SLOT_KINDS or kind in item_type_names()
+
+
+def _is_stream(value: Any) -> bool:
+    """A ``Stream`` by shape — it has ``ops`` and a ``source`` — so a consumer's own subclass qualifies."""
+    return hasattr(value, "ops") and hasattr(value, "source") and not isinstance(value, (list, tuple, dict))
+
+
+@configurable(category="contract", group="graph", constant=True)
+class GraphContract:
+    """What ONE graph takes from its host and must deliver back — declared as DATA.
+
+    A consuming workspace opens several graphs — one that delivers its records, one that turns
+    dropped files into records, one that consumes the records it labelled — and each must deliver
+    something different. Stating that per graph with ONE class, as a map of named and typed slots,
+    is what lets a visual editor draw every graph's boundary the same way (a root node whose input
+    sockets are the ``outputs``; an input node whose output sockets are the ``inputs``), lets its
+    export write what the author wired (``delivered``), and lets the host refuse a graph that
+    delivers less than it promised — in the same words, because :meth:`check` is the ONE
+    verification both of them call.
+
+    Every entry of ``outputs`` is REQUIRED. An optional output would not be a contract: what a
+    graph may or may not deliver is simply not declared.
+
+    Args:
+        name: The graph this contract is for, as a refusal names it (``"classification source"``).
+        inputs: ``{slot: kind}`` the HOST provides when it runs the graph (dropped file paths, the
+            records to annotate, a viewer's window). Kinds are :data:`GRAPH_SLOT_KINDS` or a
+            registered item type name.
+        outputs: ``{slot: kind}`` the graph must deliver. Same vocabulary.
+        records: ``{entry: item type}`` every record of a delivered stream carries — the
+            :class:`RecordContract` :meth:`stream` appends as the stream's last op, so a violating
+            record is refused where the graph is applied, never when a record is opened later.
+        delivered: ``{slot: value}`` — what the drawn graph wired into each output. Written by the
+            editor's export, read by the host; never typed by hand.
+    """
+
+    def __init__(
+        self,
+        name: str = "",
+        inputs: Optional[Dict[str, str]] = None,
+        outputs: Optional[Dict[str, str]] = None,
+        records: Optional[Dict[str, str]] = None,
+        delivered: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.name = name
+        self.inputs: Dict[str, str] = dict(inputs or {})
+        self.outputs: Dict[str, str] = dict(outputs or {})
+        self.records: Dict[str, str] = dict(records or {})
+        self.delivered: Dict[str, Any] = dict(delivered or {})
+
+    @property
+    def label(self) -> str:
+        return self.name or "graph contract"
+
+    def missing(self) -> List[str]:
+        """The outputs nothing was wired into, in declaration order — what an editor marks and a host refuses."""
+        return [slot for slot in self.outputs if self.delivered.get(slot) is None]
+
+    def check_declaration(self) -> None:
+        """Refuse a DECLARATION outside the vocabulary — what a visual editor checks before it draws anything."""
+        for side, slots in (("input", self.inputs), ("output", self.outputs)):
+            for slot, kind in slots.items():
+                if not _slot_kind_known(str(kind)):
+                    raise ContractError(
+                        f"{self.label}: {side} {slot!r} declares the type {kind!r}, which is neither a graph slot type "
+                        f"({', '.join(GRAPH_SLOT_KINDS)}) nor a registered item type"
+                    )
+
+    def check(self) -> None:
+        """Refuse a graph that does not deliver what it declares — :class:`ContractError`, in the reader's words.
+
+        Checked in this order, so the first message a reader sees is the one to act on: a kind
+        outside the vocabulary (the DECLARATION is wrong), an output nothing was wired into, then
+        each delivered value against its kind — a ``Stream`` must be one and must have a source; a
+        ``List[str]`` must be a non-empty list.
+        """
+        self.check_declaration()
+        missing = self.missing()
+        if missing:
+            raise ContractError(
+                f"{self.label}: {missing[0]!r} is not delivered — wire it in the graph "
+                f"(this graph delivers: {', '.join(self.outputs)})"
+            )
+        for slot, kind in self.outputs.items():
+            value = self.delivered[slot]
+            if kind == "Stream":
+                if not _is_stream(value):
+                    raise ContractError(
+                        f"{self.label}: {slot!r} is a {type(value).__name__}, not a Stream — put a Stream between them"
+                    )
+                if value.source is None:
+                    raise ContractError(
+                        f"{self.label}: the Stream delivered as {slot!r} has no source — connect a Source to it"
+                    )
+            elif kind == "List[str]":
+                if not isinstance(value, (list, tuple)):
+                    raise ContractError(f"{self.label}: {slot!r} is a {type(value).__name__}, not a list of names")
+                if not value:
+                    raise ContractError(
+                        f"{self.label}: {slot!r} resolved to [] — wire a class_names output (a HuggingFace source "
+                        "has one) or a Value list into it"
+                    )
+
+    def records_contract(self) -> Optional[RecordContract]:
+        """The per-record contract as the op that enforces it, or ``None`` when none is declared."""
+        return RecordContract(fields=dict(self.records), name=self.name) if self.records else None
+
+    def stream(self) -> Any:
+        """The delivered stream, with :attr:`records` enforced as its LAST op — a new Stream, the
+        delivered one untouched (it is the document's object; the host must not rewrite the graph)."""
+        slot = next((s for s, kind in self.outputs.items() if kind == "Stream"), None)
+        if slot is None:
+            raise ContractError(f"{self.label}: this graph delivers no stream (it delivers: {', '.join(self.outputs)})")
+        self.check()
+        from recordstream.core.stream import Stream  # the engine imports this module's ops; keep the edge one-way
+
+        delivered = self.delivered[slot]
+        contract = self.records_contract()
+        ops = list(delivered.ops or [])
+        if contract is not None:
+            ops.append(contract)
+        return Stream(source=delivered.source, ops=ops, class_names=getattr(delivered, "class_names", None))
+
+    @property
+    def class_names(self) -> List[str]:
+        """The delivered vocabulary as strings, in its delivered order — ``[]`` when the graph delivers none."""
+        return [str(name) for name in (self.delivered.get("class_names") or [])]
 
 
 # =======================================================================================

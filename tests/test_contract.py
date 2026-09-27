@@ -6,6 +6,11 @@ deliver (output contract). These tests pin that dual use, the pass-through ident
 every error branch (missing entry, wrong item type, plain value, unknown declared type).
 """
 
+import re
+from pathlib import Path
+from typing import Any, Dict, List
+
+import confluid
 import numpy as np
 import pytest
 
@@ -164,6 +169,47 @@ class TestClassNamesOutput:
 
         params = list(inspect.signature(ClassNamesOutput).parameters)
         assert params == ["names"], "a second input is a second way to be wrong"
+
+
+def _readme_class_names_blocks(language: str) -> List[str]:
+    """The ``language`` code blocks of the README's class-vocabulary section, in order."""
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    start = readme.index("### Declaring the class vocabulary")
+    heading = re.compile(r"^#{1,3} ", flags=re.M)
+    # Headings only OUTSIDE code blocks — a YAML comment line also starts with `#`.
+    body = re.sub(r"```.*?```", lambda m: "x" * len(m.group(0)), readme[start:], flags=re.S)
+    match = heading.search(body, 1)
+    section = readme[start : start + match.start()] if match else readme[start:]
+    return re.findall(rf"```{language}\n(.*?)```", section, flags=re.S)
+
+
+class TestTheReadmeShowsSpellingsThatWork:
+    """Every example in the README's class-vocabulary section runs and names its classes.
+
+    The section once documented a ``classes:`` input the class does not have. One example
+    loaded with a warning and delivered ``[]`` — an empty vocabulary, silently — and the other
+    was not even parseable YAML. The README is the PyPI landing page, so its examples are
+    executed here rather than trusted.
+    """
+
+    def test_there_is_something_to_check(self) -> None:
+        assert _readme_class_names_blocks("yaml") and _readme_class_names_blocks("python")
+
+    def test_every_yaml_example_loads_and_names_its_classes(self) -> None:
+        for block in _readme_class_names_blocks("yaml"):
+            output = confluid.load(block)["class_names_output"]
+            assert output.class_names, f"this README example delivers no classes:\n{block}"
+
+    def test_every_python_example_runs_and_names_its_classes(self) -> None:
+        for block in _readme_class_names_blocks("python"):
+            scope: Dict[str, Any] = {}
+            exec(block, scope)
+            assert scope["output"].class_names, f"this README example delivers no classes:\n{block}"
+
+    def test_no_example_names_an_input_the_class_does_not_have(self) -> None:
+        """The CON case that started this: ``classes:`` is not a parameter, so it must not appear."""
+        for block in _readme_class_names_blocks("yaml") + _readme_class_names_blocks("python"):
+            assert "classes:" not in block and "classes=" not in block, block
 
 
 class TestClassNamesScan:

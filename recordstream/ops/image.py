@@ -30,6 +30,7 @@ from recordstream.items import Boxes
 from recordstream.items import Image as ImageItem
 from recordstream.items import Mask as MaskItem
 from recordstream.items import NDArrayItem, Record, is_item, item_data, item_value, with_data
+from recordstream.ops.numpy import entries_to_change
 from recordstream.transform import Transform
 
 logger = get_logger("recordstream.ops.image")
@@ -978,6 +979,61 @@ def _normalize_image(value: Any, params: Dict[str, Any]) -> Any:
     return with_data(value, (array - mean) / std)
 
 
+#: The channel layouts :class:`ConvertMode` produces — PIL's names for them.
+ImageMode = Literal["RGB", "RGBA", "L"]
+IMAGE_MODES: Tuple[str, ...] = get_args(ImageMode)
+
+
+@configurable(category="op", group="image")
+class ConvertMode(Transform):
+    """Force one channel layout — RGBA → RGB, grayscale → RGB, RGB → L — and change nothing else.
+
+    A mixed-mode dataset (RGB, RGBA and grayscale rows side by side) reaches a model with ragged
+    channel counts unless something forces one layout; this is that op. The conversion is PIL's,
+    and PIL holds ``uint8`` pixels only, so a non-``uint8`` image is REFUSED rather than passed
+    through untouched: run ``ConvertMode`` before :class:`~recordstream.ops.numpy.Scale` /
+    :class:`~recordstream.ops.numpy.ToType`, which make floats.
+
+    Args:
+        mode: The channel layout to produce (PIL's name for it).
+        field: The one entry to convert; blank = every Image, never a Mask.
+    """
+
+    handles = (ImageItem,)
+
+    def __init__(self, mode: ImageMode = "RGB", field: str = "") -> None:
+        super().__init__()
+        self.mode = mode
+        self.field = field
+
+    def __call__(self, record: Record) -> Record:
+        out = dict(record)
+        for key in entries_to_change("ConvertMode", record, self.field):
+            out[key] = self._convert(key, record[key])
+        return out
+
+    def _convert(self, key: str, value: Any) -> Any:
+        if hasattr(value, "convert") and not isinstance(value, np.ndarray):  # a PIL image
+            return value.convert(self.mode)
+        if isinstance(value, ImageItem) and getattr(value, "layout", "HWC") == "CHW":
+            raise ValueError(
+                f"ConvertMode: {key!r} is declared CHW — PIL reads channels-last pixels; "
+                "run ConvertMode before ToTensor"
+            )
+        array = item_data(value)
+        if not isinstance(array, np.ndarray):
+            raise ValueError(f"ConvertMode: {key!r} holds a {type(value).__name__}, not an image")
+        if array.dtype != np.uint8:
+            raise ValueError(
+                f"ConvertMode: {key!r} is {array.dtype} — PIL modes hold uint8 pixels; "
+                "run ConvertMode before Scale or ToType"
+            )
+        # A trailing singleton channel axis defeats `fromarray` — squeeze it to the 2-D form.
+        plane = array[..., 0] if (array.ndim == 3 and array.shape[2] == 1) else array
+        converted = np.array(Image.fromarray(plane).convert(self.mode))
+        return converted if value is array else with_data(value, converted)
+
+
 @configurable(category="op", group="image")
 class ConvertToImage(Transform):
     """An array-bearing field → an ``Image`` item.
@@ -1178,6 +1234,9 @@ class ConvertToMask(Transform):
 __all__ = [
     "Colormap",
     "COLORMAPS",
+    "ConvertMode",
+    "ImageMode",
+    "IMAGE_MODES",
     "ConvertToImage",
     "ConvertToMask",
     "normalize_to_uint8",
