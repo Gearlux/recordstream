@@ -130,6 +130,12 @@ item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `Conne
 registering a same-type kernel, declaring `handles` / `consumes` / `produces` truthfully as graph
 metadata (next section).
 
+**For a NEW op that reads named entries and writes named entries, write an
+[`Algorithm`](algorithm.md) instead.** You declare its settings, inputs and outputs once
+(`Param` / `Input` / `Output`) and write `compute()`. The record handling, the entry names
+(`keys`), `consumes` / `produces` and the constructor are all derived from those declarations. The
+existing type-changing ops keep working; the hand-written shape below is what they use.
+
 ### Declaring an op's type interface — `handles` / `consumes` / `optional` / `produces`
 
 Every `Transform` carries four class-level tuples of item types. They are the op's **type
