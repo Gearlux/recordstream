@@ -21,6 +21,13 @@ All notable changes to this project are documented here. The format follows
   a flag no earlier op raises, or a flag or report name declared twice. A chain that
   declares none of these passes unchanged. `flag_producers(ops)` maps each flag to the op
   that raises it.
+- **Algorithms.** `Algorithm` with the slot declarations `Param` / `Input` / `Output`: an op
+  states what it is tuned by, what it reads and what it computes, and writes `compute()`.
+  Run as an op, it reads each input from the record entry of the same name and writes each
+  output the same way (`keys` names other entries; `Output(replaces=...)` writes back where
+  an input was read). The constructor, the settings schema, the output sockets, `consumes` /
+  `produces` for `check_chain`, and `algorithm_spec()` are derived from the declarations.
+  `run(**inputs)` computes without a record.
 - **`ClassNamesOutput`** — the class vocabulary a pipeline delivers, as a graph output
   (`class_names`, `num_classes`); **`ClassNamesScan`** derives one by walking a source's
   label column, for a source that declares none.

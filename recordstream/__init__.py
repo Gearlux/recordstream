@@ -12,6 +12,7 @@ transforms drop into any ops list AS-IS — the engine invokes each op family na
 # --- shared infrastructure -----------------------------------------------------------------
 from importlib.metadata import PackageNotFoundError, version
 
+from recordstream.algorithm import Algorithm, AlgorithmSlot, AlgorithmSpec, Input, Output, Param, algorithm_spec
 from recordstream.batch import (
     batch_boxes,
     batch_metadata,
@@ -142,6 +143,14 @@ __all__ = [
     "Pipeline",
     "FunctionTransform",
     "as_transform",
+    # ---- algorithms: declared params / inputs / outputs, the op derived ----
+    "Algorithm",
+    "Param",
+    "Input",
+    "Output",
+    "AlgorithmSlot",
+    "AlgorithmSpec",
+    "algorithm_spec",
     "dispatch",
     "register_kernel",
     "registered_kernels",

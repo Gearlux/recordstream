@@ -13,6 +13,7 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordS
 -   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
 -   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
 -   **Passive Introspection:** ops declare the value types they [handle / consume / produce](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) and are discoverable by category for visual editors and schema generators.
+-   **Algorithms:** declare what an op is tuned by, reads and computes (`Param` / `Input` / `Output`) and write `compute()`. The [record handling, the constructor, the settings schema and the chain contract](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) are derived from those declarations.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
 
 ## 🛠 Quick Start
@@ -182,6 +183,35 @@ Declaring is **opt-in** — an op with none of these attributes is checked for n
 chains are unaffected. `flag_producers(ops)` gives `{flag: index of the op that raises it}`, total by
 construction, so *"which op decided this branch?"* always has an answer.
 
+### Writing an op as an algorithm (`Algorithm`)
+
+An algorithm declares its settings, inputs and outputs, and never sees a record:
+
+```python
+import numpy as np
+from recordstream import Algorithm, Image, Input, Output, Param
+
+class BackgroundLevel(Algorithm):
+    percentile: float = Param(default=25.0, doc="Percentile rank across the per-row medians.")
+    image: Image = Input(doc="The image to read.")
+    background: float = Output(doc="The background level.")
+
+    def compute(self):
+        per_row = np.median(np.asarray(self.image, dtype=np.float64), axis=1)
+        return {"background": float(np.percentile(per_row, self.percentile))}
+
+image = Image(np.full((4, 6), 10.0), layout="HWC")
+BackgroundLevel(percentile=30.0).run(image=image)                 # {'background': 10.0}
+BackgroundLevel()({"image": image, "exposure_ms": 20})            # the record + 'background'
+BackgroundLevel(keys={"image": "photo"})({"photo": image})        # read from another entry
+BackgroundLevel().consumes                                        # {'image': 'Image'} — for check_chain
+```
+
+Used as an op, it reads each input from the record entry of the same name and writes each output
+the same way; `keys` names other entries, and `Output(replaces="boxes")` writes back where an input
+was read. Inputs are found by name only, so `check_chain` knows before a run what a pipeline needs.
+Full guide: [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md).
+
 ### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
 
 `RecordContract` states what each RECORD carries. A classification pipeline usually has
@@ -231,6 +261,7 @@ wire evaluates it when it saves the graph and writes the resulting list into `na
 | Page | Covers |
 |---|---|
 | [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
+| [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) | Writing an op as an `Algorithm`: `Param` / `Input` / `Output` slots, `compute()`, entry names (`keys`), replacing outputs, what tools derive (`algorithm_spec`, `consumes` / `produces`, the settings schema) |
 | [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
 | [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
 | [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |

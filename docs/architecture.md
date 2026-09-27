@@ -19,6 +19,7 @@ Maintenance rules:
 |---|---|---|---|
 | Data model | `items.py`, `io.py` | A record is a plain `dict` of typed values; one codec serializes any value | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Native ops | `transform.py`, `dispatch.py`, `ops/*` | Type-dispatched `Transform`s (kernels, `field=`) + structural/compose ops | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
+| Algorithms | `algorithm.py` | Declared params / inputs / outputs; the op, constructor, schema and chain contract derived | [§21](#21-an-algorithm-declares-its-params-inputs-and-outputs-the-op-is-derived-algorithm-2026-09-27) + [algorithm.md](algorithm.md) |
 | Library interop | `core._apply_op`, `register_op_family` | External libraries run as-is via the op-family dispatch — no adapters | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Engines | `core/` (`Stream`/`JointStream`), `flow/` (`FlowGraph`) | One op-application chokepoint, four routes; one per-record kernel behind two authoring forms | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30), [§5](#5-the-engines-own-callable-wrappers-live-in-core-2026-07-20-still-true-after-the-2026-08-01-package-split) |
 | Graph wiring | `flow/steps.py`, `flow/parse.py` | Fan-out/fan-in/cross-step values are step GRAMMAR (`from:`/`merge_from:`/`bind:`), never ops | [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30) |
@@ -1731,3 +1732,98 @@ ops:
 **What you may change.** The element types `ToType` offers, the modes `ConvertMode` offers, new
 value ops of the same shape. What must hold: `ToTensor` changes no value, and no op guesses an
 input's range from its values.
+
+## 21. An algorithm declares its params, inputs and outputs; the op is derived (`Algorithm`, 2026-09-27)
+
+**Context.** An op that reads named record entries and writes named entries (a measurement, a
+filter, a type-changing conversion) had to say the same thing up to five times: a constructor
+parameter per slot to name its entry (`field`, `<input>_field`, `output`), a `resolve_item` call per
+input, a hand-kept `consumes` / `produces` for the chain checker (§16), a private `_last_*` field
+behind a confluid `@output` property so a later step could read the value, and finally the
+computation. Nothing checked that the copies agreed. Measured on a consumer's hand-written
+noise-floor op: 34 lines of code, of which the computation was 8. The same op rewritten as an
+algorithm is 10 lines and gives the same number (`-100.0449` dB on the same spectrogram, 14.81 ms
+against 14.87 ms per record; 2.6 µs of added cost per record with the computation removed).
+
+The second pressure came from tools. A generated per-node tool (an LLM re-running one node with new
+settings) needs three lists: the settings it may change, the entries the node reads, and what it
+returns. Before this record, only the first was derivable from the class.
+
+**Decision.** An `Algorithm` subclass declares three kinds of slot as class attributes and writes
+`compute()`:
+
+* `name: type = Param(default=..., doc=...)` is a setting. The base generates a keyword-only
+  constructor from the params, plus `keys`, with a real `__signature__`, annotations and an `Args:`
+  docstring. `to_pydantic`, `parse_param_docs`, `dump` and confluid's validation therefore see an
+  ordinary constructor, and confluid needed no change.
+* `name: type = Input(doc=...)` is read from the record entry `name`.
+* `name: type = Output(doc=..., replaces=...)` is written to the record entry `name`, or back into
+  the entry an input was read from. The base installs one read-only confluid `@output` property per
+  output, holding the last computed value, so `bind: step.name` works unchanged.
+
+`compute()` reads params and inputs as `self.<name>` and returns every output by name. The base
+provides `run(**inputs)` (standalone), `__call__(record)` (the op), `consumes` / `produces` (derived,
+following `keys` and `replaces`) and `algorithm_spec()`.
+
+Alternatives rejected, each measured or shown on a concrete case:
+
+* **Decorators (`@param`, `@input`).** Python only allows decorators on functions and classes, not on
+  attributes.
+* **Annotation markers (`percentile: Param[float] = 25.0`).** They read well, but a type checker
+  cannot tell from an annotation that an input is not a constructor argument. With
+  `dataclass_transform`, mypy demanded `spectrogram` and `noise_floor_db` as arguments and refused
+  the correct call `NoiseFloor(percentile=30.0)`; without it, mypy checks no call at all. Field
+  specifiers carry `init: Literal[False]`, and mypy then reports exactly the typo, the wrong type,
+  and an input passed to the constructor.
+* **`compute()` assigning outputs (`self.background = ...`).** An output would need a setter, and
+  confluid treats a settable property as a configuration knob, so every output would appear as a
+  setting in every form and schema.
+* **One `<slot>_field` parameter per slot** (the earlier convention for multi-input ops). It adds one
+  setting per slot to every form and tool schema. One `keys` mapping carries the same information
+  and is validated against the declared slot names.
+* **Finding an input by type when its entry is missing** (the "blank field = first of that type"
+  rule of `resolve_item`). Existing pipelines would need no change, but which entry an op reads would
+  then be decided only while it runs, and `check_chain` could no longer say before a run what a
+  pipeline needs. Inputs are found by name only; a pipeline that names the entry differently says so
+  once, with `keys` or a `RenameField`.
+* **In-place writing configured in every YAML (`keys: {kept: boxes}`).** It works, but an op whose job
+  is to replace what it read would, whenever one config forgot the line, quietly add a second entry
+  next to the original. `Output(replaces="boxes")` declares it once, in the class.
+
+**Consequences.** The "type-changing op" shape of §1 (subclass `Transform`, override `__call__`) is
+superseded for new ops: reading named entries and writing named entries is an algorithm. `Transform`
+with kernels stays for "every value of a type" ops, and library transforms still run as they are.
+Existing hand-written ops keep working and migrate one at a time. `run()` puts the inputs on a
+shallow copy of the object, so the configured instance never holds a record's arrays, and the op
+pickles into spawn workers like any other object. The generated constructor is regenerated only for
+the first algorithm class and for a subclass that adds a param. Regenerating it otherwise would
+discard the validation wrapper confluid's `@configurable` put on the parent's constructor.
+
+Two limits are accepted. The word "input" means two things: confluid's `input_specs()` lists
+**constructor** arguments (for an algorithm, the params and `keys`), while an algorithm's record
+inputs come from `algorithm_spec()`. And `keys` is declared to the type checker under
+`TYPE_CHECKING` on `Algorithm`, which sits below a private decorated base class, because a type
+checker collects fields only from classes derived from the decorated one.
+
+**Example.**
+
+```python
+class BackgroundLevel(Algorithm):
+    percentile: float = Param(default=25.0, doc="Percentile rank across the per-row medians.")
+    image: Image = Input(doc="The image to read.")
+    background: float = Output(doc="The background level.")
+
+    def compute(self):
+        per_row = np.median(np.asarray(self.image, dtype=np.float64), axis=1)
+        return {"background": float(np.percentile(per_row, self.percentile))}
+
+BackgroundLevel(percentile=30.0).run(image=image)           # {'background': 10.0}
+BackgroundLevel(keys={"image": "photo"})({"photo": image})  # {'photo': ..., 'background': 10.0}
+BackgroundLevel().consumes                                   # {'image': 'Image'}
+```
+
+**What you may change.** New slot options (a per-slot `doc` format, a unit), more derived views of
+the declarations (a generated tool description), better messages. What must hold: the author never
+touches a record; every tool-facing view is derived from the three declarations, never declared a
+second time; outputs stay read-only; inputs are found by name only; `compute()` returns every output.
+Usage: [algorithm.md](algorithm.md).
