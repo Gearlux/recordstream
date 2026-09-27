@@ -58,8 +58,9 @@ ITEM rather than a `Label` holding a list, because only the type distinguishes a
 multi-label target from an ordinary sequence value that happens to sit under the target key.
 
 Items are **hybrid**: array-backed items (`Image`, `Mask`) subclass `NDArrayItem` — an `np.ndarray`
-subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` — so a
-type-agnostic operation touches them as an array; structured items (`Boxes`, `Label`, `MultiLabel`)
+subclass whose declared `_item_attrs` survive numpy operations via `__array_finalize__` AND
+pickling (so an `Image(..., layout="CHW")` is still CHW inside a `.parallel(n)` spawn worker and
+on its way back) — so a type-agnostic operation touches them as an array; structured items (`Boxes`, `Label`, `MultiLabel`)
 are dataclass wrappers (a bounding-box set is not an array). A uniform payload accessor hides the difference from
 kernels:
 
@@ -128,6 +129,12 @@ item (`Threshold`: array → `Mask`, `ConvertToImage`: array → `Image`, `Conne
 `Mask` → `Boxes`, the target ops). It subclasses `Transform` and overrides `__call__` instead of
 registering a same-type kernel, declaring `handles` / `consumes` / `produces` truthfully as graph
 metadata (next section).
+
+**For a NEW op that reads named entries and writes named entries, write an
+[`Algorithm`](algorithm.md) instead.** You declare its settings, inputs and outputs once
+(`Param` / `Input` / `Output`) and write `compute()`. The record handling, the entry names
+(`keys`), `consumes` / `produces` and the constructor are all derived from those declarations. The
+existing type-changing ops keep working; the hand-written shape below is what they use.
 
 ### Declaring an op's type interface — `handles` / `consumes` / `optional` / `produces`
 

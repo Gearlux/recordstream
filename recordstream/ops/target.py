@@ -489,7 +489,7 @@ class ResizeDetection(Transform):
         if array.dtype != np.uint8:
             raise TypeError(
                 f"ResizeDetection: expected a PIL image or a uint8 array under {self.input_key!r}; "
-                f"got dtype {array.dtype}. Run it BEFORE any float conversion (e.g. before ToTensor)."
+                f"got dtype {array.dtype}. Run it BEFORE any float conversion (e.g. before Scale or ToType)."
             )
         resized = PILImage.fromarray(array).resize((self.width, self.height), PILImage.Resampling.BILINEAR)
         return np.array(resized)

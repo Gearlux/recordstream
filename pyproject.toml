@@ -1,6 +1,6 @@
 [project]
 name = "recordstream"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Clean, functional data pipelines for ML research and production."
 readme = "README.md"
 authors = [{ name = "Gert Behiels" }]
@@ -118,12 +118,16 @@ recordstream-ops-random-apply = "recordstream.ops.random_apply"
 # changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.
 recordstream-ops-configure = "recordstream.ops.configure"
 recordstream-ops-formula = "recordstream.ops.formula"
+# ReadFile (the file-format registry's decoding op; the registry itself holds no @configurable)
+recordstream-ops-formats = "recordstream.ops.formats"
 # The FlowGraph engine (flow: named-step documents) + the per-record kernel both authoring
 # forms run on. There is no flow<->ops lowering pass — it was deleted 2026-07-30 (architecture §3).
 recordstream-flow = "recordstream.flow"
 # The queryable-metadata scan protocol + MetadataFilterSource view source
 recordstream-storage-query = "recordstream.storage.query"
 recordstream-ops-sink = "recordstream.ops.sink"
+# RecordContract (pass-through interface contract at a pipeline boundary — input/output by position)
+recordstream-ops-contract = "recordstream.ops.contract"
 recordstream-ops-predict = "recordstream.ops.predict"
 recordstream-ops-numpy = "recordstream.ops.numpy"
 recordstream-ops-torch = "recordstream.ops.torch"

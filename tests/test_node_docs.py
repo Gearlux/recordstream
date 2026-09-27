@@ -18,8 +18,8 @@ from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
-from recordstream.ops.image import ConvertToImage
-from recordstream.ops.numpy import ConnectedComponents, Threshold
+from recordstream.ops.image import ConvertMode, ConvertToImage
+from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
@@ -38,6 +38,9 @@ _NODE_CLASSES = [
     Threshold,
     ConnectedComponents,
     ConvertToImage,
+    ConvertMode,
+    Scale,
+    ToType,
     ToTensor,
     EncodeTarget,
     DecodeTarget,

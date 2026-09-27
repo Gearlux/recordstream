@@ -13,6 +13,7 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordS
 -   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
 -   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
 -   **Passive Introspection:** ops declare the value types they [handle / consume / produce](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) and are discoverable by category for visual editors and schema generators.
+-   **Algorithms:** declare what an op is tuned by, reads and computes (`Param` / `Input` / `Output`) and write `compute()`. The [record handling, the constructor, the settings schema and the chain contract](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) are derived from those declarations.
 -   **100% Reproducibility:** Entire pipelines are serializable via **Confluid** manifests.
 
 ## 🛠 Quick Start
@@ -113,18 +114,161 @@ pipeline: !class:recordstream.core.stream.Stream
 A viewer reads the stamped `predict*` fields back as layers; `recordstream run` executes
 the same document offline.
 
+### Stating a pipeline's interface (`RecordContract`)
+
+`recordstream.ops.contract.RecordContract` is a pass-through op that asserts what each
+record carries at the point in the chain where it sits — an executable, visible interface
+statement. One class serves both boundary roles, decided by position: the **first** op in
+a chain states what the host must feed (input contract), the **last** states what the
+pipeline guarantees to deliver (output contract). `fields` maps a record key to a
+registered item type name (`"*"` = present with any type, for boundaries past a
+conversion that emits plain values); `name` labels the boundary in errors:
+
+```yaml
+pipeline: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist, split: test}
+  ops:
+    - !class:recordstream.ops.contract.RecordContract
+        name: classification output
+        fields: {image: Image, class: Label}
+```
+
+A violating record fails loudly at the boundary — naming the contract, the record
+ordinal, the offending entry, and what the record does carry — instead of surfacing
+later as an empty result:
+
+```
+ContractError: classification output: record #0 has no entry 'class' (expected Label); present: image[Image]
+```
+
+A consuming workspace or visual editor seeds the contract into a graph so the required
+record shape is declared before the first node is wired; the exported document then
+enforces the same contract when it runs offline.
+
+### Checking that a chain holds together (`check_chain`)
+
+`RecordContract` answers *"what must reach this point?"*. A chain of many small ops raises a
+different question — *"does this chain hold together at all?"* — and getting it wrong is **silent**:
+an op that reads an entry an earlier op was supposed to write does not raise, it returns the record
+unchanged, so the pipeline runs to completion and answers nothing.
+
+So an op MAY declare its interface as class attributes, and `check_chain` reads them off the op list
+once, before the first record: A visual editor may draw a gate as a wire from the producer's outcome and write `requires` back into the document on export — the document form stays the one shown here.
+
+```python
+class MeasureSymbolClock:
+    consumes = {"signal": "Signal", "inst_freq": "InstFreq"}   # same {key: item type} vocabulary
+    produces = {"symbol_clock": "SymbolClock"}                 # as RecordContract.fields
+    reports  = "clock"        # its key in an analysis report; "" marks a transform
+    flags    = ()             # the boolean findings it raises
+
+class DecodeBleAdvertising:
+    def __init__(self, requires: str = "") -> None:
+        self.requires = requires        # the ONE flag that gates this op
+```
+
+```python
+from recordstream.ops.contract import check_chain
+
+check_chain(ops, provided={"signal"}, where="view_bte.yaml")
+# ChainContractError: view_bte.yaml: MeasureSymbolClock needs the record entry 'inst_freq',
+# which nothing before it produces — MeasureInstantaneousFrequency produces it, but LATER in
+# the chain — move it before MeasureSymbolClock
+```
+
+Four things are refused: an unmet `consumes`, a `requires` naming a flag nothing raises (or one
+raised only later), two ops declaring one flag, and two ops reporting under one name.
+
+Declaring is **opt-in** — an op with none of these attributes is checked for nothing, so existing
+chains are unaffected. `flag_producers(ops)` gives `{flag: index of the op that raises it}`, total by
+construction, so *"which op decided this branch?"* always has an answer.
+
+### Writing an op as an algorithm (`Algorithm`)
+
+An algorithm declares its settings, inputs and outputs, and never sees a record:
+
+```python
+import numpy as np
+from recordstream import Algorithm, Image, Input, Output, Param
+
+class BackgroundLevel(Algorithm):
+    percentile: float = Param(default=25.0, doc="Percentile rank across the per-row medians.")
+    image: Image = Input(doc="The image to read.")
+    background: float = Output(doc="The background level.")
+
+    def compute(self):
+        per_row = np.median(np.asarray(self.image, dtype=np.float64), axis=1)
+        return {"background": float(np.percentile(per_row, self.percentile))}
+
+image = Image(np.full((4, 6), 10.0), layout="HWC")
+BackgroundLevel(percentile=30.0).run(image=image)                 # {'background': 10.0}
+BackgroundLevel()({"image": image, "exposure_ms": 20})            # the record + 'background'
+BackgroundLevel(keys={"image": "photo"})({"photo": image})        # read from another entry
+BackgroundLevel().consumes                                        # {'image': 'Image'} — for check_chain
+```
+
+Used as an op, it reads each input from the record entry of the same name and writes each output
+the same way; `keys` names other entries, and `Output(replaces="boxes")` writes back where an input
+was read. Inputs are found by name only, so `check_chain` knows before a run what a pipeline needs.
+Full guide: [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md).
+
+### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
+
+`RecordContract` states what each RECORD carries. A classification pipeline usually has
+something to say about the DATASET too — the ordered class list a consumer needs to show a
+label as a name rather than an integer. `ClassNamesOutput` is that statement. It holds one
+thing, the list, and derives nothing:
+
+```yaml
+class_names_output: !class:recordstream.ops.contract.ClassNamesOutput
+  names: [cat, dog]                           # in class-id order
+```
+
+The list gets there one of three ways, each chosen explicitly:
+
+| route | how |
+|---|---|
+| state them | type `names: [cat, dog]` |
+| take them from a source that knows them | wire the source's `class_names` output into `names` — `HuggingFaceSource` reads its `ClassLabel` names from the dataset metadata, no rows read |
+| take them from a walker | wire a `ClassNamesScan`'s `class_names` output into `names` |
+
+`ClassNamesScan` derives a vocabulary by walking a source's label column — for a source whose
+format does not describe one (a folder reader, a CSV):
+
+```python
+from recordstream import Label
+from recordstream.ops.contract import ClassNamesOutput, ClassNamesScan
+
+records = [{"class": Label(value="dog")}, {"class": Label(value="cat")}, {"class": Label(value="dog")}]
+output = ClassNamesOutput(names=ClassNamesScan(source=records).class_names)
+output.class_names  # ['cat', 'dog']
+```
+
+The walk goes through [key projection](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md)
+so a projection-aware source is asked
+only for the label column, and it reports sorted-unique stringified values — the same ordering
+`LabelMap.fit` uses. It is deliberately a **separate class**: a walk costs seconds per thousand
+records, so it happens because someone asked for it, never as a silent fallback inside
+`ClassNamesOutput`.
+
+**In a document, a wire is a literal.** A config document cannot reference one object's
+attribute from another — `names: !ref:scan.class_names` is refused when the document loads — so
+in a document the vocabulary is always the list itself. A visual editor that lets you draw the
+wire evaluates it when it saves the graph and writes the resulting list into `names`.
+
 ## 📚 Documentation
 
 | Page | Covers |
 |---|---|
 | [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
+| [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) | Writing an op as an `Algorithm`: `Param` / `Input` / `Output` slots, `compute()`, entry names (`keys`), replacing outputs, what tools derive (`algorithm_spec`, `consumes` / `produces`, the settings schema) |
 | [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
 | [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml` |
-| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
-| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), array introspection helpers |
+| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
 | [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
 | [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
 | [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |

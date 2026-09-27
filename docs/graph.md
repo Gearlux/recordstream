@@ -27,7 +27,7 @@ A straight chain is a graph where every step reads the one before it, so it need
 ops:
   - !class:recordstream.ops.image.ConvertToImage {width: 224, height: 224}
   - !class:albumentations.Normalize {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
-  - !class:recordstream.ops.torch.ToTensor {normalize: false}
+  - !class:recordstream.ops.torch.ToTensor {}
 ```
 
 The engine compiles that list into positional steps (`s0`, `s1`, `s2`) and runs it on the same
