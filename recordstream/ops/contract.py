@@ -16,7 +16,7 @@ deliberately no ``role`` knob — position already IS the role.
 
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple, get_args
 
-from confluid import configurable, output
+from confluid import configurable, input_specs, output
 
 from recordstream.items import Record, get_item_type, item_type_names
 
@@ -223,6 +223,38 @@ def _is_stream(value: Any) -> bool:
     return hasattr(value, "ops") and hasattr(value, "source") and not isinstance(value, (list, tuple, dict))
 
 
+#: The output slot that carries a graph's class vocabulary. It is ``classes`` and NOT ``class_names``
+#: because confluid broadcasts a key under ``delivered:`` into every sibling whose constructor takes a
+#: parameter of that name, and ``class_names`` is a parameter of ``Stream``. Measured 2026-09-27: a
+#: producer wired under ``class_names:`` failed to LOAD (``Failed to construct Stream … StreamConfig``),
+#: and a literal list under it was silently pushed into the Stream. :meth:`GraphContract.check_declaration`
+#: refuses the collision by name; this constant is the one place the chosen name is spelled.
+CLASS_VOCABULARY_SLOT = "classes"
+
+#: What a document spells literally — a scalar or a mapping (a list is handled on its own). Anything else
+#: delivered into a slot is an OBJECT the graph built, which has a constructor (whose parameters a slot
+#: name may collide with) and may declare a vocabulary of its own (``class_names``).
+_PLAIN_VALUES = (str, bytes, int, float, bool, dict)
+
+
+def _is_object(value: Any) -> bool:
+    return value is not None and not isinstance(value, _PLAIN_VALUES + (list, tuple))
+
+
+def _declared_class_names(value: Any) -> List[str]:
+    """The vocabulary an object DECLARES — its ``class_names`` attribute, or a zero-arg method — ``[]`` when none.
+
+    A producer's declaration is read, never derived: a source with no ``class_names`` (a folder of
+    files) answers ``[]`` and the contract refuses it by name rather than walking its records.
+    """
+    declared = getattr(value, "class_names", None)
+    if callable(declared):
+        declared = declared()
+    if not isinstance(declared, (list, tuple)):
+        return []
+    return [str(name) for name in declared]
+
+
 @configurable(category="contract", group="graph", constant=True)
 class GraphContract:
     """What ONE graph takes from its host and must deliver back — declared as DATA.
@@ -238,6 +270,18 @@ class GraphContract:
 
     Every entry of ``outputs`` is REQUIRED. An optional output would not be a contract: what a
     graph may or may not deliver is simply not declared.
+
+    **The class vocabulary slot is ``classes`` (kind ``List[str]``)** — :data:`CLASS_VOCABULARY_SLOT`.
+    It takes a typed list (``classes: [cat, dog]``) OR a wired producer that declares its own
+    ``class_names`` (a HuggingFace source, a :class:`ClassNamesOutput`, a :class:`ClassNamesScan`);
+    the document keeps the producer, so where the names came from stays visible, and
+    :attr:`class_names` reads its declaration. It is NOT named ``class_names`` because confluid
+    broadcasts a key under ``delivered:`` into every sibling whose constructor takes a parameter of
+    that name, and ``class_names`` is a parameter of ``Stream``: measured 2026-09-27, a producer wired
+    under ``class_names:`` failed to LOAD (``ConstructionError: Failed to construct Stream …
+    StreamConfig``) and a literal list under it was pushed into the Stream without a word. The same
+    collision can hit any slot, so :meth:`check_declaration` refuses an output whose name is a
+    constructor parameter of ANY delivered object, naming the parameter and the object.
 
     Args:
         name: The graph this contract is for, as a refusal names it (``"classification source"``).
@@ -275,7 +319,15 @@ class GraphContract:
         return [slot for slot in self.outputs if self.delivered.get(slot) is None]
 
     def check_declaration(self) -> None:
-        """Refuse a DECLARATION outside the vocabulary — what a visual editor checks before it draws anything."""
+        """Refuse a DECLARATION that cannot work — what a visual editor checks before it draws anything.
+
+        Two things are refused: a kind outside the vocabulary, and an OUTPUT slot named like a
+        constructor parameter of any delivered object. The second is confluid's broadcast rule seen
+        from the document: ``delivered:`` is a mapping, so a key in it that a sibling's constructor
+        takes is pushed into that sibling — the slot's value lands in the wrong object, and either
+        fails to load or arrives silently. With nothing delivered yet there is no object to collide
+        with, so the editor's draw-time call passes and the check bites when the graph is applied.
+        """
         for side, slots in (("input", self.inputs), ("output", self.outputs)):
             for slot, kind in slots.items():
                 if not _slot_kind_known(str(kind)):
@@ -283,14 +335,33 @@ class GraphContract:
                         f"{self.label}: {side} {slot!r} declares the type {kind!r}, which is neither a graph slot type "
                         f"({', '.join(GRAPH_SLOT_KINDS)}) nor a registered item type"
                     )
+        parameters = [
+            (slot, type(value).__name__, {spec["name"] for spec in input_specs(type(value))})
+            for slot, value in self.delivered.items()
+            if _is_object(value)
+        ]
+        for output_slot in self.outputs:
+            for delivered_as, class_name, names in parameters:
+                if output_slot in names:
+                    hint = (
+                        f" (the class vocabulary slot is {CLASS_VOCABULARY_SLOT!r})"
+                        if output_slot == "class_names"
+                        else ""
+                    )
+                    raise ContractError(
+                        f"{self.label}: output {output_slot!r} shares its name with a parameter of {class_name} "
+                        f"(delivered as {delivered_as!r}); confluid would push the slot's value into that parameter "
+                        f"— rename the slot{hint}"
+                    )
 
     def check(self) -> None:
         """Refuse a graph that does not deliver what it declares — :class:`ContractError`, in the reader's words.
 
-        Checked in this order, so the first message a reader sees is the one to act on: a kind
-        outside the vocabulary (the DECLARATION is wrong), an output nothing was wired into, then
-        each delivered value against its kind — a ``Stream`` must be one and must have a source; a
-        ``List[str]`` must be a non-empty list.
+        Checked in this order, so the first message a reader sees is the one to act on: the
+        DECLARATION (a kind outside the vocabulary, a slot named like a parameter), an output
+        nothing was wired into, then each delivered value against its kind — a ``Stream`` must be
+        one and must have a source; a ``List[str]`` must be a non-empty list of names, or an object
+        that declares a non-empty ``class_names``.
         """
         self.check_declaration()
         missing = self.missing()
@@ -311,12 +382,18 @@ class GraphContract:
                         f"{self.label}: the Stream delivered as {slot!r} has no source — connect a Source to it"
                     )
             elif kind == "List[str]":
-                if not isinstance(value, (list, tuple)):
+                if isinstance(value, (list, tuple)):
+                    if not value:
+                        raise ContractError(
+                            f"{self.label}: {slot!r} resolved to [] — wire a class_names output (a HuggingFace source "
+                            "has one) or a Value list into it"
+                        )
+                elif not _is_object(value):
                     raise ContractError(f"{self.label}: {slot!r} is a {type(value).__name__}, not a list of names")
-                if not value:
+                elif not _declared_class_names(value):
                     raise ContractError(
-                        f"{self.label}: {slot!r} resolved to [] — wire a class_names output (a HuggingFace source "
-                        "has one) or a Value list into it"
+                        f"{self.label}: {slot!r} is delivered by a {type(value).__name__}, which declares no class "
+                        "names — wire a source that does (a HuggingFace source has one) or type the names as a list"
                     )
 
     def records_contract(self) -> Optional[RecordContract]:
@@ -337,12 +414,24 @@ class GraphContract:
         ops = list(delivered.ops or [])
         if contract is not None:
             ops.append(contract)
-        return Stream(source=delivered.source, ops=ops, class_names=getattr(delivered, "class_names", None))
+        # The graph's vocabulary travels WITH the records; a graph that delivers none leaves the
+        # Stream's own (a label-encoding Stream carries one) as it was.
+        class_names = self.class_names or getattr(delivered, "class_names", None)
+        return Stream(source=delivered.source, ops=ops, class_names=class_names)
 
     @property
     def class_names(self) -> List[str]:
-        """The delivered vocabulary as strings, in its delivered order — ``[]`` when the graph delivers none."""
-        return [str(name) for name in (self.delivered.get("class_names") or [])]
+        """The vocabulary delivered as :data:`CLASS_VOCABULARY_SLOT`, as strings in its delivered order.
+
+        A typed list is read as given; a wired producer answers with what it declares
+        (:func:`_declared_class_names`); a graph that delivers no vocabulary answers ``[]``.
+        """
+        value = self.delivered.get(CLASS_VOCABULARY_SLOT)
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return [str(name) for name in value]
+        return _declared_class_names(value)
 
 
 # =======================================================================================

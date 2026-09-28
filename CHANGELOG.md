@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the versioning is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`GraphContract`'s class-vocabulary slot is `classes`** — an output slot named like a constructor
+  parameter of any class the graph delivers is refused at declaration time (confluid broadcasts the
+  slot's value into that parameter; measured on `class_names` beside a `Stream`), and the slot accepts
+  a typed list or a wired source that declares its class names (`docs/graph-contract.md`).
+- **`recordstream.flow.Tracer`** — one record through a `Stream` or a `FlowGraph` on the engine's
+  own kernel, a snapshot per node (`ops[i]` for a Stream, the step keys for a flow). `check(seed)`
+  refuses an unmet need before anything runs, located at the node, and carries flags across nodes;
+  `run(seed, until=node)` pauses BEFORE a node; `step()` / `resume()` continue; `rerun_from(node,
+  **params)` rebuilds ONE node through its constructor from its current values and recomputes only
+  from there on (a refused value leaves the trace untouched); `value(node, entry)` hands out the
+  real object; `to_dict()` is JSON with arrays summarised. Snapshots are references unless
+  `copy_snapshots=True`; an op that edits its record in place is flagged `in_place`.
+  Usage: `docs/trace.md`.
+
 ## [0.1.0a2] — 2026-09-27
 
 ### Added
