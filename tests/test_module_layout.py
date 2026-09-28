@@ -48,7 +48,7 @@ CLASS_MODULES = {
 PACKAGES = {
     sources_pkg: ["huggingface", "split", "range", "concat"],
     core_pkg: ["families", "mapstyle", "wrappers", "stream"],
-    flow_pkg: ["steps", "parse", "execute", "graph"],
+    flow_pkg: ["steps", "parse", "execute", "graph", "trace"],
 }
 
 
@@ -153,7 +153,7 @@ def test_flow_reaches_core_only_through_the_dispatch_layer() -> None:
     ``core.stream`` reaches ``flow`` through BODY-LOCAL imports precisely so this direction can
     stay a module-level one.
     """
-    for name in ("steps", "parse", "execute", "graph"):
+    for name in ("steps", "parse", "execute", "graph", "trace"):
         imported = _module_level_imports(f"recordstream.flow.{name}")
         assert "recordstream.core.stream" not in imported, f"flow.{name} must not import core.stream at module level"
         assert "recordstream.core" not in imported, f"flow.{name} must reach the dispatch via core.families"
