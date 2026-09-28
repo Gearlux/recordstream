@@ -10,6 +10,7 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordS
 -   **Libraries run AS-IS:** bare [albumentations and torchvision `transforms.v2`](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) transforms drop straight into any ops list — the engine invokes each op family natively (one call = one joint draw across image/mask/boxes). No adapter classes anywhere.
 -   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
 -   **Graph pipelines:** readable [`flow:` documents](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) of named steps — `from:` forks, `merge_from:` merges, `bind:` feeds one step's value into another's parameter. An `ops:` list is the same engine's linear spelling; both parse to one step graph.
+-   **Debug a graph:** [`Tracer`](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) runs one record through a `Stream` or a `FlowGraph` on the engine's own kernel — stop before a node, see what every node received and produced, rerun one node with a new value and recompute only from there.
 -   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
 -   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
 -   **Passive Introspection:** ops declare the value types they [handle / consume / produce](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) and are discoverable by category for visual editors and schema generators.
@@ -183,6 +184,36 @@ Declaring is **opt-in** — an op with none of these attributes is checked for n
 chains are unaffected. `flag_producers(ops)` gives `{flag: index of the op that raises it}`, total by
 construction, so *"which op decided this branch?"* always has an answer.
 
+### Tracing one record through a graph (`Tracer`)
+
+`check_chain` answers *"does this chain hold together?"* before a run. The next question comes from a
+debugger, a per-node tool or an LLM re-running one node: *"what did each node receive and produce,
+and what changes downstream if this parameter changes?"* `Tracer` (`recordstream.flow`) runs ONE
+record through a `Stream` or a `FlowGraph` on the engine's own kernel and keeps a snapshot per node:
+
+```python
+from recordstream.flow import Tracer
+
+tracer = Tracer(graph)                        # a Stream (nodes ops[0], ops[1], …) or a FlowGraph (its step keys)
+tracer.check(seed)                            # static: refuses an unmet need BEFORE anything runs, located at the node
+tracer.run(seed, until="gated")               # pauses BEFORE 'gated' — everything so far recorded
+tracer.step(); tracer.resume()                # one node on; to the end
+tracer.rerun_from("floor", percentile=75.0)   # rebuilds ONE node through its constructor, recomputes from there
+tracer.value("gated", "mask")                 # the real array, only when asked
+tracer.to_dict()                              # JSON: per node status, ms, params, bound values, summarised entries
+```
+
+A refused need is located: `ops[0]: BackgroundLevel needs the record entry 'image', which nothing
+before it produces — the chain has class, picture at that point`. A rerun starts from the node's
+CURRENT parameter values (what a host set after construction survives) and goes through the
+constructor, so a value it refuses — `rerun_from("floor", percentile=150.0)` →
+`ValidationError: percentile Input should be less than or equal to 100` — leaves the trace untouched,
+and the nodes before it keep their generation and are not run again. Snapshots are references (one
+1024x1024 record through four nodes keeps 5 MiB; `copy_snapshots=True` keeps 37 MiB), and an op that
+edits its record in place is flagged `in_place`. Measured over 200 records of 64x64 through four ops:
+0.103 ms per record plain, 0.161 ms traced (0.027 ms of it the static check). Walkthrough:
+[docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md).
+
 ### Writing an op as an algorithm (`Algorithm`)
 
 An algorithm declares its settings, inputs and outputs, and never sees a record:
@@ -296,11 +327,13 @@ RecordStream is designed to sit between your data catalog and your training loop
 
 ## 🔧 Installation
 
-RecordStream is on PyPI as a pre-release, so `pip` needs `--pre` to see it:
-
 ```bash
-pip install --pre recordstream
+pip install recordstream
 ```
+
+RecordStream is on PyPI as a pre-release; pip installs it without `--pre`, because no final release
+exists yet. Leave `--pre` off: it lets pip take pre-releases of *every* dependency too (a pydantic beta,
+for one).
 
 The core engine is **numpy**, and installs no ML framework. A framework arrives only with the extra
 that needs it:
@@ -311,7 +344,7 @@ that needs it:
 | `keras` | `recordstream.keras` — the `RecordSequence` `PyDataset` adapter and the `KERAS_BACKEND` ordering. Keras 3 is an API, so this names no compute engine; it runs on whichever of torch / TensorFlow / JAX you have |
 
 ```bash
-pip install --pre "recordstream[torch]"
+pip install "recordstream[torch]"
 ```
 
 Everything else works without either. A `Stream` is map-style (`__len__`/`__getitem__`), so a

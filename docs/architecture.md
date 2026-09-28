@@ -1827,3 +1827,73 @@ the declarations (a generated tool description), better messages. What must hold
 touches a record; every tool-facing view is derived from the three declarations, never declared a
 second time; outputs stay read-only; inputs are found by name only; `compute()` returns every output.
 Usage: [algorithm.md](algorithm.md).
+
+## 22. One record through the kernel, probed: `Tracer` (2026-09-28)
+
+**Context.** A graph debugger, a per-node tool an LLM calls with new settings, and a test that pins a
+pipeline node by node all ask the same three things of a graph: what did each node receive and
+produce for THIS record, where does it stop when asked to, and what changes downstream when one
+node's parameter changes. The engine offered none of it: `Stream` and `FlowGraph` yield the final
+record, and the kernel (`flow/execute.py`) frees each step's result after its last read. The obvious
+build — a debugging executor that walks the steps itself — would restate the kernel's rules (a fan-out
+read copies and a last read moves; `bind:` sets a step's parameters before it runs; a 1→N step forks
+the remaining subgraph) and drift from them, which is what the lowering pass deleted in §3 did.
+
+**Decision.** `recordstream.flow.Tracer` wraps every node's op in a probe and hands the wrapped step
+list to the SAME kernel (`run_steps_multi`, `_run_from`). The probe forwards everything the kernel
+touches on an op — `setattr` for `bind:`, `getattr` for a `step.attr` output and for `EXPANDS` — and
+records around `_apply_op`: the input, the output, the wall time, the parameters the node ran with,
+the values `bind:` set. A breakpoint is an exception the probe raises after recording the node's
+input; `step()`, `resume()` and `rerun_from()` re-enter the kernel at that node with the step
+environment rebuilt from the recorded outputs (copies, because the kernel moves a last read and the
+node may edit what it gets). Three rules, each measured:
+
+* **Snapshots are references.** One 1024x1024 float32 record through four nodes retains 5 MiB by
+  reference and 37 MiB deep-copied; over 200 records of 64x64 through four ops a plain run costs
+  0.103 ms per record, a traced one 0.161 ms (0.027 ms of it the static check), deep copies 0.216 ms.
+  An op that edits its record in place makes a reference snapshot lie, so the trace flags it
+  (`in_place`) by comparing the record's entries before and after the call by identity, and
+  `copy_snapshots=True` exists for such chains.
+* **A rerun goes through the constructor, from the node's CURRENT values.**
+  `type(op)(**{**current, **params})`, with `current` read off the live op per constructor parameter
+  (`confluid.input_specs`). The constructor is where confluid validates, so
+  `rerun_from("floor", percentile=150.0)` is refused with `ValidationError: percentile Input should be
+  less than or equal to 100` and the trace is untouched. Setting the attribute directly bypasses that
+  validation and poisons the live op; rebuilding from the kwargs captured at construction drops what
+  the host set afterwards (a viewer writes its window into an op by `setattr`) — measured both ways.
+* **The static check carries flags across nodes and is graph-aware.** Each node is checked with
+  `check_chain` (§16) over the nodes whose RECORDS reach it — its `from:` line plus `merge_from:`, in
+  schedule order — and itself. `check_chain([Decode(requires="bright")], provided=…)` on its own
+  refuses the gate (`Decode is gated on the flag 'bright', which no node before it raises`); over the
+  lineage `[BackgroundLevel, Classify, Decode]` the gate sees the flag, and a fork's sibling branch —
+  whose entries and flags never arrive — does not count. A `bind:` reference is not lineage: it hands
+  one value to a parameter, not a record. A refusal is raised before any node runs, located as
+  `where:node: <message>`.
+
+**Consequences.** The tracer imports four private kernel names (`_apply_op`, `_result_readers`,
+`_run_from`, `_op_expands`) — the internal cross-module surface `flow/__init__.py` already declares —
+and nothing from any front end, so it lives in `recordstream/flow/trace.py`; a page or a tool server
+is a thin JSON adapter over `to_dict()`. `check_chain` reads a declaration as `{entry: type}` and
+takes a `Transform`'s tuple of classes for entry names (root backlog), so an op declaring types only
+is never handed to it: its verdict is `unverifiable`, every node after it is checked on incomplete
+knowledge (`complete: false`) and a refusal there is reported, not raised. Two accepted limits: a 1→N
+expanding node's trace keeps only its last branch (a rerun below it is refused), and a
+`bind:`/`merge_from:` failure raised by the kernel before the op is called is not attributed to a node.
+
+**Example.**
+
+```python
+tracer = Tracer(FlowGraph.from_yaml("detector.yaml"), where="detector.yaml")
+tracer.run(seed)
+tracer.rerun_from("floor", percentile=75.0)
+tracer.generations                       # {'spec': 0, 'mag': 0, 'floor': 1, 'level': 1, 'gated': 1, 'boxes': 1}
+tracer.to_dict()["nodes"][4]["bound"]    # {'low_level': 2.97} — re-bound from the recomputed floor
+tracer.run(seed, until="gated").statuses
+# {'spec': 'ok', 'mag': 'ok', 'floor': 'ok', 'level': 'ok', 'gated': 'paused', 'boxes': 'not reached'}
+```
+
+**What you may change.** What a summary carries, more report columns, a richer verdict vocabulary,
+where a breakpoint may sit. What must hold: the run stays the kernel's run (no second executor); a
+probe stays transparent to everything the kernel does to an op; snapshots stay references unless
+asked; a rerun rebuilds through the constructor from the live values; a refused value or a refused
+check leaves the trace as it was. Usage: [trace.md](trace.md).

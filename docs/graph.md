@@ -100,6 +100,62 @@ ops that re-encoded dataflow as imperative mutations of a per-record cell store)
 because it destroyed the very structure every consumer — a compiler, a visual editor, a reader —
 wants back. Rationale: [architecture.md](architecture.md).
 
+## Tracing one record (`Tracer`)
+
+`recordstream.flow.Tracer` runs ONE record through a `Stream` or a `FlowGraph` on the same kernel an
+ordinary run uses — every node's op sits behind a probe that records what went in and what came out
+— so what it shows is what a real run does. Nodes are named `ops[0]`, `ops[1]`, … for a `Stream`
+(the position in the ops list; the same op twice is two nodes) and by step key for a flow.
+
+```python
+from recordstream.flow import Tracer
+
+tracer = Tracer(graph)                        # nothing is parsed or built until the first use
+tracer.names                                  # ['spec', 'mag', 'floor', 'level', 'gated', 'boxes']
+
+tracer.check(seed)                            # one JSON row per node: available entries, consumes, produces, verdict
+tracer.run(seed)                              # check, then run; .result is what the graph yielded
+tracer.run(seed, until="gated")               # pauses BEFORE 'gated': it is 'paused', later nodes 'not reached'
+tracer.step()                                 # runs 'gated', pauses before the next node
+tracer.resume()                               # runs to the end
+
+tracer.rerun_from("floor", percentile=75.0)   # 'floor' rebuilt through its constructor; it and everything after recompute
+tracer.generations                            # {'spec': 0, 'mag': 0, 'floor': 1, 'level': 1, 'gated': 1, 'boxes': 1}
+
+tracer.value("gated", "mask")                 # the real Mask; side="input" for what the node received
+tracer.statuses                               # 'not reached' | 'paused' | 'ok' | 'dropped' | 'error', per node
+tracer.to_dict()                              # {where, check, nodes[...], paused_at, result, total_ms}
+```
+
+**The check.** Each node is checked with `check_chain` over the nodes whose records reach it (its
+`from:` line and its `merge_from:` steps, in schedule order) and itself, so a flag raised earlier is
+carried to the gate and a fork's sibling branch does not count; a `bind:` reference hands one value to
+a parameter, not a record, so it is not part of the lineage. A refusal is raised before anything runs,
+located at the node: `detector.yaml:floor: NoiseFloorEstimate needs the record entry 'spectrogram',
+which nothing before it produces — …`. An op that declares the TYPES it consumes and produces rather
+than entry names (a `Transform`'s tuple) cannot be checked by name: its verdict is `unverifiable`,
+every node after it is checked on incomplete knowledge (`complete: false` — a refusal there is
+reported in the row, not raised), and the run shows the truth.
+
+**Reruns.** `rerun_from(node, **params)` rebuilds the node as `type(op)(**{**current, **params})` —
+its CURRENT constructor-parameter values (a value the host set after construction survives) with the
+new ones written over — so the constructor validates: a refused value raises and the trace is left
+exactly as it was. The nodes before keep their recorded outputs and generation; the rebuilt node and
+everything after it recompute and carry the next generation. A node that raised at run time is
+recorded as `error` with the message (later nodes `not reached`); `rerun_from` that node recovers.
+
+**Snapshots.** By default a snapshot is the object the kernel handed the node — no copy — and an op
+that edits its record in place is flagged `in_place: true` on its entry. `Tracer(graph,
+copy_snapshots=True)` deep-copies every input and output instead (one 1024x1024 float32 record
+through four nodes: 5 MiB by reference, 37 MiB by copy). `to_dict()` never dumps an array: an entry
+is summarised as `{type, shape, dtype, min, max}` (a `Mask` as `true_fraction`), with an item's
+declared attributes beside it.
+
+Two limits: a 1→N expanding node's trace keeps its last branch only, and a rerun from a node after it
+is refused; a `bind:` or `merge_from:` that fails inside the kernel — before the node's op is called —
+propagates without being attributed to a node. The full page — a runnable example with its output, the JSON of
+one node, every refusal — is [trace.md](trace.md); rationale: [architecture.md](architecture.md) §22.
+
 ## Expanding (1→N) steps
 
 A step whose op carries `EXPANDS = True` yields several records from one. The remaining subgraph

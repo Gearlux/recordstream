@@ -44,6 +44,8 @@ Submodules, bottom of the layer first (imports run strictly one way):
     - recordstream.flow.execute: the per-record kernel (``run_steps_multi`` / ``run_steps`` /
       ``is_linear`` + the two routes) and the spawn-worker entry point.
     - recordstream.flow.graph: ``FlowGraph``, the engine facade.
+    - recordstream.flow.trace: ``Tracer`` — one record through either facade on the same kernel,
+      a snapshot per node; pause, step, rerun one node (the debugger's engine).
 
 The canonical dotted path for a config is the SUBMODULE one
 (``!class:recordstream.flow.graph.FlowGraph``); the package re-export keeps
@@ -71,8 +73,18 @@ from recordstream.flow.steps import (  # noqa: F401  — see the internal-surfac
     _read_output,
     _split_bind_ref,
 )
+from recordstream.flow.trace import Tracer
 
-__all__ = ["FlowGraph", "FlowStep", "parse_flow", "run_steps", "run_steps_multi", "is_linear", "RESERVED_STEP_KEYS"]
+__all__ = [
+    "FlowGraph",
+    "FlowStep",
+    "Tracer",
+    "parse_flow",
+    "run_steps",
+    "run_steps_multi",
+    "is_linear",
+    "RESERVED_STEP_KEYS",
+]
 
 # The private names re-exported above are the engine's INTERNAL cross-module surface: the
 # kernel's two routes, the reader accounting `core.stream` imports, the spawn-worker entry
