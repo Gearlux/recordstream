@@ -39,17 +39,24 @@ environment at all — :func:`is_linear` routes it to ``_run_linear``.
 Submodules, bottom of the layer first (imports run strictly one way):
 
     - recordstream.flow.steps: the step MODEL — ``FlowStep``, the ``bind:`` reference
-      grammar, ``RESERVED_STEP_KEYS``. Pure data; imports nothing from its siblings.
+      grammar, ``RESERVED_STEP_KEYS``, ``StepReferenceError`` (the ``ValueError`` a reference to no
+      earlier step raises). Pure data; imports nothing from its siblings.
     - recordstream.flow.parse: ``parse_flow`` — the only module that knows the DOCUMENT form.
     - recordstream.flow.execute: the per-record kernel (``run_steps_multi`` / ``run_steps`` /
       ``is_linear`` + the two routes) and the spawn-worker entry point.
     - recordstream.flow.graph: ``FlowGraph``, the engine facade.
+    - recordstream.flow.subgraph: ``Subgraph`` — a flow mapping used as ONE op, written inline in the
+      step that uses it; its inside runs on the same kernel. ``parse_flow`` opens it right after
+      building it (by duck typing — this module imports ``parse``), so a mistake inside is refused
+      before the first record. Its inner nodes are named ``prep/grey``, which is why a step name may
+      not contain ``/``.
     - recordstream.flow.trace: ``Tracer`` — one record through either facade on the same kernel,
-      a snapshot per node; pause, step, rerun one node (the debugger's engine).
+      a snapshot per node; pause, step, rerun one node (the debugger's engine). It descends into a
+      ``Subgraph`` step with a child tracer over the inner steps.
 
 The canonical dotted path for a config is the SUBMODULE one
-(``!class:recordstream.flow.graph.FlowGraph``); the package re-export keeps
-``from recordstream.flow import FlowGraph`` and the older spelling working. ``__all__`` is
+(``!class:recordstream.flow.graph.FlowGraph``, ``!class:recordstream.flow.subgraph.Subgraph``); the
+package re-export keeps ``from recordstream.flow import FlowGraph`` and the older spelling working. ``__all__`` is
 load-bearing — a visual editor's node bridge surfaces ``FlowGraph`` through it, because
 ``scan_module``'s ``__module__`` filter no longer sees anything in this package.
 """
@@ -69,21 +76,25 @@ from recordstream.flow.steps import (  # noqa: F401  — see the internal-surfac
     _MISSING,
     RESERVED_STEP_KEYS,
     FlowStep,
+    StepReferenceError,
     _BindRef,
     _read_output,
     _split_bind_ref,
 )
+from recordstream.flow.subgraph import Subgraph
 from recordstream.flow.trace import Tracer
 
 __all__ = [
     "FlowGraph",
     "FlowStep",
+    "Subgraph",
     "Tracer",
     "parse_flow",
     "run_steps",
     "run_steps_multi",
     "is_linear",
     "RESERVED_STEP_KEYS",
+    "StepReferenceError",
 ]
 
 # The private names re-exported above are the engine's INTERNAL cross-module surface: the

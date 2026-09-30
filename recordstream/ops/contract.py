@@ -463,7 +463,13 @@ def flag_producers(ops: Sequence[Any]) -> Dict[str, int]:
     return producers
 
 
-def check_chain(ops: Sequence[Any], *, provided: Iterable[str] = (), where: str = "") -> None:
+#: How :func:`check_chain` names the producer of a flag raised BEFORE the chain (its ``raised`` argument).
+_BEFORE_THE_CHAIN = "a node before this chain"
+
+
+def check_chain(
+    ops: Sequence[Any], *, provided: Iterable[str] = (), raised: Iterable[str] = (), where: str = ""
+) -> None:
     """Check that a chain holds together, BEFORE it is run over a record.
 
     An op may declare its interface as class attributes — ``consumes`` / ``produces``
@@ -475,9 +481,10 @@ def check_chain(ops: Sequence[Any], *, provided: Iterable[str] = (), where: str 
     Four things are refused, each of which would otherwise surface as an empty result:
 
     * a ``consumes`` key no earlier op ``produces`` and ``provided`` does not carry;
-    * a ``requires`` naming a flag no op declares, or one declared only LATER in the chain;
-    * two ops declaring the same flag — ambiguous, so which node decided a branch would have
-      no answer;
+    * a ``requires`` naming a flag no op declares (and ``raised`` does not carry), or one declared
+      only LATER in the chain;
+    * two ops declaring the same flag, or an op declaring one ``raised`` already carries —
+      ambiguous, so which node decided a branch would have no answer;
     * two ops reporting under the same name — the later finding would overwrite the earlier.
 
     Declaring is OPT-IN: an op with none of these attributes is checked for nothing, so a chain
@@ -488,12 +495,15 @@ def check_chain(ops: Sequence[Any], *, provided: Iterable[str] = (), where: str 
     Args:
         ops: The chain, in execution order.
         provided: Record keys already present when the chain starts (a graph's input contract).
+        raised: Flags already raised when the chain starts — by the nodes ahead of it, when the chain
+            is the inside of a subgraph. A ``requires`` may name one; an op in the chain declaring one
+            again is refused as a second declaration. Default: none.
         where: Location prefix for the message — a file, a graph name — so a refusal is located.
     """
     prefix = f"{where}: " if where else ""
     available = {str(key) for key in provided}
     reporters: Dict[str, str] = {}
-    raised: Dict[str, str] = {}
+    raised_by: Dict[str, str] = {str(flag): _BEFORE_THE_CHAIN for flag in raised}
     # Who writes what, over the WHOLE chain — so an unmet need can say whether the key is
     # simply absent or merely produced too late, which are different mistakes.
     written: Dict[str, str] = {}
@@ -517,20 +527,20 @@ def check_chain(ops: Sequence[Any], *, provided: Iterable[str] = (), where: str 
                     f"produces — {where_from}"
                 )
         requires = str(getattr(op, "requires", "") or "")
-        if requires and requires not in raised:
-            known = ", ".join(sorted(raised)) or "none"
+        if requires and requires not in raised_by:
+            known = ", ".join(sorted(raised_by)) or "none"
             raise ChainContractError(
                 f"{prefix}{name} is gated on the flag {requires!r}, which no node before it "
                 f"raises — the flags available at that point are: {known}"
             )
         for flag in _declared(op, "flags", ()):
             flag = str(flag)
-            if flag in raised:
+            if flag in raised_by:
                 raise ChainContractError(
-                    f"{prefix}the flag {flag!r} is declared by both {raised[flag]} and {name} — "
+                    f"{prefix}the flag {flag!r} is declared by both {raised_by[flag]} and {name} — "
                     "a gate naming it could not say which node decided it, so declare it once"
                 )
-            raised[flag] = name
+            raised_by[flag] = name
         reports = str(_declared(op, "reports", ""))
         if reports:
             if reports in reporters:

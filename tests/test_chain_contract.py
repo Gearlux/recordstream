@@ -158,3 +158,30 @@ class TestReports:
     def test_a_transform_reports_nothing_and_may_repeat(self) -> None:
         """`reports = ""` marks a transform, not an analysis — several may sit in one chain."""
         check_chain([Windowed(), Windowed()], provided={"signal"})
+
+
+class TestFlagsRaisedBeforeTheChain:
+    """``raised``: flags already raised when the chain starts — by the steps ahead of a subgraph, when the
+    chain is the subgraph's inside. Measured break before it existed: an outer node raising ``bright`` ahead
+    of a subgraph whose inner node is gated on it ran correctly but was refused by the inner check with
+    ``Gated is gated on the flag 'bright', which no node before it raises``."""
+
+    def test_the_default_is_todays_behaviour(self) -> None:
+        with pytest.raises(ChainContractError, match="is gated on the flag 'ble', which no node before it raises"):
+            check_chain([DecodeBle(requires="ble")], provided={"clock"})
+
+    def test_a_gate_may_name_a_flag_raised_before_the_chain(self) -> None:
+        check_chain([DecodeBle(requires="ble")], provided={"clock"}, raised={"ble"})
+
+    def test_the_flags_raised_before_are_listed_when_a_gate_names_another(self) -> None:
+        with pytest.raises(ChainContractError) as exc:
+            check_chain([DecodeBle(requires="nosuch")], provided={"clock"}, raised={"ble"})
+        assert str(exc.value).endswith("the flags available at that point are: ble")
+
+    def test_declaring_a_flag_raised_before_the_chain_is_ambiguous(self) -> None:
+        with pytest.raises(ChainContractError) as exc:
+            check_chain([Measure(), Classify()], provided={"signal"}, raised={"ble"}, where="view.yaml")
+        assert str(exc.value) == (
+            "view.yaml: the flag 'ble' is declared by both a node before this chain and Classify — a gate naming "
+            "it could not say which node decided it, so declare it once"
+        )

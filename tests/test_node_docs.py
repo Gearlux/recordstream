@@ -14,6 +14,7 @@ from confluid import parse_param_docs  # type: ignore[import-not-found]
 
 from recordstream import Pipeline, Transform
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
+from recordstream.flow import Subgraph
 from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
@@ -35,6 +36,7 @@ _NODE_CLASSES = [
     WrappedOp,
     Transform,
     Pipeline,
+    Subgraph,
     Threshold,
     ConnectedComponents,
     ConvertToImage,
