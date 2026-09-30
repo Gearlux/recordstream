@@ -214,6 +214,74 @@ edits its record in place is flagged `in_place`. Measured over 200 records of 64
 0.103 ms per record plain, 0.161 ms traced (0.027 ms of it the static check). Walkthrough:
 [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md).
 
+### A flow used as one op (`Subgraph`)
+
+A `Subgraph` is a `flow:` mapping written inside the step that uses it. The outer flow sees ONE step;
+its inside runs on the same kernel as any flow, on the record that step receives:
+
+```yaml
+flow:
+  prep:
+    op: !class:recordstream.flow.subgraph.Subgraph
+      steps:
+        grey:
+          op: !class:recordstream.ops.image.ConvertMode {mode: L}
+        scaled:
+          op: !class:recordstream.ops.numpy.Scale {source_min: 0.0, source_max: 255.0, target_min: 0.0, target_max: 1.0}
+      result: scaled
+  mask:
+    op: !class:recordstream.ops.numpy.Threshold {low_level: 0.5}
+outputs: mask
+```
+
+On a 120x160 image with two light rectangles on a dark background this yields a mask with mean
+`0.2855`, exactly as the same three steps written flat. `result:` names the inner step whose record
+leaves the subgraph (blank = the last one). The tracer lists the inside:
+`Tracer(graph).names` is `['prep', 'prep/grey', 'prep/scaled', 'mask']`, and
+`run(record, until="prep/scaled")` pauses inside it.
+
+Every mistake in a subgraph written as a flow step's op or as an `ops:` list member is refused **before the first record**, in words, naming the outer step (a subgraph held inside another op's slot — `Enable(ops=[…])`, `RandomApply(op=…)`, `Pipeline(transforms=[…])` — is opened only when that op first calls it):
+
+| you write | you get |
+| --- | --- |
+| `result: nosuch` | `flow step 'prep' (a subgraph): Subgraph: result 'nosuch' does not name an inner step (the steps are: ['grey', 'scaled']) (at demo.yaml:3:9)` |
+| an inner step with `from: grey`, where `grey` is an OUTER step | `… Subgraph: step 'mask' reads 'grey' (from: 'grey'), which is not a step inside this subgraph — a step inside a subgraph reads only the record the subgraph receives and the steps before it inside …` |
+| an outer step with `bind: {value: measure.level}`, `level` a step inside `measure` | `flow step 'stamp': bind value='measure.level' reads 'level' of 'measure', which is a subgraph — a step outside a subgraph cannot read a value of a step inside it; move that step out of the subgraph` |
+| a 1→N expanding op inside (here the test op `SgSplit`) | `… Subgraph: step 'split' (SgSplit) is a 1→N expanding op, and a subgraph returns one record per record it receives — move the step out of the subgraph` |
+| a step named `prep/grey` | `flow: step name 'prep/grey' may not contain '/' (reserved for the nodes inside a subgraph …)` |
+
+A subgraph's `consumes`, `produces` and `flags` are read off its inner ops, so `check_chain` and the
+tracer's check see it as the steps it holds: a flag raised inside reaches a gate after it. `produces` and `flags`
+count only the inner steps on the lineage of `result` — the record the subgraph returns.
+
+**Using one subgraph twice** — three ways:
+
+1. **Copy the block.** A second `op: !class:…Subgraph` with the same `steps:` is an independent copy.
+2. **Keep it as a template.** A steps file (next point) kept aside and inserted as a copy wherever it
+   is needed; nothing links the copies back.
+3. **Include one steps file.** Move the steps to `prep.steps.yaml` (a bare steps mapping) and write
+   `steps: {include: prep.steps.yaml}` in each use — every use gets its own op objects:
+
+   ```yaml
+   flow:
+     read: {}
+     prep:
+       op: !class:recordstream.flow.subgraph.Subgraph
+         steps:
+           include: prep.steps.yaml
+         result: scaled
+     prep2:
+       from: read
+       op: !class:recordstream.flow.subgraph.Subgraph
+         steps:
+           include: prep.steps.yaml
+   ```
+
+YAML anchors and `!ref:` are not reuse spellings: an anchor merged into `flow:` always runs first
+whatever line it is written on, and a `!ref:` makes every use ONE object, so a setting written on one
+use changes the other. Full guide: [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md#subgraphs-a-flow-used-as-one-op);
+why it is an op: [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md).
+
 ### Writing an op as an algorithm (`Algorithm`)
 
 An algorithm declares its settings, inputs and outputs, and never sees a record:
@@ -294,9 +362,9 @@ wire evaluates it when it saves the graph and writes the resulting list into `na
 | [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
 | [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) | Writing an op as an `Algorithm`: `Param` / `Input` / `Output` slots, `compute()`, entry names (`keys`), replacing outputs, what tools derive (`algorithm_spec`, `consumes` / `produces`, the settings schema) |
 | [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
-| [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
+| [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, subgraphs (`Subgraph` — a flow used as one op, and using one twice), expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
 | [docs/graph-contract.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph-contract.md) | what ONE graph must deliver — outputs (all required), the records of a delivered stream, `delivered:` written by the editor, the `classes` slot rule, and every refusal `check()` gives |
-| [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, the JSON trace, every refusal |
+| [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, looking inside a subgraph (`prep/grey`), the JSON trace, every refusal |
 | [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |

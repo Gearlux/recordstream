@@ -20,6 +20,36 @@ All notable changes to this project are documented here. The format follows
   real object; `to_dict()` is JSON with arrays summarised. Snapshots are references unless
   `copy_snapshots=True`; an op that edits its record in place is flagged `in_place`.
   Usage: `docs/trace.md`.
+- **`recordstream.flow.subgraph.Subgraph`** (also `from recordstream.flow import Subgraph`) — a
+  `flow:` mapping used as ONE op, written inline in the step that uses it (`steps:` the flow grammar,
+  `result:` the inner step whose record it returns; blank = the last). The inside runs on the same
+  kernel as any flow. `consumes` / `produces` / `flags` are derived from the inner ops (`produces` and
+  `flags` from the steps on the lineage of `result` only — the record the subgraph returns). Refused
+  before the first record, naming the outer step and the line of the subgraph that refuses (the inner
+  marker of a nested one): a `result:` naming no inner step, a 1→N
+  expanding inner op, an inner `from:` / `merge_from:` / `bind:` naming a step outside, a `from:` or
+  `merge_from:` written inside an inner op's `!class:` marker, and an outer `bind:` / `from:` /
+  `merge_from:` reading a step inside a subgraph. One subgraph is used twice by copying its block or by
+  `steps: {include: prep.steps.yaml}` in each use. Usage: `docs/graph.md` → "Subgraphs".
+- **`Tracer` looks inside a subgraph step** (in a `FlowGraph` or a `Stream`'s ops list): its inner
+  nodes follow it in `names` as `prep/grey` (`ops[1]/grey`, nested `prep/inner/x`), and `run(until=…)`,
+  `step()`, `resume()`, `rerun_from()`, `value()`, `statuses`, `generations`, `check()` and
+  `to_dict()` take them (`to_dict` rows carry `parent`, a subgraph row `inner`).
+- **`recordstream.flow.StepReferenceError`** — the `ValueError` a `from:` / `merge_from:` / `bind:`
+  naming no earlier step raises; its `key`, `ref`, `target`, `step` and `param` say which reference.
+- **`check_chain(..., raised=…)`** — the flags already raised when the chain starts (the steps ahead of
+  a subgraph, when the chain is its inside). Default: none.
+
+### Changed
+- A `flow:` step name may not contain `/` (it names a node inside a subgraph, `prep/grey`):
+  `flow: step name 'prep/grey' may not contain '/' …`.
+- `parse_flow` no longer changes the steps mapping it is given: a bare marker's `from:` /
+  `merge_from:` / `bind:` are read off a copy, so parsing the same steps twice wires the same graph.
+- `Tracer` with `copy_snapshots=True` reruns a first node from a copy of the record as it arrived, so a
+  first node that edits its record in place gives the same result on every rerun; a refusal raised while
+  a tracer builds its plan starts with the tracer's `where`.
+- A `Stream` holding a stream-level op (`Parallel`) opens every subgraph member before the first
+  record and names it by its own index in `ops`.
 
 ## [0.1.0a2] — 2026-09-27
 

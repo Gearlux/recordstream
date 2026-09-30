@@ -23,6 +23,7 @@ Maintenance rules:
 | Library interop | `core._apply_op`, `register_op_family` | External libraries run as-is via the op-family dispatch — no adapters | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Engines | `core/` (`Stream`/`JointStream`), `flow/` (`FlowGraph`) | One op-application chokepoint, four routes; one per-record kernel behind two authoring forms | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30), [§5](#5-the-engines-own-callable-wrappers-live-in-core-2026-07-20-still-true-after-the-2026-08-01-package-split) |
 | Graph wiring | `flow/steps.py`, `flow/parse.py` | Fan-out/fan-in/cross-step values are step GRAMMAR (`from:`/`merge_from:`/`bind:`), never ops | [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30) |
+| Subgraphs | `flow/subgraph.py` | A flow used as ONE op, written inline; its inside runs on the same kernel | [§23](#23-a-subgraph-is-an-op-2026-09-29) |
 | Batching | `collate.py` | Grouping is the engine's; stacking is a pluggable registry | [§2](#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17) |
 | Storage & query | `storage/*` | The `typedrecord-v1` key-group layout over the codec; metadata scans without array loads | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) (contracts) + [storage.md](storage.md) |
 | Introspection & serialization | `discovery.py` | Callable↔string identity + registration-free module scans | [§4](#4-callablestring-serialization--passive-introspection-recordstreamdiscovery-2026-07-20) |
@@ -1897,3 +1898,87 @@ where a breakpoint may sit. What must hold: the run stays the kernel's run (no s
 probe stays transparent to everything the kernel does to an op; snapshots stay references unless
 asked; a rerun rebuilds through the constructor from the live values; a refused value or a refused
 check leaves the trace as it was. Usage: [trace.md](trace.md).
+
+## 23. A subgraph is an op (2026-09-29)
+
+**Context.** A graph that grows past a dozen steps wants a group of them folded into one step — a
+"preparation" block shown as one node, opened when needed, reused in a second place. The flow
+grammar has no such spelling, and three ways of writing one were measured against each other in the
+same file (a grey → scale block ahead of a threshold, on an image whose right answer is a mask with
+mean `0.2855`):
+
+* **YAML anchors merged into `flow:`** (`subgraphs: {prep: &prep {…}}`, then `flow: {<<: *prep, …}`).
+  Runs, but YAML merge puts the merged keys FIRST: a block merged after an outer step still ran before
+  it (`[('twice', …), ('frac', …)]` for a document that wrote `frac` first), so an inner step reading
+  an entry the outer step writes could not be written at all; a second `<<:` in the same mapping
+  vanished without a word; an outer step with an inner step's name silently REPLACED it (the run then
+  died in the wrong op: `ConnectedComponents expects a 2-D mask; got shape (120, 160, 3)`); and a gate
+  inside a merged block read a flag the outer step had not raised yet (`gated_ran False`, silently).
+* **A named definition used by reference** (`subgraphs: {prep: !class:… {…}}`, then
+  `op: !ref:subgraphs.prep`). Every use is ONE object: after a run the first use's `@output` read
+  `0.7145` — the second use's value — instead of its own `0.2855`, and a setting written on one use
+  (`!ref:thr {low_level: 0.2}`) changed the other; written on a dotted target it vanished. The inside
+  was one opaque node.
+* **An op whose body is a flow, written inline in the step that uses it.** Runs (`0.2855`), keeps
+  document order, names are scoped, each use is its own object.
+
+**Decision.** `recordstream.flow.subgraph.Subgraph(steps, result)` is an ordinary
+`@configurable(category="op", group="compose")` class — no new YAML syntax, no confluid change. Its
+`steps` are the flow grammar and its `__call__` hands them to the SAME kernel (`run_steps`, with the
+reader accounting cached): there is no second executor, and no lowering of the inside into the outer
+step list (the §3 mistake in another shape). Five rules, each from a measured break:
+
+* **`result`, never `outputs`**: confluid broadcasts a document's top-level `outputs:` into a
+  constructor parameter of that name — the outer flow's `outputs: boxes` overwrote it and the run
+  failed with `flow: outputs 'boxes' does not name a step`.
+* **Declarations are derived.** `consumes` / `produces` come from the inner ops (by entry name when
+  every inner op declares names, as a tuple of types otherwise), and so do `flags` — without derived flags a
+  graph that runs correctly was refused: `Gated is gated on the flag 'bright',
+  which no node before it raises`. `produces` and `flags` describe the record the subgraph RETURNS:
+  only the inner steps on the `from:` / `merge_from:` lineage of `result` count (amended 2026-09-29 —
+  measured, a `result` naming an earlier step or a sibling branch still declared the other branch's
+  entry and flag, so `check_chain` passed a need that failed at the first record and a gate that ran
+  without its flag; the same steps written flat were refused). `check_chain` gained `raised` (flags raised before a chain starts)
+  so the inside is checked knowing the flags the outer steps raised.
+* **Refused before the first record.** `parse_flow` opens a subgraph right after building it (by duck
+  typing, `FLOW_SUBGRAPH` — `subgraph.py` imports `parse.py`), and a `Stream` opens one when it
+  compiles its ops, so a `result:` naming no inner step, an expanding inner op, an inner reference to a
+  step outside, or a `from:` written inside an inner op's `!class:` marker (measured silently wrong:
+  mask mean `0.0`) is refused naming the outer step and its line — before, some of these failed at the
+  first record with no line, and the outside→inside `bind:` passed the static check and died at run.
+* **A value inside is not read from outside.** An outer `bind: {value: measure.level}` reaching a step
+  inside `measure` is refused; the fix is to move the step out.
+* **Inner nodes are named `prep/grey`.** A tracer lists them after their subgraph step (a child tracer
+  per subgraph step, on the same kernel — `run(until="prep/scaled")` pauses inside it), and a step
+  name may therefore not contain `/`, as `.` was already reserved for `step.attr`.
+
+**Consequences.** Reuse is by copy — a copied block, a steps file kept as a template and inserted as
+a copy, or one steps file named by `steps: {include: prep.steps.yaml}` in each use (each use gets its
+own op objects, measured) — and never by sharing one object. A `bind:` mapping written inside an
+inner op's marker cannot be refused: confluid reads a mapping under a marker as addressed
+configuration and leaves no trace of it on the built op. A `recordstream.Pipeline` step stays one
+opaque node to the tracer. The subgraph's derived `consumes` takes "earlier" as document order, so a
+sibling branch's product counts as available there (every inner step runs, so its needs count); the
+tracer's descent checks each inner node on its own lineage and is exact. A refusal in a nested subgraph
+points at the marker of the subgraph that refuses: the parser reads the nested markers' locations
+before confluid builds them and keeps each on the built subgraph.
+
+**Example.**
+
+```python
+from recordstream.flow import FlowGraph, Subgraph, Tracer
+from recordstream.ops.image import ConvertMode
+from recordstream.ops.numpy import Scale, Threshold
+
+prep = Subgraph(steps={"grey": ConvertMode(mode="L"), "scaled": Scale(source_min=0.0, source_max=255.0)})
+graph = FlowGraph(flow={"prep": prep, "mask": Threshold(low_level=0.5)})
+Tracer(graph).names                 # ['prep', 'prep/grey', 'prep/scaled', 'mask']
+Subgraph(steps={"grey": ConvertMode(mode="L")}, result="nosuch").flow_steps
+# ValueError: Subgraph: result 'nosuch' does not name an inner step (the steps are: ['grey'])
+```
+
+**What you may change.** More derived declarations (`reports`), what the refusals say, descending into
+other composing ops. What must hold: the inside runs on the engine's kernel (no second executor, no
+flattening), every structural refusal comes before the first record, a value inside is not read from
+outside, reuse copies, and a subgraph needs no confluid change. Usage: [graph.md](graph.md#subgraphs-a-flow-used-as-one-op),
+[trace.md](trace.md#inside-a-subgraph).
