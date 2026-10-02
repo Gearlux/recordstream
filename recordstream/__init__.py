@@ -107,7 +107,7 @@ from recordstream.runnable import (
     run_entrypoint,
     runnable_entrypoints,
 )
-from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource, SplitName
+from recordstream.sources import ConcatSource, DatasetSplit, DrawSource, HuggingFaceSource, RangeSource, SplitName
 from recordstream.transform import FunctionTransform, Pipeline, Transform, as_transform
 from recordstream.uri import SupportsDatasetIdentity, dataset_uri, dataset_uris, dataset_url
 from recordstream.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
@@ -204,6 +204,7 @@ __all__ = [
     "DatasetSplit",
     "RangeSource",
     "ConcatSource",
+    "DrawSource",
     "SplitName",
     # ---- file formats ----
     "FORMAT_GROUP",

@@ -29,7 +29,7 @@ import recordstream.sources as sources_pkg
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
 from recordstream.discovery import scan_module
 from recordstream.flow import FlowGraph, Subgraph
-from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+from recordstream.sources import ConcatSource, DatasetSplit, DrawSource, HuggingFaceSource, RangeSource
 
 #: Every public engine class and the module it must be DEFINED in (not merely re-exported from).
 CLASS_MODULES = {
@@ -37,6 +37,7 @@ CLASS_MODULES = {
     DatasetSplit: "recordstream.sources.split",
     RangeSource: "recordstream.sources.range",
     ConcatSource: "recordstream.sources.concat",
+    DrawSource: "recordstream.sources.draw",
     Stream: "recordstream.core.stream",
     JointStream: "recordstream.core.stream",
     FilterOp: "recordstream.core.wrappers",
@@ -47,7 +48,7 @@ CLASS_MODULES = {
 
 #: package -> the submodules whose @configurable classes it must re-export.
 PACKAGES = {
-    sources_pkg: ["huggingface", "split", "range", "concat"],
+    sources_pkg: ["huggingface", "split", "range", "concat", "draw"],
     core_pkg: ["families", "mapstyle", "wrappers", "stream"],
     flow_pkg: ["steps", "parse", "execute", "graph", "subgraph", "trace"],
 }

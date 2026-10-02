@@ -25,7 +25,7 @@ from recordstream.ops.sink import RecordSinkOp
 from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
 from recordstream.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
 from recordstream.ops.torch import ToTensor
-from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+from recordstream.sources import ConcatSource, DatasetSplit, DrawSource, HuggingFaceSource, RangeSource
 from recordstream.storage.directory import DirectorySink
 from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
 from recordstream.storage.zarr import ZarrBatchSink, ZarrGroupSink
@@ -48,6 +48,7 @@ def test_source_classes_tagged() -> None:
     assert DatasetSplit.__confluid_category__ == "source"
     assert RangeSource.__confluid_category__ == "source"
     assert ConcatSource.__confluid_category__ == "source"
+    assert DrawSource.__confluid_category__ == "source"
 
 
 def test_op_classes_tagged() -> None:
@@ -125,7 +126,7 @@ def test_categories_enumerable_via_registry() -> None:
     assert {"Stream", "JointStream"} <= registry.list_classes(category="engine")
     assert "DatasetSplit" not in registry.list_classes(category="engine")
     assert not ({"FilterOp", "WrappedOp"} & registry.list_classes(category="engine"))
-    assert {"HuggingFaceSource", "DatasetSplit", "RangeSource", "ConcatSource"} <= registry.list_classes(
+    assert {"HuggingFaceSource", "DatasetSplit", "RangeSource", "ConcatSource", "DrawSource"} <= registry.list_classes(
         category="source"
     )
     assert {

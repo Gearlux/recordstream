@@ -1,7 +1,7 @@
-# Sources — HuggingFace, splits, ranges, concatenation (`recordstream.sources`)
+# Sources — HuggingFace, splits, ranges, concatenation, drawn settings (`recordstream.sources`)
 
 `recordstream.sources` is a package with **one class per module**. Import from the package —
-`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource` —
+`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource, DrawSource` —
 but spell the **submodule** path in a config, because that is what `cls.__module__` says and
 what a generated config emits:
 
@@ -11,6 +11,7 @@ what a generated config emits:
 | `DatasetSplit` | `split.py` | `recordstream.sources.split.DatasetSplit` |
 | `RangeSource` | `range.py` | `recordstream.sources.range.RangeSource` |
 | `ConcatSource` | `concat.py` | `recordstream.sources.concat.ConcatSource` |
+| `DrawSource` | `draw.py` | `recordstream.sources.draw.DrawSource` |
 
 The shorter `!class:recordstream.sources.HuggingFaceSource` still resolves (Confluid falls back to
 a module-path import, and the package re-exports every name), so an older config keeps loading —
@@ -257,6 +258,153 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 > `_target_:` source is built at load time and is what the slot wants. The examples above use
 > `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
 > loaded source.
+
+## Drawing a generator's settings (`DrawSource`)
+
+A generator — an `Algorithm` with no record inputs whose settings describe one example — gives the
+same record every time. `DrawSource` draws its settings anew for every record, so a pipeline over
+it is a training set of different examples. Every example is a valid one: each draw picks only among
+the values the generator itself accepts.
+
+**The one rule.** The draws run top to bottom. Each picks from its own distribution, but only among
+the values the generator accepts given every draw above it. Settings not drawn yet keep the
+generator's own values. "Accepts" means the object holding the setting, and every object above it,
+rebuild through their constructors and pass their `check()` when they have one. The generator's
+rules are not restated anywhere — it judges every value itself.
+
+| draw (`recordstream.draws`) | given no values | what it does |
+| --- | --- | --- |
+| `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | tests each value, picks among the accepted ones by weight |
+| `Uniform(field, low, high)` | the setting's own range | a number from the range, tried up to 100 times until one is accepted |
+| `Span(field, share)` | — | for a list of bounded integers: a run of consecutive values covering a share of those accepted one at a time |
+| `Repeat(field, count, each)` | — | grows a list one element at a time, each from its class's defaults with its own draws `each`; the list ends early when an element's first draw finds no room |
+
+A `field` is the setting's dotted path from the generator (`road.width`), or from the element inside
+a `Repeat` (`position`). A path through a setting that is `None` is skipped.
+
+```python
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Optional
+
+from confluid import configurable
+
+from recordstream import Algorithm, Output, Param
+from recordstream.draws import Choice, Repeat, Uniform
+from recordstream.sources import DrawSource
+
+
+@configurable
+@dataclass(kw_only=True)
+class Lane:
+    position: Literal[0, 1, 2, 3, 4, 5, 6, 7] = 0
+
+
+@configurable
+@dataclass(kw_only=True)
+class Road:
+    width: Literal[2, 4, 8] = 8
+    closed: Optional[Literal[0, 1]] = None  # a closed lane, or None
+    lanes: Optional[List[Lane]] = None
+
+    def __post_init__(self) -> None:
+        taken = [lane.position for lane in self.lanes or ()]
+        if len(set(taken)) != len(taken):
+            raise ValueError("Road: two lanes on one position")
+        if any(p >= self.width or p == self.closed for p in taken):
+            raise ValueError("Road: a lane off the road or on the closed position")
+
+
+@configurable
+class Traffic(Algorithm):
+    road: Road = Param(default=Road(), doc="The road.")
+    speed: float = Param(default=50.0, doc="The speed in km/h.")
+    load: int = Output(doc="Lanes in use.")
+
+    def compute(self) -> Dict[str, int]:
+        return {"load": len(self.road.lanes or [])}
+
+
+source = DrawSource(
+    generator=Traffic(),
+    count=1000,
+    seed=7,
+    draws=[
+        Choice(field="road.width"),
+        Choice(field="road.closed", values=[None, 0], weights=[3, 1]),
+        Repeat(field="road.lanes", count=(0, 8), each=[Choice(field="position")]),
+        Uniform(field="speed", low=30, high=120),
+    ],
+)
+source[0]["load"]       # 1
+source.draw(0).log      # [('road.width', 8), ('road.closed', None), ('road.lanes[0].position', 7),
+                        #  ('road.lanes', '1 of 1'), ('speed', 91.46952050974008)]
+```
+
+The same in a config:
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:recordstream.sources.draw.DrawSource
+      count: 1000
+      seed: 7
+      generator: !class:my_package.Traffic {}
+      draws:
+        - !class:recordstream.draws.Choice {field: road.width}
+        - !class:recordstream.draws.Choice {field: road.closed, values: [null, 0], weights: [3, 1]}
+        - !class:recordstream.draws.Repeat
+          field: road.lanes
+          count: [0, 8]
+          each:
+            - !class:recordstream.draws.Choice {field: position}
+        - !class:recordstream.draws.Uniform {field: speed, low: 30, high: 120}
+  sink: ...
+```
+
+**Every record carries its settings file.** Beside the generator's outputs the record holds
+`settings`: `confluid.dump` of the drawn generator, so `confluid.load(record["settings"])` rebuilds
+that one example. Record `i` depends only on `seed`, `i` and the draws, so any slice, worker split or
+machine produces the same records.
+
+```yaml
+_target_: Traffic
+road:
+  _target_: Road
+  width: 8
+  lanes:
+  - _target_: Lane
+    position: 7
+speed: 91.46952050974008
+```
+
+**Lists grow while there is room.** Over the 1000 records the most lanes drawn per width are
+`{2: 2, 4: 4, 8: 8}`: a `Repeat` asked for up to 8 adds what fits and stops.
+
+**The order is the one thing to learn.** A value can be refused because a setting drawn LATER still
+has its default — a setting that copies its parent until it is set, for instance. Draw first what
+opens up the choices after it.
+
+**A list that cannot be met stops with the generator's own reason:**
+
+```python
+import random
+from recordstream.draws import draw_settings
+
+draw_settings(Traffic(road=Road(lanes=[Lane(position=6)])), [Choice(field="road.width", values=[2, 4])], random.Random(0))
+# DrawRefused: road.width: none of [2, 4] is accepted after nothing drawn —
+#              Road: a lane off the road or on the closed position
+```
+
+A spec that cannot be read raises `DrawSpecError` instead: a setting that does not exist (the
+message lists the ones there are), a `Choice` with no values on a setting that is not a closed set,
+a `Uniform` on a setting with no range, a range written backwards.
+
+**What the draws do not know.** Only refusals the generator makes before it computes count: a rule
+checked inside `compute()` is invisible to them — give the generator a `check()` holding it. A
+valid example is not necessarily a realistic one; realism comes from the ranges you write. A
+`Repeat`'s element draws are `Choice`, `Uniform` and `Span` (no list inside an element is drawn).
+Why the generator is the judge, and the approaches rejected:
+[architecture.md §24](architecture.md#24-a-generators-settings-are-drawn-one-setting-at-a-time-with-the-generator-as-the-judge-2026-10-02).
 
 ## A view forwards a key-restricted walk
 
