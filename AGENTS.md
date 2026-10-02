@@ -1,7 +1,7 @@
 # RecordStream Mandates
 
-Rules only. The reasons are in [`docs/architecture.md`](docs/architecture.md) (cited as §N; two
-records carry the number 8, cited as "§8 autograd" and "§8 model boundary"), usage is in the
+Rules only. The reasons are in [`docs/architecture.md`](docs/architecture.md) (cited as §N; the
+two eights are §8a, autograd, and §8b, model boundary), usage is in the
 [README](README.md) and `docs/*.md`, and most mechanisms explain themselves in their docstring.
 Root `AGENTS.md` rules are not repeated here.
 
@@ -219,7 +219,7 @@ Gotchas:
   stays task-free. §10. (`tests/test_keras_sequence.py`)
 - `recordstream.loaders` is torch-only and not root-exported; `loader_slots` refuses `shuffle` as
   a shared kwarg and `persistent_workers=True` with zero workers (`tests/test_loaders.py`).
-- Model boundary (§8 model boundary): the `outputs` contracts are generic in the array type;
+- Model boundary (§8b): the `outputs` contracts are generic in the array type;
   detection has no builder; `RestorationOutput` is the one key `image`, with no `residual` key and
   no clamping in the builder. `DataSink.write(record)` and `PredictionsSink.write(prediction,
   metadata)` stay two protocols; collapsing them is a TASKS.md decision.
@@ -238,7 +238,7 @@ Gotchas:
   hand-written dict. A new capability = decorate the method + extend the task Literal; the
   standard set is `RunnableTask`. §7. (`tests/test_entrypoint.py`)
 - The autograd flag is `__needs_autograd__`; its one reader fails open, so the flag and its reader
-  change together or not at all. §8 autograd.
+  change together or not at all. §8a.
 - A runner builds the bound node with `cli.materialize_runnable()` (`flow_mode="manual"`), never a
   bare `flow()`, and a consumer's own CLI calls the same helper (`tests/test_cli_materialize.py`).
 

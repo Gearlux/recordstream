@@ -28,7 +28,7 @@ Maintenance rules:
 | Storage & query | `storage/*` | The `typedrecord-v1` key-group layout over the codec; metadata scans without array loads | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) (contracts) + [storage.md](storage.md) |
 | Introspection & serialization | `discovery.py` | Callable↔string identity + registration-free module scans | [§4](#4-callablestring-serialization--passive-introspection-recordstreamdiscovery-2026-07-20) |
 | Runnables & workflows | `runnable.py`, `workflow.py`, `processing.py`, `cli.py` | `run()` objects, entry-point markers, combinators, the one `recordstream run` runner | [§7](#7-the-entrypoint-markers-are-the-dispatch-table-run_entrypoint-2026-07-29) + [runnable.md](runnable.md), [workflow.md](workflow.md) |
-| Model boundary | `outputs.py`, `predictions.py`, `core.ensure_record_dataset`, `labels.class_counts` | Dataset normalization in, prediction contracts + sinks out, class-balance statistics | [§8](#8-the-model-boundary-belongs-to-the-package-that-reads-it-2026-07-29) + [predictions.md](predictions.md) |
+| Model boundary | `outputs.py`, `predictions.py`, `core.ensure_record_dataset`, `labels.class_counts` | Dataset normalization in, prediction contracts + sinks out, class-balance statistics | [§8b](#8b-the-model-boundary-belongs-to-the-package-that-reads-it-2026-07-29) + [predictions.md](predictions.md) |
 
 ---
 
@@ -209,14 +209,18 @@ batched record: per key, typed values encode through the `recordstream/io.py` co
 (torch → stacked tensor, numpy → stacked array, else a list), each declared item attr becomes a
 LIST of per-record values (decoded back into one batched item of the same type), and a
 `"plain"`-tagged value batches as the plain list. Batches must be key-homogeneous — a mismatch
-raises. Consuming projects register task aliases (`"detection"`, `"yolo"`, …) **additively**;
-re-registering a key deliberately overwrites so a consumer can replace a default. The divergent
-consumer conventions were deliberately NOT unified here — the registry is an addressable home
-consumers opt into, not a forced migration.
+raises. The registry is **engine-internal**: only shape-generic, parameter-free collates register
+(`"record"` and `"list"` — they differ in one decision, whether array payloads are stacked, and that
+decision belongs to the model). A task's batch shape is parameterized by task-decided state — which
+keys are input and target, an int-id vs multi-hot target, a channels-last transpose — that a bare
+registry string cannot carry; a registered `"tuple"` with baked default keys would be the
+silent-wrong-keys trap. So a task-shaped collate is passed as a callable to the slot that takes one
+(`DataLoader(collate_fn=...)`, `RecordSequence(transform=...)`) and never registered (decided
+2026-08-06; no workspace consumer had ever registered one). Re-registering a key overwrites it.
 
 The open, string-keyed half of the registry exists first and foremost for **AI-callable tools**
 (the workspace converges on an MCP tool surface — see the root `AGENTS.md` end-goal): a JSON tool
-argument can carry `"collate": "yolo"` but never a Python function object, and a tool schema can
+argument can carry `"collate": "list"` but never a Python function object, and a tool schema can
 offer the legal values only if the set is discoverable at runtime (`registered_collates()`). In
 ordinary Python (and in YAML via a dotted `!ref:` to the function), passing the collate function
 directly remains the normal path.
@@ -239,7 +243,7 @@ directly remains the normal path.
 ```python
 from torch.utils.data import DataLoader
 
-from recordstream import Stream, collate, collate_records, get_collate, register_collate
+from recordstream import Stream, collate, collate_records
 
 stream = Stream(source=my_source, ops=[...])
 
@@ -250,13 +254,12 @@ batch["image"].layout                                # per-record attrs -> a lis
 loader = DataLoader(stream, batch_size=8, collate_fn=collate_records)
 
 
-# A task alias registers additively (runs when the defining module is imported).
-@register_collate("yolo")
+# A task's own batch layout is a plain callable, passed straight to the slot — never registered.
 def yolo_collate(items):
     ...  # stack to the task's own batch layout
 
 
-loader = DataLoader(stream, batch_size=8, collate_fn=get_collate("yolo"))
+loader = DataLoader(stream, batch_size=8, collate_fn=yolo_collate)
 ```
 
 ### Addendum: the READ-BACK lives here too (`recordstream.batch`, 2026-07-29)
@@ -294,9 +297,11 @@ mask = batch_tensor(batch, "target").long()               # a segmenter's [N, H,
 
 ### What you may change (and where it's documented)
 
-- **Plugging in your own batch layout** is the supported extension point — decorate a function
-  with `@register_collate("your-key")` and select it via `get_collate`/`collate`. Usage:
-  [kinds.md](kinds.md); the detection walkthrough: [record-model.md](record-model.md).
+- **Plugging in your own batch layout** is the supported extension point — pass your callable to
+  the slot that takes one (`DataLoader(collate_fn=...)`, `RecordSequence(transform=...)`). Register
+  a key only for a collate that is shape-generic and takes no parameters, one a JSON tool argument
+  could name. Usage: [kinds.md](kinds.md); the detection walkthrough:
+  [record-model.md](record-model.md).
 - **Changing the default collate's semantics** (how `"record"` stacks, the attrs-become-lists
   convention) is an architectural change: every batch consumer depends on it. Update this record
   and the recordstream `AGENTS.md` metadata mandate together.
@@ -736,7 +741,7 @@ ValueError: Unknown task 'export'; expected one of ['fit', 'test'].
   `runnable_entrypoints` rather than beside it — the invariant to preserve is that the markers stay
   the only place the mapping is written down.
 
-## 8. The autograd marker is named for the framework; its FLAG for what it decides (2026-07-29)
+## 8a. The autograd marker is named for the framework; its FLAG for what it decides (2026-07-29)
 
 ### Context
 
@@ -808,7 +813,7 @@ else:
   same rule — name the class for the concern, the flag for the decision the executor makes, and
   remember that a duck-typed read of a missing flag is silent.
 
-## 8. The model boundary belongs to the package that reads it (2026-07-29)
+## 8b. The model boundary belongs to the package that reads it (2026-07-29)
 
 ### Context
 
@@ -839,8 +844,8 @@ A package owns a contract when it owns the reader. So:
 - `class_counts` / `inverse_frequency_weights` land beside `LabelMap`, because how often each
   class occurs is a statistic over the labels.
 
-The line is drawn at the *framework convention*, not at "does this import torch" (this package
-already hard-depends on torch — a `Stream` IS a `torch.utils.data.Dataset`). What did NOT move:
+The line is drawn at the *framework convention*, not at "does this import torch" (torch is an
+optional extra of this package, not a dependency of the engine — record 9). What did NOT move:
 whether a loss accepts a `weight` argument and how to inject it. That is `torch.nn`'s constructor
 convention — Keras takes `class_weight` on `fit()` — so it lives in the consuming runnable as an
 overridable method, and this package never learns what a loss is.
@@ -2092,7 +2097,7 @@ the folder it is listed under (`numpy`, `image`, `torch`, `structure`, `compose`
   renamed tag fails there instead of emptying a picker.
 - `RecordSinkOp`, which writes through a `DataSink` in the middle of a chain, is an `op` in group
   `sink`, not a `sink`. A predictions sink is neither: its `write(prediction, metadata)` is not
-  `DataSink.write(record)` (§8, the model boundary).
+  `DataSink.write(record)` (§8b, the model boundary).
 - A package `__init__` lists its classes in `__all__`, because a module scan filters on
   `__module__` and finds nothing in a package (§11, §12).
 

@@ -77,14 +77,13 @@ Two things make the choice free:
 * **a stack failure explains itself**, naming the key, the differing shapes and the `"list"` way
   out, rather than surfacing numpy's bare *"all input arrays must have the same shape"*.
 
-The registry is additive, so a task can register its own convention too:
+A task's own convention is a plain callable passed to the slot that takes one. It is not
+registered: a registry key cannot carry task state (which keys are input and target, an int-id
+vs multi-hot target):
 
 ```python
-from recordstream import get_collate, register_collate
-
-@register_collate("yolo")                    # task aliases are additive
 def yolo_collate(items): ...
-loader = DataLoader(stream, collate_fn=get_collate("yolo"))
+loader = DataLoader(stream, collate_fn=yolo_collate)
 ```
 
 The string keys primarily target the MCP tool surface (JSON-serializable, enumerable collate selection) — in Python, passing the function directly stays the normal path. The full rationale is recorded in [architecture.md](architecture.md#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17).
