@@ -311,6 +311,37 @@ the same way; `keys` names other entries, and `Output(replaces="boxes")` writes 
 was read. Inputs are found by name only, so `check_chain` knows before a run what a pipeline needs.
 Full guide: [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md).
 
+### A training set of valid examples (`DrawSource`)
+
+A generator (an `Algorithm` with no record inputs) gives the same record every time. `DrawSource`
+draws its settings anew per record. The draws run top to bottom, and each picks only among the values
+the generator itself accepts given the draws above it — so every record is a valid example and the
+generator's rules are never restated:
+
+```python
+from recordstream.draws import Choice, Repeat, Uniform
+from recordstream.sources import DrawSource
+
+source = DrawSource(
+    generator=Traffic(),          # an Algorithm whose settings hold a Road with lanes
+    count=1000,
+    seed=7,
+    draws=[
+        Choice(field="road.width"),                                   # every value its Literal allows
+        Choice(field="road.closed", values=[None, 0], weights=[3, 1]),
+        Repeat(field="road.lanes", count=(0, 8), each=[Choice(field="position")]),  # while there is room
+        Uniform(field="speed", low=30, high=120),
+    ],
+)
+source[0]["load"]                 # the generator's output
+source[0]["settings"]             # its drawn settings file: confluid.load() rebuilds that one example
+```
+
+Record `i` depends only on `seed`, `i` and the draws. A list of draws that cannot be met stops with
+the generator's own reason (`DrawRefused: road.width: none of [2, 4] is accepted after nothing drawn —
+Road: a lane off the road …`). Full guide: [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#drawing-a-generators-settings-drawsource);
+why the generator judges: [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md).
+
 ### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
 
 `RecordContract` states what each RECORD carries. A classification pipeline usually has
@@ -365,7 +396,7 @@ wire evaluates it when it saves the graph and writes the resulting list into `na
 | [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, subgraphs (`Subgraph` — a flow used as one op, and using one twice), expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
 | [docs/graph-contract.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph-contract.md) | what ONE graph must deliver — outputs (all required), the records of a delivered stream, `delivered:` written by the editor, the `classes` slot rule, and every refusal `check()` gives |
 | [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, looking inside a subgraph (`prep/grey`), the JSON trace, every refusal |
-| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, `DrawSource` (a generator's settings drawn per record), Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |

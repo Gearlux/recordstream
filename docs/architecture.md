@@ -1982,3 +1982,73 @@ other composing ops. What must hold: the inside runs on the engine's kernel (no 
 flattening), every structural refusal comes before the first record, a value inside is not read from
 outside, reuse copies, and a subgraph needs no confluid change. Usage: [graph.md](graph.md#subgraphs-a-flow-used-as-one-op),
 [trace.md](trace.md#inside-a-subgraph).
+
+## 24. A generator's settings are drawn one setting at a time, with the generator as the judge (2026-10-02)
+
+**Context.** A generator — an `Algorithm` whose settings describe one example, such as a synthetic
+radio signal — produces the same record every time, so a training set needs its settings drawn anew
+per record, and every draw has to be an example the generator accepts. Its settings interlock: on a
+radio-cell generator a frame structure forbids data in some subframes, a bandwidth narrows the
+control region, an optional sub-object inherits a parent's value until it is set. Three ways were
+measured or weighed:
+
+* **Draw every setting independently and discard what the generator refuses.** Measured on that
+  generator: 145 of 400 random settings valid; of 993 drawn with one of its two frame structures, 4
+  survived (840 of 1007 with the other). The kept mix is the spec conditioned on validity, which
+  silently drops whatever the rules make rare — a set meant to be 40 % of one kind came out 0.4 %.
+* **A sampler written per generator** that draws in dependency order. Always valid, but it restates
+  the generator's rules (about 25 refusals in that one generator) in a second place that drifts,
+  every generator needs its own, and a user can tune only what its author exposed.
+* **A constraint solver.** The same rules rewritten in a solver's language, a heavy dependency, and
+  sampling a solver's solutions evenly is a problem of its own.
+
+**Decision.** The generator judges, one setting at a time. `recordstream.draws` holds four draws —
+`Choice`, `Uniform`, `Span`, `Repeat` — run top to bottom by `draw_settings`; each picks from its own
+distribution, but only among the values for which the setting's object, and every object above it up
+to the generator, rebuild through their constructors and pass `check()`. The objects are rebuilt from
+their constructor parameters read back from same-named attributes (the workspace rule that settings
+stay in the signature), so any `@configurable` class works — a dataclass, an `Algorithm`, a plain
+class — with no registration. Because every step keeps the whole object valid, the last one is valid:
+there is no final rejection. `Choice` tests every value (a closed `Literal`, a bool, an integer range
+of at most 1024); `Uniform` tries up to 100 values from its range; `Span` measures the values a list
+of integers accepts one at a time and takes a run covering a share of them (a share, because the
+sensible length depends on an earlier draw — a run of 100 cannot fit a space of 50); `Repeat` grows
+a list one element at a time, the element's first draw deciding whether there is room.
+`recordstream.sources.draw.DrawSource` turns the draws into records: record `i` is drawn from a random
+state seeded by `(seed, i)` alone and carries the drawn generator's settings file under `settings`.
+
+**Consequences.** Measured on the radio-cell generator with its 1000 draws: 1000 valid, the frame
+structures drawn 620 / 380 for an asked 60 / 40, its six bandwidths 156–176 times each, data blocks
+5.2 per frame on one structure and 3.9 on the other (fewer subframes had room); 200 of 200 generated;
+60 of 60 read back by an independent decoder; 5 ms per draw, 55 ms with a `Span` over 110 values,
+against 22–32 ms to generate the example. The order of the draws decides what a later default
+allows: with a sub-object's inherited setting drawn after its parent's, the parent's largest value
+was never drawn (0 of 216); drawn before, it was (50 of 216). A rule checked only inside `compute()`
+is invisible — a generator gives such rules a `check()`. A list that cannot be met raises
+`DrawRefused` with the generator's own message, never an invented answer. A `Repeat`'s element draws
+are not themselves `Repeat`s: the self-referring annotation left confluid unable to build the schema
+it validates with ("validation is OFF … RecursionError", measured), so a list inside an element is
+not drawn.
+
+**Example.**
+
+```python
+import random
+from recordstream.draws import Choice, Repeat, draw_settings
+
+drawn = draw_settings(Traffic(), [Choice(field="road.width"),
+                                  Repeat(field="road.lanes", count=(0, 8), each=[Choice(field="position")])],
+                      random.Random(7))
+drawn.settings.road  # Road(width=2, closed=None, lanes=[Lane(position=0), Lane(position=1)])
+drawn.log            # [('road.width', 2), ('road.lanes[0].position', 0), ('road.lanes[1].position', 1),
+                     #  ('road.lanes', '2 of 2')]
+```
+
+`Traffic` is the generator defined in [sources.md](sources.md#drawing-a-generators-settings-drawsource): a road
+drawn two wide, and the `Repeat` drew two lanes, both of which fit.
+
+**What you may change.** More draws (a log-uniform, a normal), what the refusals say, faster
+judging (checking only the objects a change reaches). What must hold: the generator is the only
+judge — no rule is restated in a draw; every step keeps the object valid, so nothing is rejected at
+the end; a record depends only on the seed, its index and the draws; and the settings file rides the
+record. Usage: [sources.md](sources.md#drawing-a-generators-settings-drawsource).

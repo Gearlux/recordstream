@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`recordstream.sources.draw.DrawSource` and the draws `Choice` / `Uniform` / `Span` / `Repeat`
+  (`recordstream.draws`)** — a generator's settings drawn anew for every record. The draws run top to
+  bottom and each picks only among the values the generator accepts given the draws above it (its
+  constructors and `check()` judge), so every record is a valid example; a `Choice` with no values
+  takes every value the setting's type allows, a `Uniform` the setting's own range. Each record carries
+  the drawn generator's settings file under `settings`, and depends only on the seed and its index.
+  A list of draws that cannot be met raises `DrawRefused` with the generator's reason; a spec that
+  cannot be read, `DrawSpecError`. Usage: `docs/sources.md`.
 - **`GraphContract`'s class-vocabulary slot is `classes`** — an output slot named like a constructor
   parameter of any class the graph delivers is refused at declaration time (confluid broadcasts the
   slot's value into that parameter; measured on `class_names` beside a `Stream`), and the slot accepts
