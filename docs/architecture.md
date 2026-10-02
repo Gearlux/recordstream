@@ -2052,3 +2052,68 @@ judging (checking only the objects a change reaches). What must hold: the genera
 judge — no rule is restated in a draw; every step keeps the object valid, so nothing is rejected at
 the end; a record depends only on the seed, its index and the draws; and the settings file rides the
 record. Usage: [sources.md](sources.md#drawing-a-generators-settings-drawsource).
+
+## 25. Discovery categories name a class's role (2026-10-02)
+
+**Context.** Every `@configurable` class lands in the confluid registry, and a front end that
+offers classes to a person — a visual editor's node palette, a discovery service's slot picker, a
+form generator — asks for one kind at a time: `list_classes(category="source")`. So `category=`
+decides where a class can be found. Three cases are easy to get wrong. `Stream` yields records and
+has `__len__`, so it looks like a dataset — but it is the thing that composes a dataset with ops.
+`DatasetSplit` wraps another source, so it looks like an engine — but a person wiring a
+`source:` slot looks for it among the sources. And some classes are meant to be wired by a YAML
+document but never dragged onto a canvas: a label map, a storage reader, a wrapper around a raw
+Python callable.
+
+**Decision.** A category names the role a class plays in a pipeline, not what it resembles.
+
+| category | role | classes |
+|---|---|---|
+| `engine` | composes sources and ops | `Stream`, `JointStream`, `FlowGraph` |
+| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
+| `op` | `Record -> Optional[Record]` | every op meant to be a node |
+| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink` |
+| `value` | produces a value with no record involved | `ClassNamesOutput`, `ClassNamesScan`, `RandomNumber` |
+| `contract` | states what a whole graph takes and delivers | `GraphContract` |
+
+A class wired only by a document carries NO category: `FilterOp` / `WrappedOp` (they hold a raw
+callable no canvas can supply, §5), `LabelMap`, the storage sources, the draws, `RecordSequence`
+(§10). Front ends offer a positive allowlist of categories, so "no category" means "in no palette"
+while the class still loads from YAML. An op also carries `group=`, which is presentation only:
+the folder it is listed under (`numpy`, `image`, `torch`, `structure`, `compose`, `formats`,
+`contract`, `sink`, `debug`).
+
+**Consequences.**
+
+- Applying ops is what makes a class an engine. A view source stays a source, so it is offered
+  wherever a source is.
+- An op without `category="op"` disappears from every palette without an error: an allowlist
+  cannot tell "forgot" from "meant". `tests/test_categories.py` pins the tags so a dropped or
+  renamed tag fails there instead of emptying a picker.
+- `RecordSinkOp`, which writes through a `DataSink` in the middle of a chain, is an `op` in group
+  `sink`, not a `sink`. A predictions sink is neither: its `write(prediction, metadata)` is not
+  `DataSink.write(record)` (§8, the model boundary).
+- A package `__init__` lists its classes in `__all__`, because a module scan filters on
+  `__module__` and finds nothing in a package (§11, §12).
+
+**Example.**
+
+```python
+import recordstream                           # registers this package's classes
+from confluid import configurable
+from confluid.registry import get_registry
+
+@configurable(category="op", group="image")   # a node, listed under …/Op/image
+class Sharpen: ...
+
+@configurable                                 # loads from YAML, in no palette
+class LookupTable: ...
+
+registry = get_registry()
+registry.list_classes(category="engine")      # {'FlowGraph', 'JointStream', 'Stream'}
+registry.list_classes(category="value")       # {'ClassNamesOutput', 'ClassNamesScan', 'RandomNumber'}
+```
+
+**What you may change.** Add or rename groups freely. Add a category only for a genuinely new
+role, together with the front ends' allowlist and the pins. What must hold: a category names a
+role, every node-facing op carries `op`, and a class wired only by a document carries none.
