@@ -1,9 +1,11 @@
-# Per-record op parameters (`ConfigureOp` / `Apply` / `Capture`)
+# Per-record op parameters (`ConfigureOp` and `bind:`)
 
 Some op parameters are only known *per record*. Two mechanisms cover this:
 
 - **`ConfigureOp(ops, target, param, source)`** — runs the `ops` compute-chain on the record as a SIDE branch (its transformations are discarded — the original record continues); the `source`-keyed entry of the chain's final record becomes the VALUE (payload-unwrapped via `item_data`), which is set as the `param` attribute of `target` — post-construction configuration, the confluid paradigm — and then `target` is applied to the original record. Use it when the value is *derived from the record itself* (e.g. a threshold from the record's own max) — the whole derivation reads as one node/YAML block.
-- **`Capture` + `Apply`** (`recordstream.ops.context`, see [graph.md](graph.md)) — when the value is an op's runtime **`@output`** (possibly stochastic — a random draw that can't be recomputed): `Capture(op, output, name)` applies the producer and records its live `@output` into a Context cell; a later `Apply(op, param, source)` sets the consumer's `param` from that cell and applies it. This is what graph exporters emit for `@output` → param wires, and the preferred form whenever the value already lives in a cell.
+- **`bind:` on a `flow:` step** (see [graph.md](graph.md)) — when the value already lives in another step: `bind: {param: ref}` sets the step op's `param` per record before the op runs. `ref` is a bare `step` (that step's whole result record), `step[key]` (one entry of its result) or `step.attr` (the step op's live **`@output`**, read after it ran — so a stochastic draw is read exactly, never recomputed). A step with `bind:` uses the plain-mapping step form (`op:` plus the reserved keys).
+
+Pick `ConfigureOp` when the derivation reads as ONE node; pick `bind:` when a producer step already exists (it is also what a graph editor draws for an `@output` → param wire).
 
 Concretely — a producer that draws a random gain per record and publishes what it ACTUALLY drew
 as a confluid `@output` (apply `@output` UNDER `@property`), and a consumer whose `level` gets set
@@ -33,7 +35,7 @@ class AugmentOp:
     @property
     @output
     def applied_level(self) -> float:
-        """The gain the LAST call actually drew — the live @output that Capture records."""
+        """The gain the LAST call actually drew — the live @output that `bind:` reads."""
         return self._applied
 
     def __call__(self, record: Record) -> Record:
@@ -46,7 +48,7 @@ class CompensateOp:
     """Divide the image by ``level`` — undo a gain applied earlier in the chain.
 
     Args:
-        level: The gain to divide out; set per record by Apply (or ConfigureOp).
+        level: The gain to divide out; set per record by `bind:` (or ConfigureOp).
     """
 
     def __init__(self, level: float = 1.0) -> None:
@@ -58,24 +60,22 @@ class CompensateOp:
 ```
 
 ```yaml
-ops:
-  # AugmentOp draws a random gain each call; capture the LIVE @output into a cell.
-  - !class:recordstream.ops.context.Capture
-    op: !class:mypackage.ops.AugmentOp {}      # or the registered short name: !class:AugmentOp {}
-    output: applied_level
-    name: __captured_level
-  # …then inject the captured value into the consumer's parameter, per record.
-  - !class:recordstream.ops.context.Apply
+flow:
+  # AugmentOp draws a random gain each call.
+  drawn: !class:mypackage.ops.AugmentOp {}      # or the registered short name: !class:AugmentOp {}
+  # …then bind the gain it ACTUALLY drew into the consumer's parameter, per record.
+  restored:
     op: !class:mypackage.ops.CompensateOp {}
-    param: level
-    source: __captured_level
+    bind:
+      level: drawn.applied_level
+outputs: restored
 ```
 
-Reading the pair: `Capture` runs `AugmentOp` once (the record's image is scaled by, say, 1.7×) and
-stores `applied_level` = 1.7 in the `__captured_level` cell; `Apply` does
-`setattr(compensate_op, "level", 1.7)` and then runs it — post-construction configuration, the
-confluid paradigm. Because the value is read off the op AFTER it ran, a stochastic draw is captured
-exactly; recomputing it (the naive alternative) would draw a DIFFERENT number.
+Reading the pair: `drawn` runs `AugmentOp` once (the record's image is scaled by, say, 1.7×); before
+`restored` runs, `bind:` does `setattr(compensate_op, "level", 1.7)` — the `applied_level` the
+producer reports AFTER it ran — post-construction configuration, the confluid paradigm. Because the
+value is read off the op after it ran, a stochastic draw is read exactly; recomputing it (the naive
+alternative) would draw a DIFFERENT number.
 
 A self-contained `ConfigureOp` example — derive a per-record threshold from the record's own statistics:
 
@@ -90,4 +90,4 @@ ops:
     param: low_level
 ```
 
-Both mechanisms leave the record's own entries untouched: `ConfigureOp`'s compute chain runs on a side-branch copy, and `Capture`/`Apply` move values through the per-record Context. All inner ops (the compute chain, `target`, the wrapped ops of `Capture`/`Apply`) are applied through the engine's op-family dispatch, so a bare library transform works in any of these slots too.
+Both mechanisms leave the record's own entries untouched: `ConfigureOp`'s compute chain runs on a side-branch copy, and `bind:` only reads values from earlier steps. All inner ops (the compute chain, `target`, the step ops) are applied through the engine's op-family dispatch, so a bare library transform works in any of these slots too.
