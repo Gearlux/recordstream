@@ -577,8 +577,9 @@ a **settable property**, and instance identity is the **declared `name`**, which
 
 A property rather than a plain attribute for two reasons: `confluid.accepts_key` admits "public
 settable class attributes", so the property keeps `enabled` overridable independently of the
-signature; and it gives ONE funnel to reject a non-bool, so a quoted YAML `enabled: "true"` fails
-at its `file:line` instead of being silently truthy.
+signature; and it gives ONE funnel to reject a non-bool, so nothing lands as the toggle silently truthy:
+through the constructor confluid's validation turns a quoted YAML `enabled: "false"` into `False` and
+refuses a typo (`"ture"`) at its `file:line`, and a plain attribute write of a non-bool raises.
 
 The retired form is not silently ignored: a stray public boolean attribute (what `visualize: false`
 now lands as) raises on first record with the replacement spelling in the message.
