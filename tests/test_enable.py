@@ -10,6 +10,7 @@ from typing import List
 
 import pytest
 from confluid import accepts_broadcast, accepts_key, to_pydantic
+from pydantic import ValidationError
 
 from recordstream import Record
 from recordstream.ops.enable import Enable
@@ -51,10 +52,12 @@ class TestEnableToggle:
         assert overlay({"x": 1}) == {"x": 1, "seen": True}
         assert labelstudio({"x": 1}) == {"x": 1}
 
-    def test_non_bool_toggle_raises(self) -> None:
-        # No silent truthiness: a quoted YAML bool / typo'd value fails at set time.
-        with pytest.raises(TypeError, match="must be a bool"):
-            Enable(ops=[_tag], enabled="true")  # type: ignore[arg-type]
+    def test_a_non_bool_never_lands_as_the_toggle(self) -> None:
+        # No silent truthiness: through the constructor confluid's validation turns a quoted YAML
+        # bool into the bool and refuses a typo; a plain attribute write of a non-bool fails at set time.
+        assert Enable(ops=[_tag], enabled="false").enabled is False  # type: ignore[arg-type]
+        with pytest.raises(ValidationError, match="valid boolean"):
+            Enable(ops=[_tag], enabled="ture")  # type: ignore[arg-type]
         op = Enable(ops=[_tag])
         with pytest.raises(TypeError, match="must be a bool"):
             op.enabled = 1  # type: ignore[assignment]
