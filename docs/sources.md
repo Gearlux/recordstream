@@ -311,10 +311,48 @@ rules are not restated anywhere — it judges every value itself.
 | `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | tests each value, picks among the accepted ones by weight |
 | `Uniform(field, low, high)` | the setting's own range | a number from the range, tried up to 100 times until one is accepted |
 | `Span(field, share)` | — | for a list of bounded integers: a run of consecutive values covering a share of those accepted one at a time |
-| `Repeat(field, count, each)` | — | grows a list one element at a time, each from its class's defaults with its own draws `each`; the list ends early when an element's first draw finds no room |
+| `Repeat(field, count, each)` | — | grows a list one element at a time, each from its class's defaults with its own draws `each` (a `Repeat` among them grows a list inside the element); the list ends early when an element's first draw finds no room |
 
 A `field` is the setting's dotted path from the generator (`road.width`), or from the element inside
-a `Repeat` (`position`). A path through a setting that is `None` is skipped.
+a `Repeat` (`position`). A path through a setting that is `None` is skipped. A step `name[i]` is the
+i-th element (from 0) of a list the setting already holds — it must be there, since only a `Repeat`
+adds elements:
+
+```python
+import random
+from recordstream.draws import draw_settings
+
+two = Traffic(road=Road(lanes=[Lane(position=0), Lane(position=1)]))
+draw_settings(two, [Choice(field="road.lanes[1].position")], random.Random(7)).settings.road
+# Road(width=8, closed=None, lanes=[Lane(position=0), Lane(position=3)])
+draw_settings(two, [Choice(field="road.lanes[2].position")], random.Random(7))
+# DrawSpecError: road.lanes[2].position: lanes has 2 elements; [2] is past its end — only a Repeat adds elements
+```
+
+With `lanes` unset (`None`) the same draw is skipped, like any path through `None`; an element that is
+itself `None` (in a list such as `Optional[List[Optional[Lane]]]`) is drawn like any value.
+
+**A list inside each element.** A `Repeat` among a `Repeat`'s `each` grows a list inside the element
+being added, as far as that element allows:
+
+```python
+@configurable
+@dataclass(kw_only=True)
+class Town:
+    roads: Optional[List[Road]] = None
+
+
+drawn = draw_settings(Town(), [
+    Repeat(field="roads", count=(2, 2), each=[
+        Choice(field="width", values=[2, 4]),
+        Repeat(field="lanes", count=(8, 8), each=[Choice(field="position")]),
+    ]),
+], random.Random(7))
+[(road.width, len(road.lanes)) for road in drawn.settings.roads]  # [(4, 4), (2, 2)]
+dict(drawn.log)["roads[0].lanes"]                                  # '4 of 8'
+```
+
+Eight lanes were asked of each road; each got as many as its own width holds.
 
 ```python
 from dataclasses import dataclass
@@ -435,8 +473,7 @@ a `Uniform` on a setting with no range, a range written backwards.
 
 **What the draws do not know.** Only refusals the generator makes before it computes count: a rule
 checked inside `compute()` is invisible to them — give the generator a `check()` holding it. A
-valid example is not necessarily a realistic one; realism comes from the ranges you write. A
-`Repeat`'s element draws are `Choice`, `Uniform` and `Span` (no list inside an element is drawn).
+valid example is not necessarily a realistic one; realism comes from the ranges you write.
 Why the generator is the judge, and the approaches rejected:
 [architecture.md §24](architecture.md#24-a-generators-settings-are-drawn-one-setting-at-a-time-with-the-generator-as-the-judge-2026-10-02).
 
