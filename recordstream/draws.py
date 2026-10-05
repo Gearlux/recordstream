@@ -21,7 +21,11 @@ The four draws:
 * :class:`Span` — for a list of bounded integers: a run of consecutive values covering a share of those the generator
   accepts one at a time (a share of the free ones, whatever the size of the space).
 * :class:`Repeat` — grows a list one element at a time, each starting from its class's defaults and drawing its own
-  settings with ``each``. When an element's FIRST draw finds no accepted value there is no room, and the list ends.
+  settings with ``each``. When an element's FIRST draw finds no accepted value there is no room, and the list ends. A
+  ``Repeat`` among ``each`` grows a list inside the element, as far as that element allows.
+
+A ``field`` is a dotted path from the generator; a step ``name[i]`` is the i-th element (from 0) of an existing list
+setting — ``exchange.transmissions[1].gap`` — which must be there: only a :class:`Repeat` adds elements.
 
 Order matters, and it is the one thing to learn: a value can be refused because a setting drawn LATER still has its
 default (a setting that inherits from its parent until set). Draw first what opens up the choices after it.
@@ -35,6 +39,7 @@ import copy
 import inspect
 import math
 import random
+import re
 import types
 import typing
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
@@ -53,6 +58,18 @@ _PLAIN_VALUES = (int, float, complex, str, bytes, bool)
 Weight = Annotated[float, Interval(ge=0.0)]
 Share = Annotated[Tuple[float, float], Interval(ge=0.0, le=1.0)]
 Count = Annotated[Tuple[int, int], Interval(ge=0)]
+
+#: One step of a ``field``: a setting's name, or a list setting's name with an element's index (``lanes[1]``).
+_STEP = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[(\d+)\])?$")
+
+
+class _Element(NamedTuple):
+    """A step a ``field`` writes as ``name[index]``: an element the list already has. A :class:`Repeat`'s step to the
+    element it is adding is a plain ``(name, index)`` one past the end; this one never is."""
+
+    name: str
+    position: int
+
 
 #: One step of a path to a setting: a setting's name, or (a list setting's name, an element's index).
 Step = Union[str, Tuple[str, int]]
@@ -224,10 +241,30 @@ def _element(owner: type, name: str, where: str) -> Any:
         raise DrawSpecError(f"{where}: Repeat builds each new element as {cls.__name__}() — {_reason(error)}") from None
 
 
+def _existing(obj: Any, step: _Element, where: str) -> Any:
+    """The element a ``name[index]`` step names, None when the list is None; refused when the setting is no list or
+    the index is past its end."""
+    name, index = step
+    if _list_item(_annotation(type(obj), name)) is None:
+        raise DrawSpecError(
+            f"{where}: {name} is not a list; it is {_describe(_annotation(type(obj), name))} — an index [i] names an "
+            "element of a list setting"
+        )
+    items = getattr(obj, name)
+    if items is None:
+        return None
+    if index >= len(items):
+        count = f"{len(items)} element{'' if len(items) == 1 else 's'}"
+        raise DrawSpecError(f"{where}: {name} has {count}; [{index}] is past its end — only a Repeat adds elements")
+    return items[index]
+
+
 def _child(obj: Any, step: Step, where: str) -> Any:
     """The object one step down; one index past a list's end is a new element (what a Repeat is adding)."""
     if isinstance(step, str):
         return getattr(obj, step)
+    if isinstance(step, _Element):
+        return _existing(obj, step, where)
     name, index = step
     items = list(getattr(obj, name) or [])
     return items[index] if index < len(items) else _element(type(obj), name, where)
@@ -268,6 +305,10 @@ def _target(root: Any, path: Path, where: str) -> Optional[Tuple[type, str]]:
             listed = ", ".join(n for n in settings if n != "keys")
             raise DrawSpecError(f"{where}: {type(obj).__name__} has no setting {name!r}; its settings are {listed}")
         if depth == len(path) - 1:
+            if isinstance(step, _Element):
+                _existing(obj, step, where)  # refuses a setting that is no list, or an index past its end
+                if getattr(obj, name) is None:
+                    return None  # the list is unset; an element that is None is drawn like any value
             return type(obj), name
         obj = _child(obj, step, where)
         if obj is None:
@@ -318,7 +359,17 @@ class _Draw:
         names = tuple(self.field.split("."))
         if not all(names):
             raise DrawSpecError(f"{kind}: field {self.field!r} has an empty step — write it as a.b.c")
-        path = base + names
+        steps: List[Step] = []
+        for name in names:
+            found = _STEP.match(name)
+            if found is None:
+                raise DrawSpecError(
+                    f"{kind}: field {self.field!r} has a step {name!r} that is neither a name nor name[index] — write "
+                    "it as a.b[0].c"
+                )
+            setting, index = found.groups()
+            steps.append(setting if index is None else _Element(setting, int(index)))
+        path = base + tuple(steps)
         return path, _where(path)
 
     def _draw(self, root: Any, base: Path, rng: random.Random, log: List[Tuple[str, Any]]) -> Any:
@@ -497,10 +548,11 @@ class Repeat(_Draw):
     Args:
         field: The list setting to grow: its dotted path from the generator (``config.items``).
         count: How many elements to add, drawn from this range (ends included); fewer when the next one has no room.
-        each: The draws of each new element (Choice, Uniform, Span; paths from it). None = defaults while they fit.
+        each: The draws of each new element, paths from it — a Repeat among them grows a list inside the element.
+            None = defaults while they fit.
     """
 
-    def __init__(self, field: str = "", count: Count = (0, 1), each: Optional[List["ElementDraw"]] = None) -> None:
+    def __init__(self, field: str = "", count: Count = (0, 1), each: Optional[List["Draw"]] = None) -> None:
         self.field = field
         self.count = count
         self.each = each
@@ -546,10 +598,7 @@ class Repeat(_Draw):
         return root
 
 
-#: A draw of a Repeat's element. Not a Repeat itself: a self-referring annotation leaves confluid unable to build the
-#: schema it validates with (measured: "validation is OFF … RecursionError"), and no list inside an element is drawn.
-ElementDraw = Union[Choice, Uniform, Span]
-#: Any one draw.
+#: Any one draw — at the top of a list of draws or among a Repeat's ``each``.
 Draw = Union[Choice, Uniform, Span, Repeat]
 
 
@@ -571,7 +620,6 @@ def draw_settings(template: Any, draws: Optional[Sequence[Draw]], rng: random.Ra
 __all__ = [
     "Choice",
     "Draw",
-    "ElementDraw",
     "DrawRefused",
     "DrawSpecError",
     "Drawn",

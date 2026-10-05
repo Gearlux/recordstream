@@ -8,12 +8,13 @@ import random
 from collections import Counter
 from typing import Any, List
 
+import confluid
 import pytest
 from confluid import to_pydantic
 
 from recordstream.draws import Choice, Draw, DrawRefused, DrawSpecError, Repeat, Span, Uniform, draw_settings
 from recordstream.sources import DrawSource
-from tests._draw_toys import ToyForgetful, ToyGenerator, ToyMode, ToyPlan, ToyShelf, ToySlot, ToyStrip
+from tests._draw_toys import ToyFloor, ToyForgetful, ToyGenerator, ToyMode, ToyPlan, ToyShelf, ToySlot, ToyStrip
 from tests._draw_toys_postponed import ToyLater
 
 
@@ -212,9 +213,148 @@ def test_a_repeat_with_nothing_to_draw_adds_default_elements_while_they_fit() ->
     assert all(g.plan.slots == [ToySlot()] for g in drawn)
 
 
+def test_a_repeat_inside_a_repeat_fills_each_element_as_far_as_that_element_allows() -> None:
+    """A floor's plans each draw a mode or none, then grow their slots: ten asked, and each plan holds the ten
+    positions less those its own mode closes (pattern 0 closes four, 1 and 2 close three)."""
+    spec: List[Draw] = [
+        Repeat(
+            field="plans",
+            count=(3, 3),
+            each=[
+                Choice(field="mode", values=[None, ToyMode(depth=2)]),
+                Choice(field="mode.pattern"),
+                Repeat(field="slots", count=(10, 10), each=[Choice(field="position")]),
+            ],
+        )
+    ]
+    closed = {None: 0, 0: 4, 1: 3, 2: 3}
+    shapes = set()
+    for seed in range(40):
+        drawn = draw_settings(ToyFloor(), spec, random.Random(seed))
+        plans = drawn.settings.plans
+        assert len(plans) == 3
+        for plan in plans:
+            pattern = None if plan.mode is None else plan.mode.pattern
+            assert len(plan.slots) == 10 - closed[pattern]
+            shapes.add(pattern)
+        log = dict(drawn.log)
+        assert log["plans"] == "3 of 3" and log["plans[0].slots"].endswith(" of 10")
+    assert shapes == {None, 0, 1, 2}
+
+
+def test_a_repeat_as_an_elements_first_draw_places_the_element() -> None:
+    spec: List[Draw] = [
+        Repeat(field="plans", count=(3, 3), each=[Repeat(field="slots", count=(1, 2), each=[Choice(field="position")])])
+    ]
+    plans = draw_settings(ToyFloor(), spec, random.Random(5)).settings.plans
+    assert len(plans) == 3 and all(1 <= len(plan.slots) <= 2 for plan in plans)
+
+
+def test_an_inner_repeat_that_adds_nothing_as_the_first_draw_ends_the_outer_list() -> None:
+    """The first draw decides whether there is room; an inner Repeat that placed nothing placed no element."""
+    spec: List[Draw] = [Repeat(field="plans", count=(3, 3), each=[Repeat(field="slots", count=(0, 0))])]
+    drawn = draw_settings(ToyFloor(), spec, random.Random(0))
+    assert drawn.settings.plans is None and dict(drawn.log)["plans"] == "0 of 3"
+
+
+def test_a_repeat_inside_a_repeat_loads_from_a_config_with_every_count_checked() -> None:
+    document = """
+draw: !class:recordstream.draws.Repeat
+  field: plans
+  count: [1, 2]
+  each:
+    - !class:recordstream.draws.Repeat
+      field: slots
+      count: COUNT
+      each:
+        - !class:recordstream.draws.Choice {field: position}
+"""
+    draw = confluid.load(document.replace("COUNT", "[0, 4]"))["draw"]
+    assert isinstance(draw, Repeat) and draw.each is not None and isinstance(draw.each[0], Repeat)
+    plans = draw_settings(ToyFloor(), [draw], random.Random(1)).settings.plans
+    assert 1 <= len(plans) <= 2
+    with pytest.raises(confluid.ConstructionError, match=r"Repeat at <unicode string>:6:7: .*\n?count"):
+        confluid.load(document.replace("COUNT", "[-1, 4]"))
+
+
 def test_a_repeat_on_a_setting_that_is_not_a_list_is_a_spec_error() -> None:
     with pytest.raises(DrawSpecError, match=r"plan.width: Repeat needs a list setting"):
         draw_settings(ToyGenerator(), [Repeat(field="plan.width", count=(1, 2))], random.Random(0))
+
+
+# -- an element of a list -----------------------------------------------------------------------------------------
+
+
+def _two_slots() -> ToyGenerator:
+    return ToyGenerator(plan=ToyPlan(slots=[ToySlot(position=1), ToySlot(position=5)]))
+
+
+def test_a_draw_reaches_an_existing_element_of_a_list() -> None:
+    """``slots[1]`` names the list's second element: its position is drawn among those the plan accepts — never the
+    first slot's 1 —, the first slot is left as it was, and the log names the element."""
+    drawn = _draws([Choice(field="plan.slots[1].position")], template=_two_slots())
+    assert {g.plan.slots[1].position for g in drawn} == set(range(10)) - {1}
+    assert {g.plan.slots[0].position for g in drawn} == {1}
+    log = draw_settings(_two_slots(), [Choice(field="plan.slots[1].position")], random.Random(3)).log
+    assert log[0][0] == "plan.slots[1].position"
+
+
+def test_uniform_and_span_reach_an_element_too() -> None:
+    spec = [Uniform(field="plan.slots[0].weight", low=0.1, high=0.2), Span(field="plan.slots[0].cells")]
+    drawn = _draws(spec, n=50, template=_two_slots())
+    assert all(0.1 <= g.plan.slots[0].weight <= 0.2 and g.plan.slots[1].weight == 0.5 for g in drawn)
+    assert all(g.plan.slots[0].cells and max(g.plan.slots[0].cells) < 8 for g in drawn)
+
+
+def test_an_element_inside_a_list_that_is_none_is_skipped() -> None:
+    """As every path through a setting that is ``None``: there is no element to draw."""
+    drawn = draw_settings(ToyGenerator(), [Choice(field="plan.slots[0].kind")], random.Random(1))
+    assert drawn.settings.plan.slots is None and drawn.log == []
+
+
+def test_a_whole_element_is_drawn_or_skipped() -> None:
+    """``slots[1]`` as the last step draws the element itself — among those the plan accepts (position 1 is the first
+    slot's) —, and is skipped when the list is ``None``."""
+    choice = Choice(field="plan.slots[1]", values=[ToySlot(position=1), ToySlot(position=7)])
+    assert {g.plan.slots[1].position for g in _draws([choice], n=40, template=_two_slots())} == {7}
+    assert draw_settings(ToyGenerator(), [choice], random.Random(1)).settings.plan.slots is None
+
+
+def test_an_element_that_is_none_is_drawn_like_any_value() -> None:
+    """``modes[1]`` is None in the template: the step names that element, so the draw sets it — only an unset LIST
+    skips — and a draw inside it follows."""
+    spec: List[Draw] = [
+        Choice(field="modes[1]", values=[ToyMode(pattern=2)]),
+        Choice(field="modes[1].depth", values=[1]),
+    ]
+    drawn = draw_settings(ToyFloor(modes=[None, None]), spec, random.Random(0))
+    assert drawn.settings.modes == [None, ToyMode(pattern=2, depth=1)]
+    assert drawn.log == [("modes[1]", ToyMode(pattern=2)), ("modes[1].depth", 1)]
+
+
+ELEMENT_SPEC_ERRORS = [
+    (
+        Choice(field="plan.slots[2].kind"),
+        "plan.slots\\[2\\].kind: slots has 2 elements; \\[2\\] is past its end — only a Repeat adds elements",
+    ),
+    (
+        Uniform(field="plan.width[0]"),
+        "plan.width\\[0\\]: width is not a list; it is Literal\\[4, 8, 16\\] — an index \\[i\\] names an element of a "
+        "list setting",
+    ),
+    (
+        Choice(field="plan.slots[x].kind"),
+        "Choice: field 'plan.slots\\[x\\].kind' has a step 'slots\\[x\\]' that is neither a name nor name\\[index\\] — "
+        "write it as a.b\\[0\\].c",
+    ),
+    (Choice(field="plan.slots[0"), "has a step 'slots\\[0' that is neither a name nor name\\[index\\]"),
+]
+
+
+@pytest.mark.parametrize("draw,words", ELEMENT_SPEC_ERRORS)
+def test_a_path_to_an_element_that_cannot_be_read_is_a_spec_error(draw: Draw, words: str) -> None:
+    with pytest.raises(DrawSpecError, match=words):
+        draw_settings(_two_slots(), [draw], random.Random(1))
 
 
 # -- every draw --------------------------------------------------------------------------------------------------

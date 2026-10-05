@@ -152,6 +152,16 @@ class ToyShelf:
 
 
 @configurable
+@dataclass(kw_only=True)
+class ToyFloor:
+    """A list whose elements hold lists of their own (plans, each with its slots), and a list whose elements may be
+    None (a mode per room, or none)."""
+
+    plans: Optional[List[ToyPlan]] = None
+    modes: Optional[List[Optional[ToyMode]]] = None
+
+
+@configurable
 class ToyForgetful:
     """Stores its setting under another name, so nothing can read it back."""
 

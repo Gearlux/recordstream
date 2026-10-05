@@ -198,11 +198,11 @@ Gotchas:
   `dataset_url` a link for a person or `None`. Both read stored config only. The free functions
   follow `.source`; a wrapper never decorates the URI; `ConcatSource` answers `None`.
 - Draws (§24, `tests/test_draws.py`, `tests/test_draw_source.py`): the generator is the only
-  judge. Never restate its rules in a draw or a sampler, and never filter whole draws. A `Repeat`'s
-  elements are not `Repeat`s. A `DrawSpecError` is never caught as "no room". A rule a generator
+  judge. Never restate its rules in a draw or a sampler, and never filter whole draws. Only a
+  `Repeat` adds elements (one inside `each` grows a list inside the element); a `name[i]` step reaches one that exists.
+  A `DrawSpecError` is never caught as "no room". A rule a generator
   checks only in `compute()` needs a `check()`. Never reorder draws silently: order decides what
   a later default allows.
-- Fork safety: `ensure_materialized` reads one whole record in the parent (`len()` is not
 - A source declares the entries its records carry with `produces` (§26, the source API): a class
   attribute when fixed, a property answered from the CURRENT settings when they follow them — and a
   property never loads data. `HuggingFaceSource.produces` keeps `image` / `class` whatever the
@@ -215,6 +215,7 @@ Gotchas:
 - `outputs` stay REQUIRED; a slot the host has its own answer for goes under `optional` — never
   missing, checked like an output when wired (§27, `tests/test_graph_contract.py::TestAnOptionalSlot`).
   Declare nothing optional without naming the host's answer for it.
+- Fork safety: `ensure_materialized` reads one whole record in the parent (`len()` is not
   enough); `prepare_record_dataset` composes it with `ensure_record_dataset`
   (`tests/test_record_source.py`).
 

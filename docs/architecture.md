@@ -2031,10 +2031,15 @@ against 22–32 ms to generate the example. The order of the draws decides what 
 allows: with a sub-object's inherited setting drawn after its parent's, the parent's largest value
 was never drawn (0 of 216); drawn before, it was (50 of 216). A rule checked only inside `compute()`
 is invisible — a generator gives such rules a `check()`. A list that cannot be met raises
-`DrawRefused` with the generator's own message, never an invented answer. A `Repeat`'s element draws
-are not themselves `Repeat`s: the self-referring annotation left confluid unable to build the schema
-it validates with ("validation is OFF … RecursionError", measured), so a list inside an element is
-not drawn.
+`DrawRefused` with the generator's own message, never an invented answer. A `Repeat` among a
+`Repeat`'s `each` grows a list inside the element being added (2026-10-05): its path runs through
+that element, which its first placement puts in the list. It waited for confluid to build a model
+for a class that contains itself — before that, the self-referring annotation switched validation
+OFF with a warning ("validation is OFF … RecursionError", measured on confluid 0.4.0, where
+`Repeat(count=(-1, 2))` was then accepted). A `field` reaches into a list the settings already hold with `name[i]` — the settings of
+several bursts in one record, each with its own values, are drawn this way — but only to an element
+that exists: an index past the end is a spec error, not a new element, so a list's length stays the
+template's or a `Repeat`'s, never a side effect of a path.
 
 **Example.**
 
