@@ -7,6 +7,19 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A `GraphContract` record entry can be wired** — `delivered: {input: image}` reads the root's `input` from the
+  record key `image`; `stream()` hands the records on with the entry under the root's name, `wired_entries()`
+  answers the map. An entry named like an output or like a parameter of a delivered object is refused at
+  declaration time (`docs/graph-contract.md`).
+- **A `GraphContract` slot the host can do without is declared under `optional`** — never missing, checked
+  like an output when something is wired into it; a slot both required and optional, or optional and named
+  like a parameter of a delivered object, is refused (`docs/graph-contract.md`).
+- **`ReadImage.produces`** — `{output: "Image"}`, the entry it writes, so an editor offers it as an output
+  (`docs/sources.md`).
+- **A source declares the entries its records carry with `produces`** — `HuggingFaceSource.produces` answers
+  from its settings and the dataset's description (`image`, `class`, then every kept metadata column as a
+  `Label`), so an editor offers them as outputs that follow the dataset; `described_columns(path, name,
+  revision)` reads the description without a row and remembers it per process (`docs/sources.md`).
 - **`recordstream.sources.draw.DrawSource` and the draws `Choice` / `Uniform` / `Span` / `Repeat`
   (`recordstream.draws`)** — a generator's settings drawn anew for every record. The draws run top to
   bottom and each picks only among the values the generator accepts given the draws above it (its

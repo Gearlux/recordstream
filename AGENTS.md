@@ -203,6 +203,18 @@ Gotchas:
   checks only in `compute()` needs a `check()`. Never reorder draws silently: order decides what
   a later default allows.
 - Fork safety: `ensure_materialized` reads one whole record in the parent (`len()` is not
+- A source declares the entries its records carry with `produces` (§26, the source API): a class
+  attribute when fixed, a property answered from the CURRENT settings when they follow them — and a
+  property never loads data. `HuggingFaceSource.produces` keeps `image` / `class` whatever the
+  dataset calls its columns (user decision 2026-10-04 — do not re-litigate) and reads metadata
+  columns from `described_columns`, which remembers only successful answers
+  (`tests/test_huggingface_source.py::TestItDeclaresTheEntriesItWrites`,
+  `::TestTheDescriptionIsReadOncePerDataset`).
+- A `GraphContract` record entry is wired by the key it is read from, `delivered: {input: image}`;
+  an unwired entry keeps its own name (§26, `tests/test_graph_contract.py::TestARecordEntryWiredIntoTheRoot`).
+- `outputs` stay REQUIRED; a slot the host has its own answer for goes under `optional` — never
+  missing, checked like an output when wired (§27, `tests/test_graph_contract.py::TestAnOptionalSlot`).
+  Declare nothing optional without naming the host's answer for it.
   enough); `prepare_record_dataset` composes it with `ensure_record_dataset`
   (`tests/test_record_source.py`).
 

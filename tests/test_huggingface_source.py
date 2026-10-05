@@ -1,7 +1,10 @@
 """HuggingFaceSource unit pins that need no Hub access (the dataset cache is stubbed)."""
 
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
+import pytest
+
+from recordstream.sources import huggingface
 from recordstream.sources.huggingface import HuggingFaceSource
 
 
@@ -263,3 +266,136 @@ class TestNestedClassNames:
 
     def test_nothing_nested_stays_empty(self) -> None:
         assert self._source_with_features({"objects": object()}).class_names == []
+
+
+class TestItDeclaresTheEntriesItWrites:
+    """``produces`` answers, from the source's settings and the dataset's own description, the entries every record
+    carries — so an editor can offer them as outputs, and they follow the dataset when its settings change.
+
+    The image and the label keep the names ``image`` and ``class`` whatever the dataset calls its columns (the
+    ``input_feature`` / ``target_feature`` dropdowns say which column is which); every other kept column is a
+    ``Label`` under its own name. Only the dataset's DESCRIPTION is read — never a row.
+    """
+
+    @pytest.fixture
+    def described(self, monkeypatch: pytest.MonkeyPatch) -> "_Hub":
+        """A stub of the Hub's answer: the columns each dataset's description lists, and who asked."""
+        hub = _Hub()
+        monkeypatch.setattr(huggingface, "described_columns", hub.described_columns)
+        return hub
+
+    def test_mnist(self, described: "_Hub") -> None:
+        described.columns["ylecun/mnist"] = ("image", "label")
+        assert HuggingFaceSource(path="ylecun/mnist").produces == {"image": "Image", "class": "Label"}
+
+    def test_cifar100_adds_its_other_label_column(self, described: "_Hub") -> None:
+        described.columns["uoft-cs/cifar100"] = ("img", "fine_label", "coarse_label")
+        source = HuggingFaceSource(path="uoft-cs/cifar100", input_feature="img", target_feature="fine_label")
+        assert source.produces == {"image": "Image", "class": "Label", "coarse_label": "Label"}
+
+    def test_the_answer_follows_a_changed_dataset(self, described: "_Hub") -> None:
+        described.columns["ylecun/mnist"] = ("image", "label")
+        described.columns["uoft-cs/cifar100"] = ("img", "fine_label", "coarse_label")
+        source = HuggingFaceSource(path="ylecun/mnist")
+        assert list(source.produces) == ["image", "class"]
+        source.path, source.input_feature, source.target_feature = "uoft-cs/cifar100", "img", "fine_label"
+        assert list(source.produces) == ["image", "class", "coarse_label"]
+
+    def test_an_explicit_column_list_is_used_without_asking_the_hub(self, described: "_Hub") -> None:
+        source = HuggingFaceSource(path="uoft-cs/cifar100", metadata_features=["coarse_label"])
+        assert source.produces == {"image": "Image", "class": "Label", "coarse_label": "Label"}
+        assert described.asked == []
+
+    @pytest.mark.parametrize("none", [None, []])
+    def test_no_extra_columns_means_the_image_and_the_label_only(
+        self, described: "_Hub", none: Optional[List[str]]
+    ) -> None:
+        source = HuggingFaceSource(path="uoft-cs/cifar100", metadata_features=none)
+        assert source.produces == {"image": "Image", "class": "Label"}
+        assert described.asked == []
+
+    def test_an_unreachable_or_unknown_dataset_answers_what_the_settings_say(self, described: "_Hub") -> None:
+        """CON: offline, or a name the Hub does not know — no error, the two entries every record has."""
+        assert HuggingFaceSource(path="no/such-dataset").produces == {"image": "Image", "class": "Label"}
+
+    def test_no_path_asks_nothing(self, described: "_Hub") -> None:
+        assert HuggingFaceSource().produces == {"image": "Image", "class": "Label"}
+        assert described.asked == []
+
+    def test_a_loaded_dataset_answers_from_its_own_columns(self, described: "_Hub") -> None:
+        source = HuggingFaceSource(path="local/folder")
+        source._dataset = _Columns(["image", "label", "photographer"])
+        assert source.produces == {"image": "Image", "class": "Label", "photographer": "Label"}
+        assert described.asked == []
+
+    def test_every_declared_entry_is_written_with_its_declared_type(self, described: "_Hub") -> None:
+        from recordstream.items import get_item_type
+
+        described.columns["uoft-cs/cifar100"] = ("img", "fine_label", "coarse_label")
+        source = HuggingFaceSource(path="uoft-cs/cifar100", input_feature="img", target_feature="fine_label")
+        record = source._to_record({"img": [[0, 1], [2, 3]], "fine_label": 7, "coarse_label": 2}, ["coarse_label"])
+        for key, type_name in source.produces.items():
+            assert isinstance(record[key], get_item_type(type_name))
+
+
+class _Hub:
+    def __init__(self) -> None:
+        self.columns: Dict[str, Tuple[str, ...]] = {}
+        self.asked: List[str] = []
+
+    def described_columns(
+        self, path: str, name: Optional[str] = None, revision: Optional[str] = None
+    ) -> Tuple[str, ...]:
+        self.asked.append(path)
+        return self.columns.get(path, ())
+
+
+class _Columns(list):
+    """A loaded dataset as far as ``produces`` looks: its ``column_names``."""
+
+    def __init__(self, names: List[str]) -> None:
+        super().__init__()
+        self.column_names = names
+
+
+class TestTheDescriptionIsReadOncePerDataset:
+    """``described_columns`` asks the Hub for a dataset's description once per dataset, path and revision —
+    an editor reads ``produces`` on every redraw, and one ask costs a second (measured 1.6-2.0 s first, ~1 s after)."""
+
+    class _Builder:
+        def __init__(self, features: Optional[Dict[str, Any]]) -> None:
+            self.info = type("Info", (), {"features": features})()
+
+    def test_the_columns_come_from_the_builders_features_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: List[Tuple[Any, ...]] = []
+
+        def builder(path: str, name: Optional[str] = None, revision: Optional[str] = None) -> Any:
+            calls.append((path, name, revision))
+            return self._Builder({"img": 0, "fine_label": 0, "coarse_label": 0})
+
+        monkeypatch.setattr("datasets.load_dataset_builder", builder)
+        huggingface._DESCRIBED.clear()
+        assert huggingface.described_columns("uoft-cs/cifar100") == ("img", "fine_label", "coarse_label")
+        assert huggingface.described_columns("uoft-cs/cifar100") == ("img", "fine_label", "coarse_label")
+        assert calls == [("uoft-cs/cifar100", None, None)]
+        huggingface._DESCRIBED.clear()
+
+    def test_a_failure_answers_nothing_and_is_asked_again_next_time(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Offline now is not offline forever: a failed ask is not remembered."""
+        calls: List[str] = []
+
+        def builder(path: str, name: Optional[str] = None, revision: Optional[str] = None) -> Any:
+            calls.append(path)
+            raise ConnectionError("offline")
+
+        monkeypatch.setattr("datasets.load_dataset_builder", builder)
+        huggingface._DESCRIBED.clear()
+        assert huggingface.described_columns("ylecun/mnist") == ()
+        assert huggingface.described_columns("ylecun/mnist") == ()
+        assert calls == ["ylecun/mnist", "ylecun/mnist"]
+
+    def test_a_description_without_features_answers_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A local folder's builder has no schema until a split is prepared — nothing is loaded to find out."""
+        monkeypatch.setattr("datasets.load_dataset_builder", lambda path, name=None, revision=None: self._Builder(None))
+        huggingface._DESCRIBED.clear()
+        assert huggingface.described_columns("/data/folder") == ()

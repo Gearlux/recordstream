@@ -89,6 +89,69 @@ class RecordContract:
         raise ContractError(f"{message}; present: {_describe(record)}") from None
 
 
+@configurable
+class WiredEntries:
+    """The step a graph root puts BEFORE its :class:`RecordContract` when a record entry is WIRED.
+
+    Each wired entry is read from the key the wire names (``{"input": "image"}``: the root's ``input`` is the
+    source's ``image``) and handed on under the root's name; the other entries ride along. A wired entry missing
+    or of the wrong type is refused naming both keys. :meth:`GraphContract.stream` builds it; nobody places it.
+
+    ``@configurable`` WITHOUT a category: a host SAVES the stream a root hands on (a workspace file dumps the
+    stream it lists), so the step must round-trip through confluid like every other op — measured 2026-10-05
+    with a plain class: ``dump: … has no reconstructible document spelling`` on save, then ``Failed to construct
+    … missing 3 required positional arguments`` when the file was opened again. No category keeps it out of
+    every palette, and the :class:`RecordContract` card every pane carries gains no field.
+
+    Args:
+        entries: Root entry -> the record key it is read from (``{"input": "image"}``). Empty moves nothing.
+        fields: Root entry -> registered item type name, for the refusal of a wired entry of the wrong type.
+        name: The graph, as a refusal names it (``"classification source"``).
+    """
+
+    def __init__(
+        self, entries: Optional[Dict[str, str]] = None, fields: Optional[Dict[str, str]] = None, name: str = ""
+    ) -> None:
+        self.entries = dict(entries or {})  # {root entry: the record key it is read from}
+        self.fields = dict(fields or {})
+        self.name = name
+        self._count = 0  # runtime record counter for error messages, as RecordContract keeps one
+
+    def __call__(self, record: Record) -> Record:
+        label = self.name or "graph contract"
+        for entry, read in self.entries.items():
+            type_name = self.fields.get(entry, ANY_TYPE)
+            if read not in record:
+                self._fail(
+                    f"{label}: record #{self._count} has no entry {read!r} "
+                    f"(wired into {entry!r}, expected {type_name})",
+                    record,
+                )
+            if type_name != ANY_TYPE and type_name in item_type_names():
+                value = record[read]
+                if not isinstance(value, get_item_type(type_name)):
+                    self._fail(
+                        f"{label}: record #{self._count} entry {read!r} (wired into {entry!r}) is a "
+                        f"{type(value).__name__}, expected {type_name}",
+                        record,
+                    )
+        self._count += 1
+        # All at once, so two entries may swap keys; a wired entry replaces one already spelled like the root's name.
+        moved = {read: entry for entry, read in self.entries.items() if read != entry}
+        replaced = set(moved.values())
+        renamed: Record = {}
+        for key, value in record.items():
+            if key in moved:
+                renamed[moved[key]] = value
+            elif key not in replaced:
+                renamed[key] = value
+        return renamed
+
+    def _fail(self, message: str, record: Record) -> None:
+        self._count += 1  # a failed record still advances the ordinal
+        raise ContractError(f"{message}; present: {_describe(record)}") from None
+
+
 @configurable(category="value", constant=True, group="contract")
 class ClassNamesOutput:
     """The class vocabulary a pipeline DELIVERS — a graph output a consuming workspace reads.
@@ -268,8 +331,19 @@ class GraphContract:
     delivers less than it promised — in the same words, because :meth:`check` is the ONE
     verification both of them call.
 
-    Every entry of ``outputs`` is REQUIRED. An optional output would not be a contract: what a
-    graph may or may not deliver is simply not declared.
+    Every entry of ``outputs`` is REQUIRED. A slot the host can do without is declared apart, under
+    ``optional``, and only where the host has its own answer for it — the class list of a graph of
+    dropped files: typed into the graph, it is that list; left unwired, the host uses its source graph's.
+    A reader sees at once which slots must be wired and which may be left to the host.
+
+    **A record entry is wired too.** A source spells its entries its own way (a dataset source writes
+    ``image`` and ``class``) while the host reads the root's names (``input``, ``target``). An editor
+    draws each ``records`` entry as an input of the root and saves a wire into it as the key it is read
+    from — ``delivered: {input: image, target: class}`` — and :meth:`stream` hands the records on with
+    those entries under the root's names (:class:`WiredEntries`, a step it builds before the :class:`RecordContract`;
+    the RecordContract stays the unchanged pass-through every pane carries). An entry nothing is wired
+    into is read under its own name, so a chain that already writes ``input`` needs no wire. No rename
+    step is drawn: the wire says it.
 
     **The class vocabulary slot is ``classes`` (kind ``List[str]``)** — :data:`CLASS_VOCABULARY_SLOT`.
     It takes a typed list (``classes: [cat, dog]``) OR a wired producer that declares its own
@@ -289,11 +363,15 @@ class GraphContract:
             records to annotate, a viewer's window). Kinds are :data:`GRAPH_SLOT_KINDS` or a
             registered item type name.
         outputs: ``{slot: kind}`` the graph must deliver. Same vocabulary.
+        optional: ``{slot: kind}`` the graph MAY deliver, because the host has its own answer when the slot
+            is left unwired (a graph of dropped files may type its own class list; left unwired, the host uses
+            its source graph's). Checked like an output when something is wired into it; never missing.
         records: ``{entry: item type}`` every record of a delivered stream carries — the
             :class:`RecordContract` :meth:`stream` appends as the stream's last op, so a violating
             record is refused where the graph is applied, never when a record is opened later.
-        delivered: ``{slot: value}`` — what the drawn graph wired into each output. Written by the
-            editor's export, read by the host; never typed by hand.
+        delivered: ``{slot: value}`` — what the drawn graph wired into each output, and into each
+            ``records`` entry the key it is read from (``input: image``: a source writes ``image``, the
+            host reads ``input``). Written by the editor, read by the host; never typed by hand.
     """
 
     def __init__(
@@ -303,19 +381,22 @@ class GraphContract:
         outputs: Optional[Dict[str, str]] = None,
         records: Optional[Dict[str, str]] = None,
         delivered: Optional[Dict[str, Any]] = None,
+        optional: Optional[Dict[str, str]] = None,
     ) -> None:
         self.name = name
         self.inputs: Dict[str, str] = dict(inputs or {})
         self.outputs: Dict[str, str] = dict(outputs or {})
         self.records: Dict[str, str] = dict(records or {})
         self.delivered: Dict[str, Any] = dict(delivered or {})
+        self.optional: Dict[str, str] = dict(optional or {})
 
     @property
     def label(self) -> str:
         return self.name or "graph contract"
 
     def missing(self) -> List[str]:
-        """The outputs nothing was wired into, in declaration order — what an editor marks and a host refuses."""
+        """The outputs nothing was wired into, in declaration order — what an editor marks and a host refuses.
+        An :attr:`optional` slot is never missing: the host has its own answer for it."""
         return [slot for slot in self.outputs if self.delivered.get(slot) is None]
 
     def check_declaration(self) -> None:
@@ -328,28 +409,40 @@ class GraphContract:
         fails to load or arrives silently. With nothing delivered yet there is no object to collide
         with, so the editor's draw-time call passes and the check bites when the graph is applied.
         """
-        for side, slots in (("input", self.inputs), ("output", self.outputs)):
+        for side, slots in (("input", self.inputs), ("output", self.outputs), ("optional", self.optional)):
             for slot, kind in slots.items():
                 if not _slot_kind_known(str(kind)):
                     raise ContractError(
                         f"{self.label}: {side} {slot!r} declares the type {kind!r}, which is neither a graph slot type "
                         f"({', '.join(GRAPH_SLOT_KINDS)}) nor a registered item type"
                     )
+        for slot in self.optional:
+            if slot in self.outputs:
+                raise ContractError(
+                    f"{self.label}: {slot!r} is declared both as an output and as an optional slot — give it one place"
+                )
+        for entry in self.records:
+            if entry in self.outputs or entry in self.optional:
+                raise ContractError(
+                    f"{self.label}: {entry!r} is declared both as an output and as a record entry — they are wired "
+                    "into the same place, so give them different names"
+                )
         parameters = [
             (slot, type(value).__name__, {spec["name"] for spec in input_specs(type(value))})
             for slot, value in self.delivered.items()
             if _is_object(value)
         ]
-        for output_slot in self.outputs:
+        wired = (
+            [("output", slot) for slot in self.outputs]
+            + [("optional", slot) for slot in self.optional]
+            + [("record entry", entry) for entry in self.records]
+        )
+        for side, slot in wired:
             for delivered_as, class_name, names in parameters:
-                if output_slot in names:
-                    hint = (
-                        f" (the class vocabulary slot is {CLASS_VOCABULARY_SLOT!r})"
-                        if output_slot == "class_names"
-                        else ""
-                    )
+                if slot in names:
+                    hint = f" (the class vocabulary slot is {CLASS_VOCABULARY_SLOT!r})" if slot == "class_names" else ""
                     raise ContractError(
-                        f"{self.label}: output {output_slot!r} shares its name with a parameter of {class_name} "
+                        f"{self.label}: {side} {slot!r} shares its name with a parameter of {class_name} "
                         f"(delivered as {delivered_as!r}); confluid would push the slot's value into that parameter "
                         f"— rename the slot{hint}"
                     )
@@ -364,13 +457,21 @@ class GraphContract:
         that declares a non-empty ``class_names``.
         """
         self.check_declaration()
+        for entry in self.records:
+            read = self.delivered.get(entry)
+            if read is not None and (not isinstance(read, str) or not read):
+                raise ContractError(
+                    f"{self.label}: the record entry {entry!r} is wired to {read!r} — it names the entry it is read "
+                    "from, a word like 'image'"
+                )
         missing = self.missing()
         if missing:
             raise ContractError(
                 f"{self.label}: {missing[0]!r} is not delivered — wire it in the graph "
                 f"(this graph delivers: {', '.join(self.outputs)})"
             )
-        for slot, kind in self.outputs.items():
+        wired = {**self.outputs, **{slot: kind for slot, kind in self.optional.items() if slot in self.delivered}}
+        for slot, kind in wired.items():
             value = self.delivered[slot]
             if kind == "Stream":
                 if not _is_stream(value):
@@ -400,9 +501,19 @@ class GraphContract:
         """The per-record contract as the op that enforces it, or ``None`` when none is declared."""
         return RecordContract(fields=dict(self.records), name=self.name) if self.records else None
 
+    def wired_entries(self) -> Dict[str, str]:
+        """``{record entry: the key it is read from}`` for every declared record entry a wire delivers — what an
+        editor saved for a wire from a source's ``image`` into ``input``. An entry nothing is wired into is read
+        under its own name."""
+        return {entry: str(self.delivered[entry]) for entry in self.records if self.delivered.get(entry)}
+
     def stream(self) -> Any:
         """The delivered stream, with :attr:`records` enforced as its LAST op — a new Stream, the
-        delivered one untouched (it is the document's object; the host must not rewrite the graph)."""
+        delivered one untouched (it is the document's object; the host must not rewrite the graph).
+
+        A wired record entry (:meth:`wired_entries`) is read from its key by one step just before that
+        last op, so the records leave under the root's names.
+        """
         slot = next((s for s, kind in self.outputs.items() if kind == "Stream"), None)
         if slot is None:
             raise ContractError(f"{self.label}: this graph delivers no stream (it delivers: {', '.join(self.outputs)})")
@@ -412,6 +523,9 @@ class GraphContract:
         delivered = self.delivered[slot]
         contract = self.records_contract()
         ops = list(delivered.ops or [])
+        wired = self.wired_entries()
+        if wired:
+            ops.append(WiredEntries(entries=wired, fields=self.records, name=self.name))
         if contract is not None:
             ops.append(contract)
         # The graph's vocabulary travels WITH the records; a graph that delivers none leaves the
