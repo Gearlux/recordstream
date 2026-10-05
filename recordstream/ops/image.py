@@ -648,6 +648,14 @@ class ReadImage:
         self.field = field
         self.output = output
 
+    @property
+    def produces(self) -> Dict[str, str]:
+        """``{output: "Image"}`` — the entry this op writes, so an editor offers it as an output to wire (``image``
+        into a graph root's ``input``). A property: it follows :attr:`output`. The read of :attr:`field` is NOT
+        declared — a files source writes that path without declaring it, and a declared read would refuse every
+        chain that starts at one."""
+        return {self.output: "Image"}
+
     def __call__(self, record: Record) -> Record:
         path = record.get(self.field)
         if path is None:

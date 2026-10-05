@@ -2123,3 +2123,104 @@ registry.list_classes(category="value")       # {'ClassNamesOutput', 'ClassNames
 **What you may change.** Add or rename groups freely. Add a category only for a genuinely new
 role, together with the front ends' allowlist and the pins. What must hold: a category names a
 role, every node-facing op carries `op`, and a class wired only by a document carries none.
+
+## 26. A graph root's record entry is wired by the key it is read from (2026-10-04)
+
+**Context.** A graph root (`GraphContract`) declares the records it delivers by the HOST's names —
+`records: {input: Image, target: Label}` — because the host reads one shape whatever dataset is wired
+in. A source writes its own keys: a HuggingFace source writes `image` and `class`. Measured on a
+classification root fed by MNIST: every record refused, `classification source: record #0 has no
+entry 'input' (expected Image); present: image[Image], class[Label], hf_path[Label], hf_split[Label]`.
+The person had to know both spellings and place two rename steps, which nothing on the canvas
+suggested. Three ways were weighed:
+
+* **Match by type.** The root needs an Image and a Label; take the record's Image and its Label. MNIST's
+  records carry THREE Labels (`class`, `hf_path`, `hf_split`), so type alone picks wrongly or must ask.
+* **Rename steps the person places** (`RenameField image → input`). Works today; it is exactly what
+  the person could not discover.
+* **The person wires the entry.** The root's entries are inputs on the canvas, a source's declared
+  entries (`produces`) are outputs, and the wire is saved as the key: `delivered: {input: image}`.
+
+**Decision.** The third. `delivered` already holds what the drawing wired into the root, so a wired
+record entry joins it as a plain word — the key it is read from. `stream()` puts one step of its own
+before the `RecordContract` it appends (`WiredEntries`): it checks each wired entry under its key and
+hands the record on with it under the root's name. `RecordContract` gained no setting — measured with a
+first version that gave it an `entries` setting: every pane's boundary card grew a field nobody sets, a
+shipped canvas went stale and a settings form counted 15 fields instead of 14. `WiredEntries` is
+`@configurable` WITHOUT a category: no palette offers it, but a host that SAVES the stream a root hands
+on (a workspace file dumps the stream it lists) gets it back — measured 2026-10-05 with a plain class:
+`dump: … has no reconstructible document spelling` on save, then `Failed to construct … missing 3
+required positional arguments` when the saved workspace was opened again. An entry nothing is wired into is read under its own name,
+so a chain that already writes `input` needs no wire. A source declares the entries every record
+carries with the same `produces` an op uses — the SOURCE API: a property answered from the source's
+current settings, so the outputs an editor draws follow the dataset (`HuggingFaceSource.produces` reads
+the dataset's description, never a row, and remembers it per process: measured 1.5–4 s the first time,
+0 ms after). The image and the label keep the keys `image` and `class` whatever the dataset calls its
+columns: the source's two settings already say which column is which, so every consumer reading
+`image` / `class` works on any dataset unchanged. Naming them after the columns was weighed and
+dropped (2026-10-04): each training config would have had to repeat the column names.
+
+**Consequences.** The rename is one place (the boundary) and the drawing says it. The record leaving
+the boundary is a new dict whenever an entry is wired; with none, no step is added and the record
+object passes through unchanged as before. Because a `delivered:` key is broadcast by confluid into a
+sibling that takes a parameter of that name, a record entry gets the output slots' refusal (an entry
+named like a parameter of a delivered object), and an entry may not share a name with an output.
+Only declared entries can be wired; a source that declares nothing still works through the
+unwired, own-name path.
+
+**Example.**
+
+```python
+contract = GraphContract(
+    name="classification source",
+    outputs={"stream": "Stream", "classes": "List[str]"},
+    records={"input": "Image", "target": "Label"},
+    delivered={"stream": Stream(source=records), "classes": ["cat", "dog"], "input": "image", "target": "class"},
+)
+contract.wired_entries()          # {'input': 'image', 'target': 'class'}
+next(iter(contract.stream()))     # {'input': Image, 'target': Label, …the other entries}
+```
+
+**What you may change.** What the refusals say; more sources declaring `produces`. What must hold:
+the wire is saved as the key (a word, never a reference to an object), the move happens only at the
+root's boundary, and an unwired entry keeps its own name. Usage:
+[graph-contract.md](graph-contract.md#wiring-a-record-entry-the-roots-names-the-sources-keys).
+
+## 27. A graph root declares the slots the host can do without apart, under `optional` (2026-10-05)
+
+**Context.** A workspace takes records from two graphs: its source graph (a dataset) and its files
+graph (the pictures a person drops). Both need a class list to annotate against. The files graph's
+list lived on a loose `ClassNamesOutput` card that nothing was wired to and that shipped empty, so
+dropped pictures had no list (measured: names `∅` → a dropped record's classes `[]`). Requiring a
+`classes` output on the files root would make the person type the dataset's list a second time;
+leaving it out of the root gives the canvas no socket to wire. The person picked: typed into the
+files graph, the list is that; left unwired, dropped pictures use the source graph's (user decision
+2026-10-05).
+
+**Decision.** `GraphContract` gains `optional: {slot: kind}` beside `outputs`. `outputs` keep their
+meaning — every one required, `missing()` lists the unwired ones — and an optional slot is never
+missing. Wired, it gets the same checks as an output (kind, an empty typed list, a producer that
+declares nothing) and `class_names` reads it the same way. The declaration refuses a slot that is
+both required and optional, and runs the broadcast-collision rule over optional slots too.
+
+**Consequences.** A reader of a root sees which slots must be wired (`outputs`) and which the host
+answers itself (`optional`); an editor draws an optional socket without the required mark. The
+host owns the fallback — this class says nothing about what the host does instead — so an optional
+slot is only declared where a host has an answer for it.
+
+**Example.**
+
+```python
+files = GraphContract(
+    name="classification files",
+    outputs={"stream": "Stream"},
+    optional={"classes": "List[str]"},
+    delivered={"stream": Stream(source=records)},
+)
+files.missing()      # []  — the class list is left to the host
+files.class_names    # []  — and the host answers with its source graph's list
+```
+
+**What you may change.** The refusal wording; more optional slots, each with the host's answer
+named in its docs. What must hold: `outputs` stay required, and an optional slot, once wired, is
+checked exactly like an output. Usage: [graph-contract.md](graph-contract.md#a-slot-the-host-can-do-without-optional).

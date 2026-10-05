@@ -22,6 +22,7 @@ but a generated one will use the submodule spelling. Rationale:
 
 `HuggingFaceSource` turns any `datasets.Dataset` (a Hub repo id or a local imagefolder path) into plain record dicts of typed values: the `input_feature` column becomes an `Image` under the record key `"image"`, the `target_feature` column a `Label` under `"class"`, and each kept metadata column its own `Label` entry keyed by the column name (plus the source-provenance `hf_path` / `hf_split` entries) — traceability that often goes missing in bare dictionary loading.
 
+- **`produces` (the entries every record carries):** answered from the settings and the dataset's own description — `{"image": "Image", "class": "Label"}` for MNIST, `{"image": "Image", "class": "Label", "coarse_label": "Label"}` for CIFAR-100 with `input_feature: img, target_feature: fine_label`. The image and the label are always `image` and `class`; every kept metadata column follows as a `Label`. See [What a source's records carry](#what-a-sources-records-carry-produces).
 - **`metadata_features` (which extra columns become record entries):** the sentinel **`"*"`** (or `["*"]`, the default) keeps **every column except `input_feature` / `target_feature`** — the full-traceability option, resolved against the dataset's real columns at load; an explicit list keeps exactly those columns; `None` / `[]` keep none.
 
 ```yaml
@@ -35,6 +36,36 @@ hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
 > **Use the namespaced repo id** (`ylecun/mnist`, never the legacy bare `mnist`): current `huggingface_hub` rejects namespace-less ids (`HfUriError: Repository id must be 'namespace/name'`, measured 2026-08-06). Worse than the hard failure is the soft one — with a stale local cache present, `datasets` logs "couldn't be found on the Hugging Face Hub" and silently loads the cached copy, so a bare id can appear to work on one machine and fail on a fresh one.
 
 > **Lazy & zero-arg construction** — `HuggingFaceSource` follows the workspace lazy-init convention: the constructor does no work (no network), so `HuggingFaceSource()` is valid and building one is free. The dataset is downloaded only on first access to the read-only `.dataset` property (cached thereafter; reset `_dataset` to reload), and `.resolved_metadata_features` (the `"*"` expansion) is derived lazily from the loaded columns. `path` is therefore optional at construction and validated lazily — accessing `.dataset` with an empty `path` raises a clear `ValueError`.
+
+### What a source's records carry (`produces`)
+
+A source answers ONE question about its records — which entries each one carries, by item type —
+with the same `produces` an op declares. It is a property, answered from the source's CURRENT
+settings, so a visual editor offers the entries as outputs and redraws them when a setting changes.
+`HuggingFaceSource` answers it without reading a row: the image and the label are `image` and
+`class` (its two settings say which columns they are), and the metadata columns `metadata_features`
+keeps come from the dataset's description:
+
+```python
+HuggingFaceSource(path="ylecun/mnist").produces
+# {'image': 'Image', 'class': 'Label'}
+HuggingFaceSource(path="uoft-cs/cifar100", input_feature="img", target_feature="fine_label").produces
+# {'image': 'Image', 'class': 'Label', 'coarse_label': 'Label'}
+HuggingFaceSource(path="uoft-cs/cifar100", metadata_features=[]).produces
+# {'image': 'Image', 'class': 'Label'}
+```
+
+| setting | what `produces` reads | cost |
+| --- | --- | --- |
+| `metadata_features: "*"` (the default) | the dataset's description (`described_columns`), or the loaded dataset's columns once loaded | ~1.5–4 s the first time per dataset, then remembered for the process |
+| an explicit list | the list | nothing |
+| `None` / `[]` | nothing — `image` and `class` only | nothing |
+
+Offline, for a name the Hub does not know, or with no `path`, the answer is `image` and `class`:
+what the settings alone vouch for. The provenance entries (`hf_file`, `hf_path`, `hf_split`) are
+not declared — they say where a record came from, and nobody wires them. A source of your own
+declares `produces` the same way: a class attribute when its entries never change, a property
+when they follow its settings — and a property must not load data.
 
 ## A plain list of files (`FilesSource`)
 
@@ -55,6 +86,9 @@ uint8) and leaves the path as provenance. There is deliberately **no label entry
 arrive unannotated, and whatever labels them adds that entry downstream. A file the imaging
 library cannot open passes through UNCHANGED with a debug log — the record keeps its row and
 one stray text file never costs the run around it. Other file kinds get their own read ops.
+`ReadImage` declares the entry it writes, `produces == {"image": "Image"}` (it follows `output`:
+`ReadImage(output="picture").produces == {"picture": "Image"}`), so an editor offers it as an output to
+wire. The path it reads is not declared: a files source writes it without declaring it.
 
 ### Pointing it at a folder (`root` + `pattern`)
 
