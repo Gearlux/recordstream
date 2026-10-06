@@ -254,3 +254,39 @@ def test_discovery_tags(name: str, cls: type, group: str) -> None:
     registry = get_registry()
     assert name in registry.list_classes(category="op")
     assert name in registry.list_classes(group=group)
+
+
+class TestConvertToImagePinnedScale:
+    """``vmin`` / ``vmax`` pin the grey scale (2026-10-06).
+
+    Without them the op stretches whatever it is given to the full 0..255 — right for a preview,
+    wrong for a value a step before it already put on a chosen scale: measured on a dB spectrogram
+    normalized to 0..1 relative to its noise floor, the stretch moved the floor from 0 to wherever
+    the window's minimum happened to be. With the bounds given, 0 is black and 1 is white, always.
+    """
+
+    def test_the_bounds_pin_the_scale(self) -> None:
+        ramp = np.linspace(0.0, 1.0, 8 * 10, dtype=np.float32).reshape(8, 10)
+        stretched = np.asarray(ConvertToImage(colormap="gray")({"v": Mask(ramp)})["image"])
+        pinned = np.asarray(ConvertToImage(colormap="gray", vmin=0.0, vmax=2.0)({"v": Mask(ramp)})["image"])
+        assert stretched.max() == 255 and pinned.max() == 127
+        assert stretched.min() == 0 and pinned.min() == 0
+
+    def test_values_outside_the_bounds_are_clamped(self) -> None:
+        arr = np.array([[-1.0, 0.0, 0.5, 1.0, 2.0]] * 2, dtype=np.float32)  # two rows: a 1-row map squeezes to 1-D
+        out = np.asarray(ConvertToImage(colormap="gray", vmin=0.0, vmax=1.0)({"v": Mask(arr)})["image"])
+        assert out[0, :, 0].tolist() == [0, 0, 127, 255, 255]
+
+    def test_a_three_channel_float_array_is_pinned_too(self) -> None:
+        arr = np.full((4, 4, 3), 0.25, dtype=np.float32)
+        out = np.asarray(ConvertToImage(vmin=0.0, vmax=1.0)({"v": Mask(arr)})["image"])
+        assert int(out.min()) == int(out.max()) == 63
+
+    def test_one_bound_alone_pins_that_side(self) -> None:
+        arr = np.array([[0.0, 1.0, 2.0]] * 2, dtype=np.float32)
+        out = np.asarray(ConvertToImage(colormap="gray", vmin=1.0)({"v": Mask(arr)})["image"])
+        assert out[0, :, 0].tolist() == [0, 0, 255]
+
+    def test_a_vmax_not_above_vmin_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="vmax"):
+            ConvertToImage(vmin=1.0, vmax=1.0)

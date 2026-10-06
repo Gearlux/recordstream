@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`ConvertToImage(vmin, vmax)`** pins the grey scale: the value that becomes black and the value that
+  becomes white, the same for every record; without them the op stretches each array to its own extremes
+  as before. Values outside are clamped; `vmax` not above `vmin` is refused (`docs/image.md`).
 - **A `GraphContract` record entry can be wired** — `delivered: {input: image}` reads the root's `input` from the
   record key `image`; `stream()` hands the records on with the entry under the root's name, `wired_entries()`
   answers the map. An entry named like an output or like a parameter of a delivered object is refused at
