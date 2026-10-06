@@ -142,7 +142,9 @@ def image_frame(value: Any) -> Optional[Tuple[int, int]]:
     return int(shape[0]), int(shape[1])
 
 
-def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
+def _render_rgb(
+    value: Any, colormap: Colormap, vmin: Optional[float] = None, vmax: Optional[float] = None
+) -> np.ndarray:
     """Render an arbitrary value to an ``(H, W, 3)`` uint8 RGB image WITHOUT resizing.
 
     The core of :func:`value_to_image` factored out so callers that need their
@@ -167,7 +169,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
         arr = arr.astype(np.uint8) * 255
 
     if arr.ndim == 2:
-        return np.array(_apply_colormap(normalize_to_uint8(arr), colormap))
+        return np.array(_apply_colormap(normalize_to_uint8(arr, vmin, vmax), colormap))
     if arr.ndim == 3:
         # Normalize channel position to trailing (HWC).
         if arr.shape[0] in (1, 3, 4) and arr.shape[2] not in (1, 3, 4):
@@ -181,7 +183,7 @@ def _render_rgb(value: Any, colormap: Colormap) -> np.ndarray:
             arr = arr[..., :3]
         else:  # 2 channels (or other) — replicate the first
             arr = np.repeat(arr[..., :1], 3, axis=2)
-        return arr if arr.dtype == np.uint8 else normalize_to_uint8(arr)
+        return arr if arr.dtype == np.uint8 else normalize_to_uint8(arr, vmin, vmax)
     return _text_to_image(f"input ndim={arr.ndim}, shape={arr.shape}")
 
 
@@ -1071,6 +1073,10 @@ class ConvertToImage(Transform):
         flip_vertical: Mirror the image top-to-bottom (e.g. spectrogram row 0 = f_min → display f_max at the top).
         field: Name of the source field to render; blank (default) picks the first array-bearing item in the record.
         output: Name of the key the ``Image`` item is written to (added if new).
+        vmin: The value that becomes black; ``None`` (default) = the array's own finite minimum.
+        vmax: The value that becomes white; ``None`` (default) = the array's own finite maximum. Given
+            together, they pin the grey scale across records (a surface a step before already put
+            on a chosen scale, ``0..1``, is not stretched again); values outside are clamped.
     """
 
     handles = (NDArrayItem,)
@@ -1086,9 +1092,15 @@ class ConvertToImage(Transform):
         flip_vertical: bool = False,
         field: str = "",
         output: str = "image",
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
     ) -> None:
         super().__init__()
+        if vmin is not None and vmax is not None and float(vmax) <= float(vmin):
+            raise ValueError(f"ConvertToImage: vmax must be above vmin; got vmin={vmin!r}, vmax={vmax!r}")
         self.colormap: Colormap = colormap
+        self.vmin = None if vmin is None else float(vmin)
+        self.vmax = None if vmax is None else float(vmax)
         self.width = int(width)
         self.height = int(height)
         self.max_size = int(max_size)
@@ -1139,7 +1151,7 @@ class ConvertToImage(Transform):
         )
 
     def __call__(self, record: Record) -> Record:
-        rgb = _render_rgb(self._find_source(record), self.colormap)
+        rgb = _render_rgb(self._find_source(record), self.colormap, self.vmin, self.vmax)
         if self.flip_vertical:
             rgb = rgb[::-1, :, :]
         if self.width > 0 and self.height > 0:

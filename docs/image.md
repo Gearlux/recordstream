@@ -12,6 +12,7 @@ op = ConvertToImage(
     flip_vertical=True,      # e.g. a spectrogram stores row 0 = f_min but display wants f_max on top
     field="spec",            # source key; blank picks the first array-bearing value
     output="image",          # key the HWC-uint8 Image item is written to
+    vmin=0.0, vmax=1.0,      # pin the grey scale: 0 is black, 1 is white, for every record (None = the array's own min/max)
 )
 record = op(record)          # adds record["image"]; the pixel dimensions live in its array shape
 
@@ -26,6 +27,8 @@ from recordstream.ops.image import normalize_to_uint8
 u8 = normalize_to_uint8(arr)                          # auto per-array min/max
 u8 = normalize_to_uint8(arr, vmin=-80.0, vmax=0.0)    # fixed dB window across a dataset
 ```
+
+Without `vmin` / `vmax` the op stretches each array to its own extremes — right for a preview, wrong for a value a step before it already put on a chosen scale (a surface normalized to 0..1 would be stretched again). Given together, `vmax` must be above `vmin`; values outside are clamped.
 
 `record_to_image(record, ...)` renders a record's first array-bearing (2-D / 3-D) value the same way — the ad-hoc whole-record preview for viewer tooling. Pillow is a runtime dependency; matplotlib is imported lazily (only non-`gray` colormaps need it).
 
