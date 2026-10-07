@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A class whose constructor runs its own `check()` declares `checked_on_construction = True`** — the draws
+  then check each value they try once, by the constructor, instead of again after it (`docs/sources.md`).
 - **`ConvertToImage(vmin, vmax)`** pins the grey scale: the value that becomes black and the value that
   becomes white, the same for every record; without them the op stretches each array to its own extremes
   as before. Values outside are clamped; `vmax` not above `vmin` is refused (`docs/image.md`).

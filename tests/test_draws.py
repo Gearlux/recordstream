@@ -14,7 +14,19 @@ from confluid import to_pydantic
 
 from recordstream.draws import Choice, Draw, DrawRefused, DrawSpecError, Repeat, Span, Uniform, draw_settings
 from recordstream.sources import DrawSource
-from tests._draw_toys import ToyFloor, ToyForgetful, ToyGenerator, ToyMode, ToyPlan, ToyShelf, ToySlot, ToyStrip
+from tests._draw_toys import (
+    ToyBox,
+    ToyCheckedTwice,
+    ToyFloor,
+    ToyForgetful,
+    ToyGenerator,
+    ToyMode,
+    ToyPlan,
+    ToySelfChecked,
+    ToyShelf,
+    ToySlot,
+    ToyStrip,
+)
 from tests._draw_toys_postponed import ToyLater
 
 
@@ -100,6 +112,27 @@ def test_a_rule_only_the_generators_check_knows_is_respected() -> None:
     assert ToyGenerator(plan=ToyPlan(level=3), gain=0.95).gain == 0.95
     drawn = _draws([Choice(field="plan.level", values=[3]), Choice(field="gain", values=[0.5, 0.95])], n=50)
     assert {g.gain for g in drawn} == {0.5}
+
+
+def test_a_class_whose_constructor_checks_it_is_checked_once_for_each_value_tried() -> None:
+    """``checked_on_construction``: the draw builds each value and asks no second ``check()`` — the constructor's is
+    the verdict (size 3 refused there). A class that does not say so is checked again after its constructor."""
+    box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
+    ToySelfChecked.checks = ToyCheckedTwice.checks = 0
+    spec: List[Draw] = [
+        Choice(field="self_checked.size", values=[1, 2, 3]),
+        Choice(field="checked_twice.size", values=[1, 2, 3]),
+    ]
+    drawn = draw_settings(box, spec, random.Random(0)).settings
+    assert drawn.self_checked.size in (1, 2) and drawn.checked_twice.size in (1, 2)
+    assert ToySelfChecked.checks == 3  # 1, 2 and 3 each built once
+    assert ToyCheckedTwice.checks == 3 + 2  # each built once, then 1 and 2 (built) checked again
+
+
+def test_a_class_whose_constructor_checks_it_still_has_its_refusal_named() -> None:
+    with pytest.raises(DrawRefused, match=r"self_checked.size: none of \[3\] is accepted .* size 3 is refused"):
+        draw_settings(ToyBox(self_checked=ToySelfChecked()), [Choice(field="self_checked.size", values=[3])],
+                      random.Random(0))  # fmt: skip
 
 
 def test_a_choice_with_no_values_on_an_open_setting_is_a_spec_error() -> None:

@@ -9,7 +9,10 @@ So the generator is the judge, asked one setting at a time. A list of draws runs
 own distribution, but only among the values the generator accepts given every draw above it — the settings not drawn
 yet keep the template's values. "Accepts" means the setting's object, and every object above it up to the generator,
 rebuild through their constructors (which check their annotations) and pass their ``check()`` when they have one.
-Since every step keeps the whole object valid, the last one is valid too: there is no final rejection.
+Since every step keeps the whole object valid, the last one is valid too: there is no final rejection. A class whose
+constructor already runs its own ``check()`` says so with a class attribute, ``checked_on_construction = True``, and
+is then checked once per value tried rather than twice — a generator checked deep down a path pays for it at every
+value.
 
 The four draws:
 
@@ -214,10 +217,11 @@ def _settings(obj: Any) -> Dict[str, Any]:
 
 
 def _rebuild(obj: Any, name: str, value: Any) -> Any:
-    """``obj`` with one setting changed, built through its constructor and checked — a refusal raises."""
+    """``obj`` with one setting changed, built through its constructor and checked — a refusal raises. A class whose
+    constructor already runs its ``check()`` says so (``checked_on_construction``) and is not checked a second time."""
     built = type(obj)(**{**_settings(obj), name: value})
     check = getattr(built, "check", None)
-    if callable(check):
+    if callable(check) and not getattr(type(built), "checked_on_construction", False):
         check()
     return built
 

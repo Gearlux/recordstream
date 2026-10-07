@@ -8,7 +8,7 @@ own that only its ``check()`` knows.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Union
+from typing import ClassVar, Dict, List, Literal, Optional, Union
 
 from annotated_types import Interval
 from confluid import configurable
@@ -92,6 +92,51 @@ class ToyGenerator(Algorithm):
     def compute(self) -> Dict[str, float]:
         self.check()
         return {"total": self.gain * self.plan.width + len(self.plan.slots or [])}
+
+
+@configurable
+@dataclass(kw_only=True)
+class ToySelfChecked:
+    """Checks itself in its constructor and says so (``checked_on_construction``); counts every check, refuses
+    size 3."""
+
+    checked_on_construction: ClassVar[bool] = True
+    checks: ClassVar[int] = 0
+    size: Literal[1, 2, 3] = 1
+
+    def __post_init__(self) -> None:
+        self.check()
+
+    def check(self) -> None:
+        type(self).checks += 1
+        if self.size == 3:
+            raise ValueError("ToySelfChecked: size 3 is refused")
+
+
+@configurable
+@dataclass(kw_only=True)
+class ToyCheckedTwice:
+    """The same, without saying its constructor checks it."""
+
+    checks: ClassVar[int] = 0
+    size: Literal[1, 2, 3] = 1
+
+    def __post_init__(self) -> None:
+        self.check()
+
+    def check(self) -> None:
+        type(self).checks += 1
+        if self.size == 3:
+            raise ValueError("ToyCheckedTwice: size 3 is refused")
+
+
+@configurable
+@dataclass(kw_only=True)
+class ToyBox:
+    """Holds one of each, so a path runs through them."""
+
+    self_checked: Optional[ToySelfChecked] = None
+    checked_twice: Optional[ToyCheckedTwice] = None
 
 
 @configurable
