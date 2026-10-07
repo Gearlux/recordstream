@@ -12,7 +12,18 @@ import confluid
 import pytest
 from confluid import to_pydantic
 
-from recordstream.draws import Choice, Draw, DrawRefused, DrawSpecError, Repeat, Span, Uniform, draw_settings
+from recordstream.draws import (
+    Choice,
+    Draw,
+    DrawRefused,
+    DrawSpecError,
+    Grid,
+    Repeat,
+    Span,
+    Uniform,
+    draw_settings,
+    parse_quantity,
+)
 from recordstream.sources import DrawSource
 from tests._draw_toys import (
     ToyBox,
@@ -171,6 +182,164 @@ def test_a_uniform_none_of_whose_values_is_accepted_is_refused() -> None:
 def test_a_uniform_on_a_setting_without_a_range_is_a_spec_error() -> None:
     with pytest.raises(DrawSpecError, match=r"plan.width: Uniform needs a number setting"):
         draw_settings(ToyGenerator(), [Uniform(field="plan.width")], random.Random(0))
+
+
+# -- Grid --------------------------------------------------------------------------------------------------------
+
+
+def _grid_values(draw: Grid, n: int = 400, template: Any = None) -> List[Any]:
+    field = draw.field
+    return sorted(
+        {getattr(g, field) for g in _draws([draw], n=n, template=ToyStrip() if template is None else template)}
+    )
+
+
+def test_a_linear_grid_draws_every_multiple_of_its_step_in_the_range() -> None:
+    assert _grid_values(Grid(field="weight", low=0.2, high=0.6, step=0.1)) == [0.2, 0.3, 0.4, 0.5, 0.6]
+
+
+def test_a_grid_reads_numbers_written_with_their_unit() -> None:
+    """``low: 1MHz`` in YAML is the string '1MHz'; the grid reads it as 1e6."""
+    drawn = _grid_values(Grid(field="weight", low="1MHz", high="2.5 MSa/s", step="100kHz"))
+    assert drawn == [1.0e6 + k * 1.0e5 for k in range(16)]
+
+
+def test_a_log_grid_spreads_count_points_evenly_on_a_log_scale_each_on_the_step() -> None:
+    drawn = _grid_values(Grid(field="weight", low="1MHz", high="2.5MHz", step="100kHz", spacing="log", count=6))
+    assert drawn == [1.0e6, 1.2e6, 1.4e6, 1.7e6, 2.1e6, 2.5e6]
+
+
+@pytest.mark.parametrize(
+    "ratio, high, expected",
+    [
+        (2.0, "8MHz", [1.0e6, 2.0e6, 4.0e6, 8.0e6]),
+        (1.25, "2.5MHz", [1.0e6, 1.2e6, 1.6e6, 2.0e6, 2.4e6]),
+    ],
+)
+def test_a_power_grid_steps_by_its_ratio_each_on_the_step(ratio: float, high: str, expected: List[float]) -> None:
+    drawn = _grid_values(Grid(field="weight", low="1MHz", high=high, step="100kHz", spacing="power", ratio=ratio))
+    assert drawn == expected
+
+
+def test_a_grid_keeps_its_rounded_points_inside_the_range() -> None:
+    """1.05 MHz rounds down to 1.0 MHz on a 100 kHz step, below low; the grid keeps 1.1 MHz instead."""
+    drawn = _grid_values(Grid(field="weight", low="1.05MHz", high="1.35MHz", step="100kHz", spacing="log", count=3))
+    assert drawn == [1.1e6, 1.2e6, 1.3e6]
+
+
+def test_a_grid_never_draws_a_value_the_generator_refuses() -> None:
+    drawn = _draws([Choice(field="plan.level", values=[3]), Grid(field="gain", low=0.5, high=1.0, step=0.1)], n=300)
+    assert sorted({g.gain for g in drawn}) == [0.5, 0.6, 0.7, 0.8, 0.9]
+
+
+def test_a_grid_takes_the_settings_own_range_when_it_has_no_bounds() -> None:
+    assert _grid_values(Grid(field="gain", step=0.25), template=ToyGenerator()) == [0.0, 0.25, 0.5, 0.75, 1.0]
+
+
+def test_a_grid_on_an_integer_setting_draws_integers() -> None:
+    drawn = _grid_values(Grid(field="repeats", low=0, high=100, step=25), template=ToyGenerator())
+    assert drawn == [0, 25, 50, 75, 100] and all(isinstance(v, int) for v in drawn)
+
+
+def test_a_fine_grid_is_drawn_without_listing_its_points() -> None:
+    """1 Hz steps from 1 to 2.5 MHz are 1.5 million points; a draw picks among them without building the list."""
+    drawn = _draws([Grid(field="weight", low="1MHz", high="2.5MHz", step="1Hz")], n=50, template=ToyStrip())
+    assert all(1.0e6 <= g.weight <= 2.5e6 and float(g.weight).is_integer() for g in drawn)
+    assert len({g.weight for g in drawn}) == 50
+
+
+def test_a_grid_none_of_whose_points_is_accepted_is_refused() -> None:
+    spec: List[Draw] = [Choice(field="plan.level", values=[3]), Grid(field="gain", low=0.95, high=1.0, step=0.05)]
+    with pytest.raises(
+        DrawRefused,
+        match=r"^gain: none of the 2 points from 0\.95 to 1 on a 0\.05 step is accepted after plan\.level=3 — "
+        r"ToyGenerator: gain (0\.95|1) above 0\.9 needs level 1 or 2$",
+    ):
+        draw_settings(ToyGenerator(), spec, random.Random(0))
+
+
+@pytest.mark.parametrize(
+    "draw, message",
+    [
+        (
+            Grid(field="weight", low="1.1MHz", high="1.9MHz", step="1MHz"),
+            r"^weight: no multiple of 1e\+06 between 1\.1e\+06 and 1\.9e\+06$",
+        ),
+        (Grid(field="weight", low=1.0, high=2.0), r"^weight: Grid needs a step$"),
+        (Grid(field="weight", low=1.0, high=2.0, step=0), r"^weight: Grid's step 0 is not above 0$"),
+        (Grid(field="weight", low=2.0, high=1.0, step=0.1), r"^weight: Grid's low 2 is above its high 1$"),
+        (Grid(field="weight", step=0.1), r"^weight: Grid needs low and high — the setting \(float\) has none$"),
+        (Grid(field="weight", low=1, high=2, step=0.1, spacing="log"), r"^weight: a log Grid needs a count$"),
+        (
+            Grid(field="weight", low=0, high=2, step=0.1, spacing="log", count=3),
+            r"^weight: a log Grid needs a low above 0; it is 0$",
+        ),
+        (Grid(field="weight", low=1, high=2, step=0.1, spacing="power"), r"^weight: a power Grid needs a ratio$"),
+        (
+            Grid(field="weight", low=1, high=2, step=0.1, spacing="power", ratio=1.0),
+            r"^weight: a power Grid needs a ratio above 1; it is 1$",
+        ),
+        (
+            Grid(field="weight", low=1, high=2, step=0.1, count=3),
+            r"^weight: count is for spacing: log — this Grid's spacing is linear$",
+        ),
+        (
+            Grid(field="weight", low=1, high=2, step=0.1, spacing="log", count=3, ratio=2.0),
+            r"^weight: ratio is for spacing: power — this Grid's spacing is log$",
+        ),
+        (Grid(field="plan.width", step=4), r"^plan.width: Grid needs a number setting \(int or float\); it is "),
+        (
+            Grid(field="repeats", low=0, high=10, step=0.5),
+            r"^repeats: Grid's step 0.5 on an integer setting — give a whole step$",
+        ),
+    ],
+)
+def test_a_grid_that_cannot_be_read_is_a_spec_error(draw: Grid, message: str) -> None:
+    template = ToyGenerator() if draw.field in ("plan.width", "repeats") else ToyStrip()
+    with pytest.raises(DrawSpecError, match=message):
+        draw_settings(template, [draw], random.Random(0))
+
+
+@pytest.mark.parametrize(
+    "written, value",
+    [
+        (2.5e6, 2.5e6),
+        (3, 3.0),
+        ("1MHz", 1.0e6),
+        ("2 MSa/s", 2.0e6),
+        ("2MS/s", 2.0e6),
+        ("100kHz", 1.0e5),
+        ("100 k", 1.0e5),
+        ("1e6", 1.0e6),
+        ("2.5e+6 Hz", 2.5e6),
+        ("5 ms", 0.005),
+        ("20us", 2.0e-5),
+        ("1.5GHz", 1.5e9),
+        ("-3", -3.0),
+    ],
+)
+def test_a_number_is_read_with_its_unit(written: Any, value: float) -> None:
+    assert parse_quantity(written) == pytest.approx(value, rel=1e-12)
+
+
+@pytest.mark.parametrize("written", ["1 mhz", "MHz", "1 MHz Hz", "one", "1 kg", True])
+def test_a_number_that_cannot_be_read_is_refused_with_the_spellings(written: Any) -> None:
+    with pytest.raises(DrawSpecError, match=r"cannot be read as a number — write it as 1e6, 1MHz, 2 MSa/s"):
+        parse_quantity(written)
+
+
+def test_a_grid_written_in_yaml_reads_its_units() -> None:
+    draws = confluid.load(
+        """
+        draws:
+          - !class:recordstream.draws.Grid
+            field: weight
+            low: 1MHz
+            high: 2MSa/s
+            step: 500kHz
+        """
+    )["draws"]
+    assert _grid_values(draws[0]) == [1.0e6, 1.5e6, 2.0e6]
 
 
 # -- Span --------------------------------------------------------------------------------------------------------
@@ -448,6 +617,7 @@ def test_a_draw_without_a_field_is_a_spec_error() -> None:
 def test_the_draws_are_cheap_to_build() -> None:
     """Zero-arg construction stores values only; nothing is checked until a draw."""
     assert Choice().field == "" and Uniform().low is None and Span().share == (0.0, 1.0) and Repeat().each is None
+    assert Grid().step is None and Grid().spacing == "linear"
 
 
 # -- the spec's own mistakes, and the shapes a setting can have -------------------------------------------------------
@@ -558,14 +728,14 @@ def test_no_template_is_a_spec_error() -> None:
 
 
 def test_something_that_is_not_a_draw_is_a_spec_error() -> None:
-    with pytest.raises(DrawSpecError, match=r"draws\[0\] is a str — a draw is a Choice, Uniform, Span or Repeat"):
+    with pytest.raises(DrawSpecError, match=r"draws\[0\] is a str — a draw is a Choice, Uniform, Grid, Span or Repeat"):
         draw_settings(ToyGenerator(), ["plan.width"], random.Random(0))  # type: ignore[list-item]
 
 
 # -- the draws are ordinary configurable classes -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cls", [Choice, Uniform, Span, Repeat, DrawSource])
+@pytest.mark.parametrize("cls", [Choice, Uniform, Grid, Span, Repeat, DrawSource])
 def test_confluid_builds_the_schema_every_form_and_tool_reads(cls: type) -> None:
     """A self-referring annotation left confluid with no schema: validation was switched OFF, with a warning only."""
     model = to_pydantic(cls)

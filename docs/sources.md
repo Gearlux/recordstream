@@ -324,8 +324,26 @@ class Road:
 | --- | --- | --- |
 | `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | tests each value, picks among the accepted ones by weight |
 | `Uniform(field, low, high)` | the setting's own range | a number from the range, tried up to 100 times until one is accepted |
+| `Grid(field, low, high, step, spacing, count, ratio)` | the setting's own range (`step` is required) | a number on a grid, every point a whole multiple of `step`: `linear` every multiple in the range, `log` `count` points even on a log scale, `power` `low`, `low × ratio`, `low × ratio²` … — each point rounded to the step and kept in the range; tries the points in random order, up to 100 |
 | `Span(field, share)` | — | for a list of bounded integers: a run of consecutive values covering a share of those accepted one at a time |
 | `Repeat(field, count, each)` | — | grows a list one element at a time, each from its class's defaults with its own draws `each` (a `Repeat` among them grows a list inside the element); the list ends early when an element's first draw finds no room |
+
+A `Grid` keeps a number on values another part of the pipeline handles well — a sample rate that is a whole
+multiple of a source's, a size in whole blocks. `low`, `high` and `step` are numbers, or numbers written with
+their unit (an SI prefix and `Hz`, `Sa/s`, `S/s` or `s`; the unit is read, never converted):
+
+```yaml
+- !class:recordstream.draws.Grid {field: sample_rate_hz, low: 1MHz, high: 2.5MHz, step: 100kHz}
+#   → 1, 1.1, 1.2 … 2.5 MSa/s (16 points)
+- !class:recordstream.draws.Grid {field: sample_rate_hz, low: 1MHz, high: 2.5MHz, step: 100kHz, spacing: log, count: 6}
+#   → 1, 1.2, 1.4, 1.7, 2.1, 2.5 MSa/s
+- !class:recordstream.draws.Grid {field: sample_rate_hz, low: 1MSa/s, high: 8MSa/s, step: 100kHz, spacing: power, ratio: 2}
+#   → 1, 2, 4, 8 MSa/s
+```
+
+A grid with no multiple of its step in the range, a log grid without `count`, a power grid without a
+`ratio` above 1, a `count` or `ratio` on a spacing that does not use it, or a number that cannot be read
+(`1 mhz`) is a spec error; `parse_quantity("2 MSa/s")` reads a number the same way (`2000000.0`).
 
 A `field` is the setting's dotted path from the generator (`road.width`), or from the element inside
 a `Repeat` (`position`). A path through a setting that is `None` is skipped. A step `name[i]` is the

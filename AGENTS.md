@@ -197,6 +197,9 @@ Gotchas:
 - Identity (§13, `tests/test_dataset_uri.py`): `dataset_uri` is the canonical handle,
   `dataset_url` a link for a person or `None`. Both read stored config only. The free functions
   follow `.source`; a wrapper never decorates the URI; `ConcatSource` answers `None`.
+- A `Grid`'s numbers carry their unit IN the value (`low: 1MHz`, `high: 2 MSa/s`), read by `parse_quantity`;
+  never a separate `unit` knob (user correction 2026-10-07). The units are a closed `Unit` Literal; prefixes only
+  convert (`tests/test_draws.py::test_a_number_is_read_with_its_unit`).
 - Draws (§24, `tests/test_draws.py`, `tests/test_draw_source.py`): the generator is the only
   judge. Never restate its rules in a draw or a sampler, and never filter whole draws. Only a
   `Repeat` adds elements (one inside `each` grows a list inside the element); a `name[i]` step reaches one that exists.

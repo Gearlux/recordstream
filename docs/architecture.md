@@ -2008,7 +2008,7 @@ measured or weighed:
 * **A constraint solver.** The same rules rewritten in a solver's language, a heavy dependency, and
   sampling a solver's solutions evenly is a problem of its own.
 
-**Decision.** The generator judges, one setting at a time. `recordstream.draws` holds four draws —
+**Decision.** The generator judges, one setting at a time. `recordstream.draws` holds four draws (a fifth, `Grid`, below) —
 `Choice`, `Uniform`, `Span`, `Repeat` — run top to bottom by `draw_settings`; each picks from its own
 distribution, but only among the values for which the setting's object, and every object above it up
 to the generator, rebuild through their constructors and pass `check()`. The objects are rebuilt from
@@ -2045,7 +2045,15 @@ template's or a `Repeat`'s, never a side effect of a path. A class whose constru
 rebuild, and with an expensive check (a radio carrier's, 0.23 ms on average) the duplicates
 were 7 s of a 49 s training-set build. A class without the attribute is checked after its
 constructor as before; declaring it on a class whose constructor does not check would let a draw
-accept a value nothing judged.
+accept a value nothing judged. A fifth draw, `Grid` (2026-10-07), draws a number among whole
+multiples of a step: a value drawn from a range is fine for the generator but can be costly for what
+handles it next — a sample rate of 2 389 906.5 Hz over a 100 kHz source made a resampler design a
+14-million-tap filter (0.43 s a call; over 33.3 kHz 1.4 billion taps, a record that never finished),
+while every rate on a 100 kHz grid needed at most 1 501 (8 records in 3.8 s). The grid is the
+spec's to choose — a draw does not know what reads its value — and it is written in the units
+of the setting (`step: 100kHz`), read by `parse_quantity`, which converts prefixes only. Its points
+are tried without replacement in random order, so the draw is uniform over the accepted ones, and a
+linear grid of a million points is never listed.
 
 **Example.**
 
@@ -2064,7 +2072,7 @@ drawn.log            # [('road.width', 2), ('road.lanes[0].position', 0), ('road
 `Traffic` is the generator defined in [sources.md](sources.md#drawing-a-generators-settings-drawsource): a road
 drawn two wide, and the `Repeat` drew two lanes, both of which fit.
 
-**What you may change.** More draws (a log-uniform, a normal), what the refusals say, faster
+**What you may change.** More draws (a normal), more units `parse_quantity` reads, what the refusals say, faster
 judging (checking only the objects a change reaches). What must hold: the generator is the only
 judge — no rule is restated in a draw; every step keeps the object valid, so nothing is rejected at
 the end; a record depends only on the seed, its index and the draws; and the settings file rides the

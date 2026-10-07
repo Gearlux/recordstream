@@ -339,7 +339,9 @@ source[0]["settings"]             # its drawn settings file: confluid.load() reb
 
 Record `i` depends only on `seed`, `i` and the draws. A list of draws that cannot be met stops with
 the generator's own reason (`DrawRefused: road.width: none of [2, 4] is accepted after nothing drawn —
-Road: a lane off the road …`). Full guide: [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#drawing-a-generators-settings-drawsource);
+Road: a lane off the road …`). The draws are `Choice`, `Uniform`, `Grid` (a number among whole multiples
+of a step, linear, log or power, written with its unit: `low: 1MHz, high: 2.5MHz, step: 100kHz`), `Span`
+and `Repeat`. Full guide: [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#drawing-a-generators-settings-drawsource);
 why the generator judges: [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md).
 
 ### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
