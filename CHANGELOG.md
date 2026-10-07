@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`Grid(field, low, high, step, spacing, count, ratio)`, a draw on a grid** — every point a whole multiple of
+  `step`, spread `linear` (every multiple), `log` (`count` points) or `power` (`low × ratio^n`); its numbers may be
+  written with their unit (`low: 1MHz`, `high: 2.5 MSa/s`, `step: 100kHz`), read by `parse_quantity`
+  (`docs/sources.md`).
 - **A class whose constructor runs its own `check()` declares `checked_on_construction = True`** — the draws
   then check each value they try once, by the constructor, instead of again after it (`docs/sources.md`).
 - **`ConvertToImage(vmin, vmax)`** pins the grey scale: the value that becomes black and the value that

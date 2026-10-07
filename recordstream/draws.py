@@ -14,13 +14,16 @@ constructor already runs its own ``check()`` says so with a class attribute, ``c
 is then checked once per value tried rather than twice — a generator checked deep down a path pays for it at every
 value.
 
-The four draws:
+The five draws:
 
 * :class:`Choice` — tests each value and picks among the accepted ones, by weight. Given no values it takes every
   value the setting's type allows: a closed ``Literal``, ``bool``, ``None`` for an optional setting, or an integer
   range of at most :data:`ENUMERATION_LIMIT` values.
 * :class:`Uniform` — a number from ``low`` to ``high`` (default: the setting's own range), tried up to :data:`TRIES`
   times until one is accepted.
+* :class:`Grid` — a number on a grid, every point a whole multiple of ``step``: every multiple in the range, ``count``
+  points even on a log scale, or the powers of ``ratio`` from ``low``. Its numbers may carry their unit (``1MHz``,
+  ``2 MSa/s``), read by :func:`parse_quantity`.
 * :class:`Span` — for a list of bounded integers: a run of consecutive values covering a share of those the generator
   accepts one at a time (a share of the free ones, whatever the size of the space).
 * :class:`Repeat` — grows a list one element at a time, each starting from its class's defaults and drawing its own
@@ -45,7 +48,7 @@ import random
 import re
 import types
 import typing
-from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
 
 from annotated_types import Ge, Gt, Interval, Le, Lt
 from confluid import configurable
@@ -485,6 +488,153 @@ class Uniform(_Draw):
         )
 
 
+#: How a :class:`Grid` spreads its points: every multiple of the step, ``count`` points even on a log scale, or
+#: ``low`` times each power of ``ratio`` — each on the step.
+Spacing = Literal["linear", "log", "power"]
+#: A number as a draw's spec writes it: a number, or one with an SI prefix and a unit (``1MHz``, ``2 MSa/s``, ``5 ms``).
+Quantity = Union[float, str]
+
+#: The SI prefixes a written number may carry, and their factors.
+_PREFIXES = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "m": 1e-3, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12}
+#: The units a written number may name. They change nothing: ``1MHz`` and ``1MSa/s`` are both 1e6.
+Unit = Literal["Hz", "Sa/s", "S/s", "s"]
+_QUANTITY = re.compile(
+    r"^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*([%s]?)(%s)?\s*$"
+    % ("".join(_PREFIXES), "|".join(re.escape(u) for u in typing.get_args(Unit)))
+)
+#: How close a grid point must come to a bound to count as on it (2.5e6 / 1e5 is 25.000000000000004).
+_ON_GRID = 1e-9
+
+
+def parse_quantity(value: Quantity) -> float:
+    """A number a spec wrote, in its plain units: ``1MHz`` → 1e6, ``2 MSa/s`` → 2e6, ``100 k`` → 1e5, ``5 ms`` →
+    0.005, ``1e6`` → 1e6 (YAML reads ``1e6`` without a dot as a string). A number passes through."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    found = _QUANTITY.match(value) if isinstance(value, str) else None
+    if found is None:
+        units = ", ".join(typing.get_args(Unit))
+        raise DrawSpecError(
+            f"{value!r} cannot be read as a number — write it as 1e6, 1MHz, 2 MSa/s or 100 k (prefixes "
+            f"{' '.join(_PREFIXES)}; units {units})"
+        )
+    number, prefix, _ = found.groups()
+    return float(number) * _PREFIXES.get(prefix, 1.0)
+
+
+def _tidy(value: float) -> float:
+    """A grid point without the float residue of ``k × step`` (3 × 0.1 is 0.30000000000000004)."""
+    return float(f"{value:.12g}")
+
+
+@configurable
+class Grid(_Draw):
+    """Draw a number setting from a grid — only whole multiples of ``step`` — among the points the generator accepts.
+
+    A setting that must stay on a grid — a sample rate a resampler converts to quickly, a size in whole blocks —
+    is drawn from points spread over the range in one of three ways, each point a multiple of ``step``.
+    ``low``, ``high`` and ``step`` are numbers or numbers with their unit: ``1MHz``, ``2.5 MSa/s``, ``100kHz``.
+
+    Args:
+        field: The setting to draw: its dotted path from the generator (``receiver.sample_rate_hz``).
+        low: The smallest value. None = the setting's own lower bound.
+        high: The largest value. None = the setting's own upper bound.
+        step: Every point is a whole multiple of it.
+        spacing: linear = every multiple of ``step`` in the range; log = ``count`` points even on a log scale; power =
+            ``low``, ``low × ratio``, ``low × ratio²`` … up to ``high``. A log or power point is rounded to the step.
+        count: How many points a log grid spreads (fewer when two round to one multiple).
+        ratio: The factor between a power grid's points (above 1).
+    """
+
+    def __init__(
+        self,
+        field: str = "",
+        low: Optional[Quantity] = None,
+        high: Optional[Quantity] = None,
+        step: Optional[Quantity] = None,
+        spacing: Spacing = "linear",
+        count: Optional[Annotated[int, Interval(ge=1)]] = None,
+        ratio: Optional[float] = None,
+    ) -> None:
+        self.field = field
+        self.low = low
+        self.high = high
+        self.step = step
+        self.spacing = spacing
+        self.count = count
+        self.ratio = ratio
+
+    def _multiples(self, where: str, low: float, high: float, step: float) -> Union[range, List[int]]:
+        """The grid's points, as the multiples ``k`` of the step: a range for a linear grid (never listed)."""
+        first, last = math.ceil(low / step - _ON_GRID), math.floor(high / step + _ON_GRID)
+        if first > last:
+            raise DrawSpecError(f"{where}: no multiple of {step:g} between {low:g} and {high:g}")
+        if self.count is not None and self.spacing != "log":
+            raise DrawSpecError(f"{where}: count is for spacing: log — this Grid's spacing is {self.spacing}")
+        if self.ratio is not None and self.spacing != "power":
+            raise DrawSpecError(f"{where}: ratio is for spacing: power — this Grid's spacing is {self.spacing}")
+        if self.spacing == "linear":
+            return range(first, last + 1)
+        if low <= 0:
+            raise DrawSpecError(f"{where}: a {self.spacing} Grid needs a low above 0; it is {low:g}")
+        if self.spacing == "log":
+            if self.count is None:
+                raise DrawSpecError(f"{where}: a log Grid needs a count")
+            points = (
+                [low * (high / low) ** (i / (self.count - 1)) for i in range(self.count)] if self.count > 1 else [low]
+            )
+        else:
+            if self.ratio is None:
+                raise DrawSpecError(f"{where}: a power Grid needs a ratio")
+            if self.ratio <= 1:
+                raise DrawSpecError(f"{where}: a power Grid needs a ratio above 1; it is {self.ratio:g}")
+            powers = math.floor(math.log(high / low) / math.log(self.ratio) + _ON_GRID)
+            points = [low * self.ratio**n for n in range(powers + 1)]
+        return list(dict.fromkeys(min(max(round(p / step), first), last) for p in points))
+
+    def _draw(self, root: Any, base: Path, rng: random.Random, log: List[Tuple[str, Any]]) -> Any:
+        path, where = self._path(base)
+        located = _target(root, path, where)
+        if located is None:
+            return root
+        annotation = _annotation(*located)
+        shape = _shape(annotation)
+        if shape.base not in (int, float):
+            raise DrawSpecError(
+                f"{where}: Grid needs a number setting (int or float); it is {_describe(annotation)} — draw it "
+                "with Choice"
+            )
+        if self.step is None:
+            raise DrawSpecError(f"{where}: Grid needs a step")
+        step = parse_quantity(self.step)
+        if step <= 0:
+            raise DrawSpecError(f"{where}: Grid's step {step:g} is not above 0")
+        if shape.base is int and not step.is_integer():
+            raise DrawSpecError(f"{where}: Grid's step {step:g} on an integer setting — give a whole step")
+        low = parse_quantity(self.low) if self.low is not None else shape.low
+        high = parse_quantity(self.high) if self.high is not None else shape.high
+        if low is None or high is None:
+            raise DrawSpecError(f"{where}: Grid needs low and high — the setting ({_describe(annotation)}) has none")
+        if low > high:
+            raise DrawSpecError(f"{where}: Grid's low {low:g} is above its high {high:g}")
+        multiples = self._multiples(where, low, high, step)
+        reason: Optional[BaseException] = None
+        # Without replacement, in random order: uniform over the accepted points, and every point is tried when
+        # there are at most TRIES of them.
+        for k in rng.sample(multiples, min(len(multiples), TRIES)):
+            value: float = int(k * step) if shape.base is int else _tidy(k * step)
+            built, refusal = _attempt(root, path, value, where)
+            if refusal is None:
+                log.append((where, value))
+                return built
+            reason = refusal
+        tried = f"the {len(multiples)} points" if len(multiples) <= TRIES else f"{TRIES} of the {len(multiples)} points"
+        raise DrawRefused(
+            f"{where}: none of {tried} from {low:g} to {high:g} on a {step:g} step is accepted after {_earlier(log)} — "
+            f"{_reason(reason)}"
+        )
+
+
 @configurable
 class Span(_Draw):
     """Draw a run of consecutive integers for a list setting, covering a share of the values the generator accepts.
@@ -603,7 +753,7 @@ class Repeat(_Draw):
 
 
 #: Any one draw — at the top of a list of draws or among a Repeat's ``each``.
-Draw = Union[Choice, Uniform, Span, Repeat]
+Draw = Union[Choice, Uniform, Grid, Span, Repeat]
 
 
 def draw_settings(template: Any, draws: Optional[Sequence[Draw]], rng: random.Random) -> Drawn:
@@ -615,7 +765,7 @@ def draw_settings(template: Any, draws: Optional[Sequence[Draw]], rng: random.Ra
     for index, draw in enumerate(draws or ()):
         if not isinstance(draw, _Draw):
             raise DrawSpecError(
-                f"draws[{index}] is a {type(draw).__name__} — a draw is a Choice, Uniform, Span or Repeat"
+                f"draws[{index}] is a {type(draw).__name__} — a draw is a Choice, Uniform, Grid, Span or Repeat"
             )
         settings = draw._draw(settings, (), rng, log)
     return Drawn(settings, log)
@@ -628,9 +778,13 @@ __all__ = [
     "DrawSpecError",
     "Drawn",
     "ENUMERATION_LIMIT",
+    "Grid",
+    "Quantity",
     "Repeat",
+    "Spacing",
     "Span",
     "TRIES",
     "Uniform",
     "draw_settings",
+    "parse_quantity",
 ]
