@@ -202,7 +202,9 @@ Gotchas:
   `Repeat` adds elements (one inside `each` grows a list inside the element); a `name[i]` step reaches one that exists.
   A `DrawSpecError` is never caught as "no room". A rule a generator
   checks only in `compute()` needs a `check()`. Never reorder draws silently: order decides what
-  a later default allows.
+  a later default allows. A rebuilt object is checked once: its `check()` runs after its
+  constructor unless its class declares `checked_on_construction = True` — only a class whose
+  constructor itself runs `check()` may (`tests/test_draws.py::test_a_class_whose_constructor_checks_it_is_checked_once_for_each_value_tried`).
 - A source declares the entries its records carry with `produces` (§26, the source API): a class
   attribute when fixed, a property answered from the CURRENT settings when they follow them — and a
   property never loads data. `HuggingFaceSource.produces` keeps `image` / `class` whatever the

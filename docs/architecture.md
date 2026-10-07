@@ -2039,7 +2039,13 @@ OFF with a warning ("validation is OFF … RecursionError", measured on confluid
 `Repeat(count=(-1, 2))` was then accepted). A `field` reaches into a list the settings already hold with `name[i]` — the settings of
 several bursts in one record, each with its own values, are drawn this way — but only to an element
 that exists: an index past the end is a spec error, not a new element, so a list's length stays the
-template's or a `Repeat`'s, never a side effect of a path.
+template's or a `Repeat`'s, never a side effect of a path. A class whose constructor runs its own
+`check()` declares `checked_on_construction = True` and a draw leaves out its second check
+(2026-10-07): a generator whose settings object is deep down every path checked it at every
+rebuild, and with an expensive check (a radio carrier's, 0.23 ms on average) the duplicates
+were 7 s of a 49 s training-set build. A class without the attribute is checked after its
+constructor as before; declaring it on a class whose constructor does not check would let a draw
+accept a value nothing judged.
 
 **Example.**
 

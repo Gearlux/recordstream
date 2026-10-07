@@ -306,6 +306,20 @@ generator's own values. "Accepts" means the object holding the setting, and ever
 rebuild through their constructors and pass their `check()` when they have one. The generator's
 rules are not restated anywhere — it judges every value itself.
 
+A class whose constructor already runs its `check()` says so, and is then checked once per value
+tried instead of twice — worth it when the check is the slow part of a draw:
+
+```python
+@configurable
+@dataclass(kw_only=True)
+class Road:
+    checked_on_construction: ClassVar[bool] = True  # __post_init__ runs check(): a draw does not run it again
+    width: Literal[2, 4] = 2
+
+    def __post_init__(self) -> None:
+        self.check()
+```
+
 | draw (`recordstream.draws`) | given no values | what it does |
 | --- | --- | --- |
 | `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | tests each value, picks among the accepted ones by weight |
