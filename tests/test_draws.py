@@ -73,7 +73,7 @@ def test_a_value_left_out_or_weighted_zero_is_never_drawn() -> None:
     assert {g.plan.width for g in drawn} == {4, 16}
 
 
-def test_a_choice_over_a_small_integer_range_tests_every_integer() -> None:
+def test_a_choice_over_a_small_integer_range_draws_from_every_integer() -> None:
     drawn = _draws([Choice(field="repeats")], n=400)  # repeats: 0-100
     values = {g.repeats for g in drawn}
     assert values <= set(range(101)) and len(values) > 90
@@ -126,24 +126,70 @@ def test_a_rule_only_the_generators_check_knows_is_respected() -> None:
 
 
 def test_a_class_whose_constructor_checks_it_is_checked_once_for_each_value_tried() -> None:
-    """``checked_on_construction``: the draw builds each value and asks no second ``check()`` — the constructor's is
+    """``checked_on_construction``: the draw builds the value and asks no second ``check()`` — the constructor's is
     the verdict (size 3 refused there). A class that does not say so is checked again after its constructor."""
     box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
     ToySelfChecked.checks = ToyCheckedTwice.checks = 0
-    spec: List[Draw] = [
-        Choice(field="self_checked.size", values=[1, 2, 3]),
-        Choice(field="checked_twice.size", values=[1, 2, 3]),
-    ]
+    spec: List[Draw] = [Choice(field="self_checked.size", values=[3, 2], weights=[1.0, 1e-9])]
+    drawn = draw_settings(box, spec, random.Random(0)).settings  # 3 picked first (all but surely), refused, then 2
+    assert drawn.self_checked.size == 2 and ToySelfChecked.checks == 2  # 3 built, 2 built: one check each
+    spec = [Choice(field="checked_twice.size", values=[3, 2], weights=[1.0, 1e-9])]
     drawn = draw_settings(box, spec, random.Random(0)).settings
-    assert drawn.self_checked.size in (1, 2) and drawn.checked_twice.size in (1, 2)
-    assert ToySelfChecked.checks == 3  # 1, 2 and 3 each built once
-    assert ToyCheckedTwice.checks == 3 + 2  # each built once, then 1 and 2 (built) checked again
+    assert drawn.checked_twice.size == 2 and ToyCheckedTwice.checks == 2 + 1  # each built once, 2 checked again
 
 
 def test_a_class_whose_constructor_checks_it_still_has_its_refusal_named() -> None:
     with pytest.raises(DrawRefused, match=r"self_checked.size: none of \[3\] is accepted .* size 3 is refused"):
         draw_settings(ToyBox(self_checked=ToySelfChecked()), [Choice(field="self_checked.size", values=[3])],
                       random.Random(0))  # fmt: skip
+
+
+class TestAChoiceChecksOnlyTheValueItPicks:
+    """A Choice picks a value by its weight and asks the generator about that one alone; a refused value is dropped and
+    another picked among the rest — so each accepted value comes out with its weight's share of the accepted ones, as
+    if every value had been tried first, at one check instead of one per value (measured on generated cellular records
+    2026-10-08: 74 066 rebuilds → 23 498)."""
+
+    def test_an_accepted_pick_is_the_only_value_checked(self) -> None:
+        box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
+        ToySelfChecked.checks = 0
+        draw_settings(box, [Choice(field="self_checked.size", values=[1, 2])], random.Random(4))
+        assert ToySelfChecked.checks == 1
+
+    def test_a_refused_pick_is_dropped_and_another_picked(self) -> None:
+        box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
+        sizes, checks = [], []
+        for seed in range(200):
+            ToySelfChecked.checks = 0
+            drawn = draw_settings(box, [Choice(field="self_checked.size", values=[1, 3, 2])], random.Random(seed))
+            sizes.append(drawn.settings.self_checked.size)
+            checks.append(ToySelfChecked.checks)
+        assert set(sizes) == {1, 2}
+        assert set(checks) == {1, 2}  # 3 is checked at most once a draw, and only when it was picked
+
+    def test_each_accepted_value_comes_out_with_its_weights_share_of_the_accepted(self) -> None:
+        """Weights 1, 2, 3 with the third refused: 1/3 and 2/3 — what picking among the accepted gives."""
+        spec: List[Draw] = [Choice(field="self_checked.size", values=[1, 2, 3], weights=[1.0, 2.0, 3.0])]
+        box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
+        counts = Counter(draw_settings(box, spec, random.Random(n)).settings.self_checked.size for n in range(6000))
+        assert counts[3] == 0
+        assert abs(counts[1] / 6000 - 1 / 3) < 0.02 and abs(counts[2] / 6000 - 2 / 3) < 0.02
+
+    def test_a_weight_of_zero_is_never_checked(self) -> None:
+        box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
+        ToySelfChecked.checks = 0
+        spec: List[Draw] = [Choice(field="self_checked.size", values=[3, 1], weights=[0.0, 1.0])]
+        assert draw_settings(box, spec, random.Random(0)).settings.self_checked.size == 1
+        assert ToySelfChecked.checks == 1
+
+    def test_when_every_value_is_refused_every_value_was_tried(self) -> None:
+        box = ToyBox(self_checked=ToySelfChecked(), checked_twice=ToyCheckedTwice())
+        ToySelfChecked.checks = 0
+        with pytest.raises(
+            DrawRefused, match=r"^self_checked.size: none of \[3, 3\] is accepted .* size 3 is refused$"
+        ):
+            draw_settings(box, [Choice(field="self_checked.size", values=[3, 3])], random.Random(0))
+        assert ToySelfChecked.checks == 2
 
 
 def test_a_choice_with_no_values_on_an_open_setting_is_a_spec_error() -> None:

@@ -16,9 +16,11 @@ value.
 
 The five draws:
 
-* :class:`Choice` — tests each value and picks among the accepted ones, by weight. Given no values it takes every
-  value the setting's type allows: a closed ``Literal``, ``bool``, ``None`` for an optional setting, or an integer
-  range of at most :data:`ENUMERATION_LIMIT` values.
+* :class:`Choice` — picks a value by weight and asks the generator about that one; a refused value is dropped and
+  another picked among the rest, so each accepted value comes out with its weight's share of the accepted ones, at one
+  check per value picked rather than one per value. Given no values it takes every value the setting's type allows: a
+  closed ``Literal``, ``bool``, ``None`` for an optional setting, or an integer range of at most
+  :data:`ENUMERATION_LIMIT` values.
 * :class:`Uniform` — a number from ``low`` to ``high`` (default: the setting's own range), tried up to :data:`TRIES`
   times until one is accepted.
 * :class:`Grid` — a number on a grid, every point a whole multiple of ``step``: every multiple in the range, ``count``
@@ -39,24 +41,35 @@ default (a setting that inherits from its parent until set). Draw first what ope
 A draw no value of which is accepted raises :class:`DrawRefused`, naming the setting, the values, the draws before it
 and the generator's own reason. A spec that cannot be read (a setting that does not exist, a ``Choice`` with no
 values on an open setting) raises :class:`DrawSpecError`.
+
+A record's draws ask the same question often: a third of a cellular record's 6 900 checks were about settings already
+judged (measured 2026-10-08). A generator whose check is a function of its settings alone decorates it with
+:func:`remembered`, and a check asked again about the same settings — field for field — is answered from memory: the
+same verdict, the same refusal. The records do not change.
 """
 
+import contextlib
 import copy
+import dataclasses
+import functools
 import inspect
 import math
 import random
 import re
+import threading
 import types
 import typing
-from typing import Any, Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, Union
+from collections import OrderedDict
+from typing import Any, Callable, Dict, Iterator, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypeVar, Union
 
+import numpy as np
 from annotated_types import Ge, Gt, Interval, Le, Lt
 from confluid import configurable
 from typing_extensions import Annotated
 
 #: How many values a :class:`Uniform` tries before it gives up.
 TRIES = 100
-#: The largest integer range a :class:`Choice` without values, or a :class:`Span`, tests value by value.
+#: The largest integer range a :class:`Choice` without values draws from, or a :class:`Span` tests value by value.
 ENUMERATION_LIMIT = 1024
 #: Element types a :class:`Repeat` cannot grow a list of: they have no settings for ``each`` to draw.
 _PLAIN_VALUES = (int, float, complex, str, bytes, bool)
@@ -421,22 +434,20 @@ class Choice(_Draw):
         weights = [1.0] * len(values) if self.weights is None else list(self.weights)
         if len(weights) != len(values):
             raise DrawSpecError(f"{where}: {len(values)} values and {len(weights)} weights — give one weight per value")
-        accepted: List[Tuple[Any, Any, float]] = []
+        # Pick, then ask: a refused value is dropped and the pick repeated among the rest. Each accepted value comes
+        # out with its weight's share of the accepted ones — what asking about every value first gives — at one check
+        # per pick (a carrier's draws built 74 066 carriers that way, 23 498 this way; measured 2026-10-08).
+        left = [(value, weight) for value, weight in zip(values, weights) if weight > 0]
         reason: Optional[BaseException] = None
-        for value, weight in zip(values, weights):
-            if weight <= 0:
-                continue
+        while left:
+            value, _ = left.pop(rng.choices(range(len(left)), weights=[weight for _, weight in left])[0])
             built, refusal = _attempt(root, path, copy.deepcopy(value), where)
             if refusal is None:
-                accepted.append((built, value, weight))
-            else:
-                reason = refusal
-        if not accepted:
-            because = "every weight is 0" if reason is None else _reason(reason)
-            raise DrawRefused(f"{where}: none of {list(values)!r} is accepted after {_earlier(log)} — {because}")
-        built, value, _ = rng.choices(accepted, weights=[weight for _, _, weight in accepted])[0]
-        log.append((where, value))
-        return built
+                log.append((where, value))
+                return built
+            reason = refusal
+        because = "every weight is 0" if reason is None else _reason(reason)
+        raise DrawRefused(f"{where}: none of {list(values)!r} is accepted after {_earlier(log)} — {because}")
 
 
 @configurable
@@ -752,6 +763,132 @@ class Repeat(_Draw):
         return root
 
 
+# -- remembered answers ---------------------------------------------------------------------------------------------
+
+#: How many answers a remembered method keeps, per method and process; the one asked about longest ago goes first.
+REMEMBERED = 1024
+#: Whether remembered methods answer from memory (``remembering(False)`` asks every time).
+_REMEMBERING = [True]
+
+_Method = TypeVar("_Method", bound=Callable[..., Any])
+
+
+class _NoFingerprint(Exception):
+    """A value no fingerprint describes exactly: the question is asked, never answered from memory."""
+
+
+def _fingerprint(value: Any) -> Any:
+    """``value`` as a hashable key that is equal for two values exactly when every setting in them is: a dataclass by
+    its type and its fields, a list, tuple or dict by its items in order, an array by its type, shape and bytes, a
+    number with its type (``True`` is not ``1``, ``-0.0`` is not ``0.0``). Anything else has no fingerprint."""
+    if value is None or isinstance(value, (bool, int, str, bytes)):
+        return (type(value), value)
+    if isinstance(value, float):
+        return (type(value), float(value).hex())
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return (type(value), tuple(_fingerprint(getattr(value, f.name)) for f in dataclasses.fields(value)))
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_fingerprint(item) for item in value))
+    if isinstance(value, dict):
+        return (dict, tuple((_fingerprint(k), _fingerprint(v)) for k, v in value.items()))
+    if isinstance(value, np.ndarray):
+        return (np.ndarray, value.dtype.str, value.shape, value.tobytes())
+    raise _NoFingerprint(type(value).__name__)
+
+
+def _own_fingerprint(obj: Any, ignore: Sequence[str]) -> Any:
+    """``obj``'s fingerprint without the settings named in ``ignore`` (refused unless each is a dataclass field)."""
+    if not ignore:
+        return _fingerprint(obj)
+    names = {f.name for f in dataclasses.fields(obj)} if dataclasses.is_dataclass(obj) else set()
+    for name in ignore:
+        if name not in names:
+            raise TypeError(
+                f"remembered: ignore names {name!r}, which is not a setting of {type(obj).__name__} — name a "
+                "dataclass field"
+            )
+    kept = tuple(_fingerprint(getattr(obj, f.name)) for f in dataclasses.fields(obj) if f.name not in ignore)
+    return (type(obj), kept)
+
+
+def remembered(method: Optional[_Method] = None, *, ignore: Sequence[str] = ()) -> Any:
+    """Decorate a method of a settings object so that it answers a question it has answered before from memory.
+
+    The question is the object's settings — every dataclass field, exactly (see :func:`_fingerprint`) — and the
+    method's arguments; the answer is what the method returned or the refusal it raised (a ``ValueError`` or
+    ``TypeError``, raised again as a fresh copy with the same message). So the method must be a function of those
+    alone: no clock, no file, no random state, no attribute outside the fields. Any other error is raised each time
+    and never remembered; a setting no fingerprint describes asks every time. A returned value is shared by everyone
+    who asks — return values nobody changes (tuples, read-only arrays).
+
+    Args:
+        method: The method (when used as a bare decorator).
+        ignore: Settings the answer does not depend on, left out of the question — the method must never read them
+            (a part of a check that does not look at a list the draws keep changing).
+
+    At most :data:`REMEMBERED` answers are kept per method and process, the one asked about longest ago forgotten
+    first. ``method.forget()`` forgets them all; :func:`remembering` switches remembering off.
+    """
+
+    def decorate(fn: _Method) -> _Method:
+        answers: "OrderedDict[Any, Tuple[bool, Any]]" = OrderedDict()
+        lock = threading.Lock()
+
+        @functools.wraps(fn)
+        def asked(self: Any, *args: Any, **kwargs: Any) -> Any:
+            if not _REMEMBERING[0]:
+                return fn(self, *args, **kwargs)
+            try:
+                question = (_own_fingerprint(self, ignore), _fingerprint(args), _fingerprint(sorted(kwargs.items())))
+            except _NoFingerprint:
+                return fn(self, *args, **kwargs)
+            with lock:
+                known = answers.get(question)
+                if known is not None:
+                    answers.move_to_end(question)
+            if known is not None:
+                refused, answer = known
+                if refused:
+                    raise copy.copy(answer)  # a fresh copy: no traceback of an earlier answer is kept or grown
+                return answer
+            try:
+                answer = fn(self, *args, **kwargs)
+            except (ValueError, TypeError) as error:
+                try:
+                    kept = copy.copy(error)  # without the traceback, which would keep the frames' arrays alive
+                except Exception:  # noqa: BLE001 - an error that cannot be copied is simply not remembered
+                    raise error from None
+                _remember(answers, lock, question, (True, kept))
+                raise
+            _remember(answers, lock, question, (False, answer))
+            return answer
+
+        asked.forget = answers.clear  # type: ignore[attr-defined]
+        return typing.cast(_Method, asked)
+
+    return decorate if method is None else decorate(method)
+
+
+def _remember(answers: "OrderedDict[Any, Tuple[bool, Any]]", lock: threading.Lock, question: Any, answer: Any) -> None:
+    with lock:
+        answers[question] = answer
+        answers.move_to_end(question)
+        while len(answers) > REMEMBERED:
+            answers.popitem(last=False)
+
+
+@contextlib.contextmanager
+def remembering(enabled: bool) -> Iterator[None]:
+    """Within the block, remembered methods answer from memory (``True``, the default) or ask every time (``False``:
+    to measure, or to compare the answers both ways)."""
+    before = _REMEMBERING[0]
+    _REMEMBERING[0] = bool(enabled)
+    try:
+        yield
+    finally:
+        _REMEMBERING[0] = before
+
+
 #: Any one draw — at the top of a list of draws or among a Repeat's ``each``.
 Draw = Union[Choice, Uniform, Grid, Span, Repeat]
 
@@ -787,4 +924,6 @@ __all__ = [
     "Uniform",
     "draw_settings",
     "parse_quantity",
+    "remembered",
+    "remembering",
 ]

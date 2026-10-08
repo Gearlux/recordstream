@@ -2015,8 +2015,9 @@ to the generator, rebuild through their constructors and pass `check()`. The obj
 their constructor parameters read back from same-named attributes (the workspace rule that settings
 stay in the signature), so any `@configurable` class works — a dataclass, an `Algorithm`, a plain
 class — with no registration. Because every step keeps the whole object valid, the last one is valid:
-there is no final rejection. `Choice` tests every value (a closed `Literal`, a bool, an integer range
-of at most 1024); `Uniform` tries up to 100 values from its range; `Span` measures the values a list
+there is no final rejection. `Choice` picks a value by weight and asks about it, a refused one dropped
+and another picked (given no values: a closed `Literal`, a bool, an integer range of at most 1024);
+`Uniform` tries up to 100 values from its range; `Span` measures the values a list
 of integers accepts one at a time and takes a run covering a share of them (a share, because the
 sensible length depends on an earlier draw — a run of 100 cannot fit a space of 50); `Repeat` grows
 a list one element at a time, the element's first draw deciding whether there is room.
@@ -2077,6 +2078,51 @@ judging (checking only the objects a change reaches). What must hold: the genera
 judge — no rule is restated in a draw; every step keeps the object valid, so nothing is rejected at
 the end; a record depends only on the seed, its index and the draws; and the settings file rides the
 record. Usage: [sources.md](sources.md#drawing-a-generators-settings-drawsource).
+
+### Amendment: a Choice asks about the value it picks, and a check remembers its answers (2026-10-08)
+
+**Context.** Choosing the settings was the largest single part of a generated radio record: 19 % of
+8 records' 44.5 s. A check was not slow (0.10-0.17 ms), but one record asked about 6 900 of them, for
+two reasons: a `Choice` built and checked the object for EVERY value before picking one (one offset
+draw checked 547 values to keep one), and a third of the questions had been answered already — the
+same settings judged again, mostly a `Choice` re-checking the value already set.
+
+**Decision.** Two changes, each keeping the generator the only judge. `Choice` picks a value by
+weight and asks about that one; a refused value is dropped and the pick repeated among the rest.
+Each accepted value comes out with its weight's share of the accepted ones, exactly as before — only
+the random numbers are spent differently, so a seed draws other (equally valid) records. And
+`remembered`, a decorator a generator puts on its check: the question is every setting, exactly
+(dataclass fields recursively, arrays by their bytes, a number with its type), plus the method's
+arguments; the answer the return value or the refusal, raised again as a fresh copy. `ignore` leaves
+out settings a part of a check never reads, so a part that does not look at a list the draws keep
+changing is asked once for every version of the list. Rejected: a cache keyed by object identity
+(settings are mutable dataclasses — a slot set in place would keep a stale verdict) and a cheaper
+partial re-check in the draws (it would restate which rules a setting touches — a second judge).
+
+**Consequences.** Measured on 8 generated cellular records: 74 066 rebuilt objects became 23 498 with
+the pick, and the records' time 45.1 s → 37.9 s with both (two runs each).
+Remembering changes no record (compared byte for byte, with and without); the pick changes every
+drawn record, with the same odds (the share of a rare setting over 384 drawn carriers: 5.2 % before,
+5.5 % after). A test that pinned what one seed happens to draw is measured again. A remembered method
+that read anything but the fields — a clock, a global, an ignored setting — would answer wrongly: the
+decorator states the contract, and each user pins it (a check run with and without memory gives the
+same records; an ignored setting replaced by one that fails on any read).
+
+**Example.**
+
+```python
+from recordstream.draws import Choice, draw_settings, remembered, remembering
+
+draw_settings(road, [Choice(field="width", values=[2, 4], weights=[1, 3])], random.Random(0))
+# picks 4 three times in four, 2 once — asking the generator about the value picked only
+
+with remembering(False):          # every question asked again: the same records, slower
+    drawn = draw_settings(road, draws, random.Random(7))
+```
+
+**What you may change.** The memory's size (`REMEMBERED`), what has a fingerprint (more value types),
+the refusal wording. What must hold: a remembered answer is the answer the method gives — the records
+are the same with and without memory; a `Choice`'s odds are each accepted value's weight share.
 
 ## 25. Discovery categories name a class's role (2026-10-02)
 
@@ -2243,3 +2289,53 @@ files.class_names    # []  — and the host answers with its source graph's list
 **What you may change.** The refusal wording; more optional slots, each with the host's answer
 named in its docs. What must hold: `outputs` stay required, and an optional slot, once wired, is
 checked exactly like an output. Usage: [graph-contract.md](graph-contract.md#a-slot-the-host-can-do-without-optional).
+
+## 28. A dataset run builds its records in workers, by index (`DatasetProcessor(workers=N)`, 2026-10-08)
+
+**Context.** A dataset run whose records are expensive to MAKE ran on one core: a signal
+generator's records (5.8 s each, drawn from `(seed, i)`) are built inside the source, before any op,
+and the two existing parallel routes — `Stream.parallel(n)` and the `Parallel` op — read the
+source in the running process and ship each finished record to a worker for the ops. Measured on 32
+generated records: one core busy of sixteen, 184.5 s. The work had to move into the workers, and
+the sink — which holds per-run state: an index counter, a sidecar, a merged descriptor — had to stay
+in one process so the files come out as a sequential run writes them.
+
+**Decision.** `DatasetProcessor` takes `workers` (default 1, today's run). Above 1 it sends each
+record's INDEX to a spawn worker, which builds `source[i]` and runs the stream's ops on it (the
+compiled steps of `linear_steps`, the same kernel as the sequential route); the source and the
+steps are pickled once into each worker by the pool's initializer. The running process yields the
+results in index order to the sink. At most `2 × workers` records are being built or waiting: the
+next index is handed out only when the oldest result has been yielded. A source without `len()` and
+`[i]`, a stream-level op (a worker cannot start workers) and a `chunk_size` are refused before the
+first record, each naming the setting that resolves it — never a silent fallback to one core.
+
+Rejected: dispatching indices from `Stream.parallel` (it would change what every existing caller
+pickles — the whole source instead of each record — and its contract); a `workers` flag on the
+`recordstream run` CLI (a run's shape lives in its config: one config, three front doors);
+parallel sinks (their per-run state would need merging).
+
+**Consequences.** Output is identical to the sequential run — measured on 390 generated files, every
+one byte for byte the same — because each record depends only on its index and the sink sees the
+same order. The cost is per worker: each imports its packages afresh (a few seconds) and holds the
+record it builds, so N is chosen by a record's peak memory (a 4.1 GB generator record: 8 workers on a
+64 GB machine, not 16). A source whose `[i]` and iteration disagree would write different records;
+the sources here agree.
+
+**Example.**
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  workers: 8
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:my_package.TrafficSource {count: 1000, seed: 7}
+  sink: !class:recordstream.storage.hdf5.HDF5Sink {path: ./runs/traffic.h5}
+```
+
+```text
+32 records: 184.5 s one at a time, 32.4 s on 8 workers, 26.4 s on 16 — identical records
+```
+
+**What you may change.** The in-flight bound (`2 × workers`), the refusal wording, more cases
+refused up front. What must hold: the sink stays in the running process and receives the records in
+index order; a worker builds a record from its index alone; `workers: 1` is the sequential route,
+untouched. Usage: [runnable.md](runnable.md#a-dataset-run-on-several-processes-datasetprocessorworkersn).
