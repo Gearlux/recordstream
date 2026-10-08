@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`remembered`, `remembering`** (`recordstream.draws`) — a generator's check decorated with `remembered` answers a
+  question it has answered before (the same settings, field for field) from memory: the same verdict, the same
+  refusal; `ignore` leaves out settings a part of the check never reads; `remembering(False)` asks every time
+  (`docs/sources.md`).
+- **`DatasetProcessor(workers=N)`** builds a run's records in N spawn processes — record `i` is `source[i]`
+  through the ops in a worker — and hands them to the sink in index order, so the files are the ones a
+  sequential run writes; at most `2 × N` records at once. Needs a source with `len()` and `[i]`; a
+  stream-level op or a `chunk_size` is refused (`docs/runnable.md`).
 - **`Grid(field, low, high, step, spacing, count, ratio)`, a draw on a grid** — every point a whole multiple of
   `step`, spread `linear` (every multiple), `log` (`count` points) or `power` (`low × ratio^n`); its numbers may be
   written with their unit (`low: 1MHz`, `high: 2.5 MSa/s`, `step: 100kHz`), read by `parse_quantity`
@@ -73,6 +81,8 @@ All notable changes to this project are documented here. The format follows
   a subgraph, when the chain is its inside). Default: none.
 
 ### Changed
+- **`Choice` asks the generator only about the value it picks**: a refused value is dropped and another picked among
+  the rest. Each accepted value keeps its weight's share of the accepted ones, but a seed now draws other records.
 - A `flow:` step name may not contain `/` (it names a node inside a subgraph, `prep/grey`):
   `flow: step name 'prep/grey' may not contain '/' …`.
 - `parse_flow` no longer changes the steps mapping it is given: a bare marker's `from:` /

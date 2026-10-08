@@ -211,6 +211,11 @@ Gotchas:
   a later default allows. A rebuilt object is checked once: its `check()` runs after its
   constructor unless its class declares `checked_on_construction = True` — only a class whose
   constructor itself runs `check()` may (`tests/test_draws.py::test_a_class_whose_constructor_checks_it_is_checked_once_for_each_value_tried`).
+  A `Choice` picks by weight and asks only about the value it picks, a refused one dropped and the pick
+  repeated: the odds stay each accepted value's weight share — never go back to checking every value first
+  (`tests/test_draws.py::TestAChoiceChecksOnlyTheValueItPicks`). `remembered` goes only on a method that reads
+  nothing but the object's fields and its arguments, and an `ignore`d setting is never read by it; records drawn
+  with and without memory are the same (`tests/test_remembered.py`). §24 amendment.
 - A source declares the entries its records carry with `produces` (§26, the source API): a class
   attribute when fixed, a property answered from the CURRENT settings when they follow them — and a
   property never loads data. `HuggingFaceSource.produces` keeps `image` / `class` whatever the
@@ -262,6 +267,11 @@ Gotchas:
   change together or not at all. §8a.
 - A runner builds the bound node with `cli.materialize_runnable()` (`flow_mode="manual"`), never a
   bare `flow()`, and a consumer's own CLI calls the same helper (`tests/test_cli_materialize.py`).
+- `DatasetProcessor(workers=N)` sends each record's INDEX to a spawn worker (`source[i]` through the
+  ops there), keeps the sink in the running process fed in index order, and holds at most `2 × N`
+  records; `workers: 1` stays the untouched sequential route. An unindexable source, a stream-level op
+  and a `chunk_size` are refused before the first record, never run on one core silently. §28.
+  (`tests/test_processing_workers.py`)
 
 ## Storage
 

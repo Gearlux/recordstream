@@ -320,9 +320,43 @@ class Road:
         self.check()
 ```
 
+A check that depends on nothing but the object's settings may also remember its answers: decorated with
+`remembered`, a check asked again about the same settings — field for field, exactly — answers from memory, with
+the same verdict or the same refusal. A record's draws ask the same question often (a third of one radio
+generator's 6 900 checks a record were repeats), and the records stay the same:
+
+```python
+from recordstream.draws import remembered
+
+@configurable
+@dataclass(kw_only=True)
+class Road:
+    checked_on_construction: ClassVar[bool] = True
+    width: Literal[2, 4] = 2
+    lanes: Optional[List[Lane]] = None
+
+    def __post_init__(self) -> None:
+        self.check()
+
+    @remembered                      # the same settings, the same answer
+    def check(self) -> None:
+        self._check_width()
+        ...
+
+    @remembered(ignore=("lanes",))   # a part that never reads the lanes: asked once for every set of lanes
+    def _check_width(self) -> None:
+        ...
+```
+
+The method must read nothing but the object's fields (and its arguments, which are part of the question), and a
+setting in `ignore` must never be read by it. A returned value is shared by every caller — return values nobody
+changes (tuples, read-only arrays). A `ValueError` or `TypeError` is remembered and raised again as a fresh copy;
+any other error is raised each time. At most `REMEMBERED` (1024) answers are kept per method and process;
+`method.forget()` clears them and `with remembering(False):` asks every time, to measure or to compare.
+
 | draw (`recordstream.draws`) | given no values | what it does |
 | --- | --- | --- |
-| `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | tests each value, picks among the accepted ones by weight |
+| `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | picks a value by weight and asks the generator about it; a refused value is dropped and another picked among the rest — each accepted value with its weight's share of the accepted ones |
 | `Uniform(field, low, high)` | the setting's own range | a number from the range, tried up to 100 times until one is accepted |
 | `Grid(field, low, high, step, spacing, count, ratio)` | the setting's own range (`step` is required) | a number on a grid, every point a whole multiple of `step`: `linear` every multiple in the range, `log` `count` points even on a log scale, `power` `low`, `low × ratio`, `low × ratio²` … — each point rounded to the step and kept in the range; tries the points in random order, up to 100 |
 | `Span(field, share)` | — | for a list of bounded integers: a run of consecutive values covering a share of those accepted one at a time |
