@@ -150,7 +150,10 @@ Gotchas:
   `flow.execute` imports `core.families` at module level, `core.stream` imports `flow` only inside
   function bodies. Private names re-exported by `core/__init__.py` stay out of `__all__`.
   Monkeypatch the module that USES a symbol, not the one defining it.
-- Parallel routes use the `spawn` context; every op must pickle.
+- Parallel routes use the `spawn` context; every op must pickle. `Stream.parallel`,
+  `FlowGraph.parallel` and the `Parallel` op read at most `window × workers` source records ahead
+  and drop each result once yielded; never collect the futures of the whole source
+  (`tests/test_parallel.py`).
 - `Tracer` (§22, `tests/test_trace.py`) is a probe around the SAME kernel: when the kernel touches
   an op in a new way, extend the probe, never special-case the tracer in the kernel. Its
   constructor stores only; snapshots are references (`copy_snapshots=True` is opt-in);

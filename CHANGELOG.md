@@ -83,6 +83,16 @@ All notable changes to this project are documented here. The format follows
 - A `Stream` holding a stream-level op (`Parallel`) opens every subgraph member before the first
   record and names it by its own index in `ops`.
 
+### Fixed
+- **`Stream.parallel(workers, window=2)` and `FlowGraph.parallel(workers, window=2)` keep at most
+  `window × workers` records in flight** and drop each once yielded. They submitted the whole source
+  first and held every result until the last: 200 records of 1 MB peaked at 204 MB in the parent (now
+  9 MB), the first record waited until the whole source was read, and stopping after 5 records waited
+  until the other 195 were processed. `window` (records per worker, at least 1) is new; widen it when a
+  few records take far longer than the rest (`README.md`). The `Parallel` op takes the same `window`;
+  its default, 2, is the limit it already had. Its `workers` and `window` accept 1 or more, so a config
+  with `workers: 0` is refused when it is loaded, naming the file and line, instead of at the first record.
+
 ## [0.1.0a2] — 2026-09-27
 
 ### Added
