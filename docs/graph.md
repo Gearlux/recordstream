@@ -199,7 +199,7 @@ graph = FlowGraph.from_yaml("graph.yaml", source=HuggingFaceSource(path="ylecun/
 for record in graph:
     ...
 
-graph.parallel(4)          # spawn workers, one future per source record
+graph.parallel(4)          # spawn workers, at most window × 4 records in flight (window=2 by default)
 len(graph); graph[3]       # map-style access (unavailable if a step op is 1→N expanding)
 ```
 

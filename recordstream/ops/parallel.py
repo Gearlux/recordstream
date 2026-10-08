@@ -2,8 +2,8 @@
 
 Place inside a :class:`~recordstream.core.stream.Stream`'s ops list to dispatch each
 upstream record through an inner sub-pipeline (``self.ops``) in a
-spawn-context worker pool. Bounded prefetch caps outstanding work so the
-executor queue can't grow unboundedly with source length.
+spawn-context worker pool. At most ``window × workers`` records are in flight
+and each is dropped once yielded, so memory stays flat however long the source.
 
 Falls back to inline sequential application when invoked as a regular
 per-record op (e.g. via :meth:`Stream.__getitem__`) so random access remains
@@ -20,13 +20,17 @@ from __future__ import annotations
 import concurrent.futures
 import multiprocessing
 from collections import deque
-from typing import Any, Iterable, Iterator, List, Optional
+from typing import Annotated, Any, Iterable, Iterator, List, Optional
 
+from annotated_types import Interval
 from confluid import configurable, flow
 from confluid.fluid import Fluid
 
 from recordstream.core import _worker_task
 from recordstream.items import Record
+
+# A count of worker processes, or of records in flight per worker: a node form offers it from 1 up.
+AtLeastOne = Annotated[int, Interval(ge=1)]
 
 
 @configurable(category="op", group="compose")
@@ -36,12 +40,15 @@ class Parallel:
     Args:
         ops: Sequential sub-pipeline applied to each record inside a worker.
         workers: Number of worker processes (spawn context). Must be >= 1.
+        window: Records in flight per worker (at most ``window × workers``); widen it for a few very slow records.
     """
 
-    def __init__(self, ops: Optional[List[Any]] = None, workers: int = 4) -> None:
-        # Partial / zero-arg: store config only; ``workers >= 1`` is validated lazily in ``stream``.
+    def __init__(self, ops: Optional[List[Any]] = None, workers: AtLeastOne = 4, window: AtLeastOne = 2) -> None:
+        # Partial / zero-arg: store config only. The range marks refuse a value below 1 when the op is built;
+        # ``stream`` checks again, for a value set on the attribute afterwards.
         self.ops = list(ops) if ops else []
         self.workers = int(workers)
+        self.window = int(window)
 
     def _materialize_ops(self) -> None:
         # Confluid post-construction paradigm leaves nested ops as Fluid
@@ -68,9 +75,13 @@ class Parallel:
         """Stream-level dispatch with bounded prefetch (in-order yield)."""
         if self.workers < 1:
             raise ValueError(f"Parallel(workers={self.workers!r}): must be >= 1")
+        if self.window < 1:
+            raise ValueError(
+                f"Parallel(window={self.window!r}): must be >= 1 — the records each worker may have in flight"
+            )
         self._materialize_ops()
         ctx = multiprocessing.get_context("spawn")
-        limit = max(2 * self.workers, self.workers + 1)
+        limit = self.window * self.workers
 
         from recordstream.core import _extra_op_families
 

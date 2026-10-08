@@ -20,6 +20,7 @@ would close the cycle.
 
 import concurrent.futures
 import multiprocessing
+from collections import deque
 from contextlib import nullcontext
 from typing import Any, Callable, Collection, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union, cast
 
@@ -220,6 +221,7 @@ class Stream:
         self.ops: List[Any] = ops or []
         self.class_names: Optional[List[str]] = class_names
         self._workers = 1
+        self._window = 2
         self._chunk_size = chunk_size or 0
         # Populated on first random access when the source is iterable-only
         # (has ``__len__`` but not ``__getitem__``).
@@ -323,9 +325,22 @@ class Stream:
                 sink.write(record)
             sink.flush()
 
-    def parallel(self, workers: int = 4) -> "Stream":
-        """Enable multiprocess execution for the pipeline."""
+    def parallel(self, workers: int = 4, window: int = 2) -> "Stream":
+        """Enable multiprocess execution for the pipeline.
+
+        Args:
+            workers: Spawn worker processes.
+            window: Records each worker may have in flight: at most ``window × workers`` source records are
+                read ahead of the consumer, so memory stays flat however long the source. Records come out in
+                source order, so a wider window keeps the workers busy past a record far slower than the rest;
+                a narrower one holds fewer records.
+        """
+        if window < 1:
+            raise ValueError(
+                f"Stream.parallel(window={window!r}): must be >= 1 — the records each worker may have in flight"
+            )
         self._workers = workers
+        self._window = window
         return self
 
     def batch(self, chunk_size: int) -> "Stream":
@@ -429,7 +444,12 @@ class Stream:
             yield from run_steps_multi(item, steps, outputs, readers)
 
     def _iter_parallel(self) -> Iterator[Record]:
-        """Multiprocess execution engine."""
+        """Multiprocess execution engine — at most ``window × workers`` records in flight, yielded in source order.
+
+        A source record is submitted only when the window has room, and each result is dropped once yielded.
+        Submitting the whole source first held every result until the last one was yielded (memory growing
+        with the source) and made a stop wait until the rest of the source was processed.
+        """
         source = self._guard_live_source()
         if source is None:
             return
@@ -441,14 +461,16 @@ class Stream:
         from recordstream.flow import _graph_worker_task
 
         steps, outputs = linear_steps(self.ops)
+        in_flight = self._window * self._workers
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
-            futures = []
+            pending: "deque[concurrent.futures.Future[List[Record]]]" = deque()
             extra_families = _extra_op_families()  # ship third-party op families to the workers
             for item in source:
-                futures.append(executor.submit(_graph_worker_task, item, steps, outputs, extra_families))
-
-            for future in futures:
-                yield from future.result()
+                pending.append(executor.submit(_graph_worker_task, item, steps, outputs, extra_families))
+                if len(pending) >= in_flight:
+                    yield from pending.popleft().result()
+            while pending:
+                yield from pending.popleft().result()
 
     def collect(self) -> List[Record]:
         """Materialize the full stream into a list."""
