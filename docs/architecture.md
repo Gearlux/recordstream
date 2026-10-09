@@ -2339,3 +2339,41 @@ runnable: !class:recordstream.processing.DatasetProcessor
 refused up front. What must hold: the sink stays in the running process and receives the records in
 index order; a worker builds a record from its index alone; `workers: 1` is the sequential route,
 untouched. Usage: [runnable.md](runnable.md#a-dataset-run-on-several-processes-datasetprocessorworkersn).
+
+## 29. A number written with its unit is a node that IS the number (`Quantity`, 2026-10-09)
+
+**Context.** A setting a person types is often a rate or a frequency, written with its unit — `250k`, `2.5 MSa/s` —
+while the class it configures takes a plain `float` (Hz). The draws already read such numbers (`parse_quantity`,
+§24), but only inside a `Grid`; a graph had no way to hand a step `2.5 MSa/s`. Reading units in every step would
+restate the rule per class; reading them in the configuration layer would make confluid a second language (the root
+ruling "a configuration utility, not a compiler").
+
+**Decision.** The reading is a NODE: `Quantity(value, kind)` is a `float` subclass whose value is
+`parse_quantity(value)`. A `!ref:` to it hands a number setting the number itself, validated like any number — no new
+spelling, no attribute reference (confluid refuses `!ref:node.output`), no change to the class that takes it. A visual
+editor shows a value node whose class IS a scalar with an output of that scalar's type, so the wire meets a number
+setting. `kind` names the KIND (`rate`, `frequency`, `time`) — never the unit the number is in, which stays in the
+value (the 2026-10-07 ruling on `Grid`): the units of a kind are one
+scale (`Hz` and `Sa/s` both 1/s), and the refusal is what a kind buys (`5 ms` typed as a rate). A builder FUNCTION
+returning the float was measured first: confluid builds it, but a visual editor's document model resolves classes only,
+so it could neither draw nor set it.
+
+**Consequences.** Every number setting of every graph can take a written unit without its class changing. The
+reading happens in `__new__` (a float's value is fixed when it is made) — a pure function of two settings, so the
+node stays cheap to build. A `Quantity` is a float everywhere a float is read; its `value` and `unit` stay readable.
+
+**Example.**
+
+```python
+import confluid
+document = confluid.load("rate:\n  _target_: Quantity\n  value: 2.5 MSa/s\n  kind: rate\n"
+                         "taker:\n  _target_: RateTaker\n  rate:\n    _ref_: rate\n")
+document["taker"].rate            # 2500000.0
+Quantity(value="5 ms", kind="rate")
+# DrawSpecError: Quantity: '5 ms' is a time — a rate is written in Hz, Sa/s, S/s or with no unit (250k, 2.5 MSa/s)
+```
+
+**What you may change.** More kinds (a level in dBm), more units `parse_quantity` reads, the refusal's words. What must
+hold: the node IS the number (no wrapper a setting would have to unwrap), one reading rule (`parse_quantity`), a
+number with no unit is taken as it is. Pins: `tests/test_quantity.py`.
+

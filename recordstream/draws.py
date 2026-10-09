@@ -517,20 +517,32 @@ _QUANTITY = re.compile(
 _ON_GRID = 1e-9
 
 
-def parse_quantity(value: Quantity) -> float:
+def parse_quantity(value: Quantity, units: Optional[Sequence[Unit]] = None) -> float:
     """A number a spec wrote, in its plain units: ``1MHz`` → 1e6, ``2 MSa/s`` → 2e6, ``100 k`` → 1e5, ``5 ms`` →
-    0.005, ``1e6`` → 1e6 (YAML reads ``1e6`` without a dot as a string). A number passes through."""
+    0.005, ``1e6`` → 1e6 (YAML reads ``1e6`` without a dot as a string). A number passes through.
+
+    ``units``, when given, are the units the reading accepts: a number written in another (``5 ms`` where only ``Hz``
+    is) is refused naming it. A number written without a unit is always accepted — it has none to refuse."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     found = _QUANTITY.match(value) if isinstance(value, str) else None
     if found is None:
-        units = ", ".join(typing.get_args(Unit))
+        spelled = ", ".join(typing.get_args(Unit))
         raise DrawSpecError(
             f"{value!r} cannot be read as a number — write it as 1e6, 1MHz, 2 MSa/s or 100 k (prefixes "
-            f"{' '.join(_PREFIXES)}; units {units})"
+            f"{' '.join(_PREFIXES)}; units {spelled})"
         )
-    number, prefix, _ = found.groups()
+    number, prefix, unit = found.groups()
+    if units is not None and unit and unit not in units:
+        raise DrawSpecError(f"{value!r} is written in {unit} — only {', '.join(units)} here")
     return float(number) * _PREFIXES.get(prefix, 1.0)
+
+
+def quantity_unit(value: Quantity) -> Optional[str]:
+    """The unit a number was written in — ``Sa/s`` for ``2.5 MSa/s``, ``s`` for ``5 ms`` — or ``None`` for a number, a
+    text with no unit, or a text that is no number (:func:`parse_quantity` says why)."""
+    found = _QUANTITY.match(value) if isinstance(value, str) else None
+    return found.group(3) if found is not None and found.group(3) else None
 
 
 def _tidy(value: float) -> float:

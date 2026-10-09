@@ -344,6 +344,30 @@ of a step, linear, log or power, written with its unit: `low: 1MHz, high: 2.5MHz
 and `Repeat`. Full guide: [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#drawing-a-generators-settings-drawsource);
 why the generator judges: [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md).
 
+### A number written with its unit, as a node (`Quantity`)
+
+A setting a person types is often a rate, a frequency or a time, and a person writes it with its unit. `Quantity` reads
+it — `parse_quantity`'s rule, the one a `Grid`'s numbers follow — and IS the number (a `float`), so a graph wires it
+into any number setting and a settings form shows its `value` where the setting was:
+
+```yaml
+rate:
+  _target_: Quantity
+  value: 2.5 MSa/s          # 250k, 1 MHz, 250 kHz, 1e6, 250000 …
+  kind: rate                # rate (Hz, Sa/s, S/s) · frequency (Hz) · time (s) · any — never the unit
+resampler:
+  _target_: MyResampler     # takes `samplerate: float`
+  samplerate:
+    _ref_: rate             # → 2500000.0
+```
+
+A number written in a unit of another kind is refused, naming what the kind takes:
+
+    Quantity: '5 ms' is a time — a rate is written in Hz, Sa/s, S/s or with no unit (250k, 2.5 MSa/s)
+
+A number with no unit is taken as it is. `parse_quantity(value, units=("Hz",))` refuses any other unit on its own,
+and `quantity_unit(value)` says which unit a number was written in (`'Sa/s'` for `2.5 MSa/s`, `None` for `250000`).
+
 ### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
 
 `RecordContract` states what each RECORD carries. A classification pipeline usually has

@@ -149,6 +149,9 @@ recordstream-storage-directory = "recordstream.storage.directory"
 # compose op) live in recordstream.transform. Entry-point changes need an editable reinstall
 # before StreamStudio/navigaitor discovery sees the module (`aisland setup`, never --reinstall).
 recordstream-transform = "recordstream.transform"
+# Quantity — a number written with its unit (`2.5 MSa/s`), a value node a graph wires into a number setting. Its own
+# entry point: scan_module does not recurse submodules (entry-point changes need an editable reinstall).
+recordstream-quantity = "recordstream.quantity"
 # Structure ops (RenameField/DropField/CopyField/SelectFields) — reshape a record's entries.
 recordstream-ops-structure = "recordstream.ops.structure"
 # The runnable orchestration layer: DatasetProcessor (generic source→sink runner) and the

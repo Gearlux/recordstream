@@ -200,6 +200,11 @@ Gotchas:
 - Identity (§13, `tests/test_dataset_uri.py`): `dataset_uri` is the canonical handle,
   `dataset_url` a link for a person or `None`. Both read stored config only. The free functions
   follow `.source`; a wrapper never decorates the URI; `ConcatSource` answers `None`.
+- A number a graph's setting takes WITH its unit is a `Quantity` node wired into it (`recordstream.quantity`, user
+  request 2026-10-09): a `float` subclass reading `parse_quantity`, `kind` (`rate`/`frequency`/`time`/`any`) refusing
+  another kind's unit — the unit itself stays in the value (the `Grid` ruling below); never a unit reading inside a step, never a confluid spelling for it, never a builder
+  function (a visual editor's model resolves classes only). Own entry point `recordstream-quantity`. §29.
+  (`tests/test_quantity.py`)
 - A `Grid`'s numbers carry their unit IN the value (`low: 1MHz`, `high: 2 MSa/s`), read by `parse_quantity`;
   never a separate `unit` knob (user correction 2026-10-07). The units are a closed `Unit` Literal; prefixes only
   convert (`tests/test_draws.py::test_a_number_is_read_with_its_unit`).
