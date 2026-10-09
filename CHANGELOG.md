@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`Quantity(value, kind)`** (`recordstream.quantity`) — a number written with its unit (`2.5 MSa/s`, `250k`,
+  `1 MHz`, `5 ms`) as a value node that IS the number: a graph wires it into a number setting by `!ref:`, and a
+  settings form shows its `value`. `kind` (`rate`, `frequency`, `time`, `any`) refuses a number written in another
+  kind's unit, naming what it takes. `parse_quantity` gains `units=` (refuse any other unit) and `quantity_unit` says
+  which unit a number was written in.
 - **`remembered`, `remembering`** (`recordstream.draws`) — a generator's check decorated with `remembered` answers a
   question it has answered before (the same settings, field for field) from memory: the same verdict, the same
   refusal; `ignore` leaves out settings a part of the check never reads; `remembering(False)` asks every time
