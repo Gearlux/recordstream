@@ -196,7 +196,9 @@ Gotchas:
   scope control, so add no `<group>_filter` knob. Directories and dotfiles are never listed; an
   empty match raises; listing is lazy (`tests/test_files_source_root.py`). The served listing is
   memoised on the listing it filtered plus exclude and formats, never on a flag or on `files` alone
-  (`tests/test_files_source_formats.py::TestTheServedListingIsResolvedOncePerFileList`).
+  (`tests/test_files_source_formats.py::TestTheServedListingIsResolvedOncePerFileList`). `source[i]` re-lists a
+  `root` folder per access (a new file appears at once); `paths()` is the one-listing answer for every record's file —
+  never cache the folder listing to make the index fast (`tests/test_files_source_root.py::TestEveryPathAtOnce`).
 - Identity (§13, `tests/test_dataset_uri.py`): `dataset_uri` is the canonical handle,
   `dataset_url` a link for a person or `None`. Both read stored config only. The free functions
   follow `.source`; a wrapper never decorates the URI; `ConcatSource` answers `None`.
