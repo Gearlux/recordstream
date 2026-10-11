@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`FilesSource.paths()`** — every file the source serves, in record order, from one listing (`source[i]` lists a
+  `root` folder again on every access).
 - **`remembered`, `remembering`** (`recordstream.draws`) — a generator's check decorated with `remembered` answers a
   question it has answered before (the same settings, field for field) from memory: the same verdict, the same
   refusal; `ignore` leaves out settings a part of the check never reads; `remembering(False)` asks every time

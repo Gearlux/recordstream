@@ -139,3 +139,36 @@ class TestAFileListAssignedAfterConstruction:
         source.files = [str(tree / "a" / "one.dat")]
         source.root = ""
         assert _names(source) == ["one.dat"]
+
+
+class TestEveryPathAtOnce:
+    """``paths()`` — the files the source serves, from ONE listing; ``source[i]`` scans a root folder per access."""
+
+    def test_it_is_what_the_records_name_in_their_order(self, tree: Path) -> None:
+        source = FilesSource(root=str(tree), pattern="**/*")
+        assert source.paths() == [record["file"] for record in source]
+
+    def test_a_file_list_answers_its_own_files(self, tmp_path: Path) -> None:
+        a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+        a.write_text("a")
+        b.write_text("b")
+        assert FilesSource(files=[str(b), str(a)]).paths() == [str(b), str(a)]
+
+    def test_a_root_folder_is_scanned_once_for_all_of_them(self, tree: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        source = FilesSource(root=str(tree), pattern="**/*")
+        scans: List[str] = []
+        listed = FilesSource._listed
+
+        def counted(self: FilesSource) -> List[str]:
+            scans.append(self.root)
+            found: List[str] = listed.fget(self)  # type: ignore[attr-defined]
+            return found
+
+        monkeypatch.setattr(FilesSource, "_listed", property(counted))
+        assert len(source.paths()) == len(source) and scans == [str(tree), str(tree)], "one scan each"
+
+    def test_a_file_added_to_the_folder_is_in_the_next_answer(self, tree: Path) -> None:
+        source = FilesSource(root=str(tree), pattern="*")
+        before = source.paths()
+        (tree / "late.txt").write_text("x")
+        assert source.paths() == sorted(before + [str(tree / "late.txt")])
