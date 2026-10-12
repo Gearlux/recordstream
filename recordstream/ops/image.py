@@ -1057,8 +1057,17 @@ class ConvertToImage(Transform):
     colormapped, a 3-D array treated as an image, a boolean mask becomes 0/255, floats are
     min-max normalized. Sizing matches the legacy op:
 
-    * ``width`` and ``height`` both > 0 → resize to exactly that raster;
-    * otherwise → bound the longest side by ``max_size``, preserving aspect.
+    Each of ``width`` / ``height`` is ``None`` (keep the source's size on that axis), ``0`` (follow the
+    other axis, keeping the aspect ratio) or a size in pixels:
+
+    * both > 0 → resize to exactly that raster;
+    * one > 0 and the other ``None`` → that axis set, the other kept (a 512 × 3000 raster with ``width=1024``
+      is 1024 × 3000);
+    * one > 0 and the other ``0`` → that axis set, the other follows it (512 × 3000 with ``width=1024`` is
+      1024 × 6000);
+    * both ``0`` (the default) → bound the longest side by ``max_size``, preserving aspect;
+    * both ``None`` → no resize at all, the rendered pixels as they are (``max_size`` is not read);
+    * ``None`` with ``0`` is refused: one axis kept and the other asked to follow it has nothing to follow.
 
     Unlike the legacy op it does NOT publish ``image_width_px`` / ``image_height_px`` — the
     ``Image`` item's array SHAPE carries the pixel dimensions, so a downstream consumer
@@ -1067,9 +1076,9 @@ class ConvertToImage(Transform):
 
     Args:
         colormap: Colormap applied to 2-D maps — a supported ``Colormap`` name (``"gray"`` = greyscale).
-        width: Exact output width in pixels; resize to ``(width, height)`` when both width and height are > 0.
-        height: Exact output height in pixels; resize to ``(width, height)`` when both width and height are > 0.
-        max_size: When ``width``/``height`` aren't both set, bound the longest side to this many pixels (aspect kept).
+        width: Output width in pixels; ``None`` keeps the source's width, ``0`` follows ``height`` (aspect kept).
+        height: Output height in pixels; ``None`` keeps the source's height, ``0`` follows ``width`` (aspect kept).
+        max_size: When ``width`` and ``height`` are both ``0``, bound the longest side to this many pixels.
         flip_vertical: Mirror the image top-to-bottom (e.g. spectrogram row 0 = f_min → display f_max at the top).
         field: Name of the source field to render; blank (default) picks the first array-bearing item in the record.
         output: Name of the key the ``Image`` item is written to (added if new).
@@ -1086,8 +1095,8 @@ class ConvertToImage(Transform):
     def __init__(
         self,
         colormap: Colormap = "gray",
-        width: int = 0,
-        height: int = 0,
+        width: Optional[int] = 0,
+        height: Optional[int] = 0,
         max_size: int = 512,
         flip_vertical: bool = False,
         field: str = "",
@@ -1096,13 +1105,18 @@ class ConvertToImage(Transform):
         vmax: Optional[float] = None,
     ) -> None:
         super().__init__()
+        if (width is None) != (height is None) and (width == 0 or height == 0):
+            raise ValueError(
+                f"ConvertToImage: width={width!r}, height={height!r} — one side is kept (None) and the other asked "
+                f"to follow it (0), which has nothing to follow; give the 0 side a size or set it to None too."
+            )
         if vmin is not None and vmax is not None and float(vmax) <= float(vmin):
             raise ValueError(f"ConvertToImage: vmax must be above vmin; got vmin={vmin!r}, vmax={vmax!r}")
         self.colormap: Colormap = colormap
         self.vmin = None if vmin is None else float(vmin)
         self.vmax = None if vmax is None else float(vmax)
-        self.width = int(width)
-        self.height = int(height)
+        self.width = None if width is None else int(width)
+        self.height = None if height is None else int(height)
         self.max_size = int(max_size)
         self.flip_vertical = bool(flip_vertical)
         self.field = field
@@ -1150,16 +1164,32 @@ class ConvertToImage(Transform):
             f"moves the image and its boxes in one coupled step. (Warned once per op.)"
         )
 
+    def _sized(self, rgb: np.ndarray) -> np.ndarray:
+        """``rgb`` at the size ``width`` / ``height`` ask for (see the class docstring for the table)."""
+        height_px, width_px = rgb.shape[:2]
+        width, height = self.width, self.height
+        if width is None and height is None:
+            return rgb
+        if not ((width or 0) > 0 or (height or 0) > 0):
+            return _bound_longest_side(rgb, self.max_size)
+        if width is not None and width > 0 and height is None:
+            target = (width, height_px)
+        elif height is not None and height > 0 and width is None:
+            target = (width_px, height)
+        elif width is not None and width > 0 and height is not None and height > 0:
+            target = (width, height)
+        elif width is not None and width > 0:  # height 0: follows the width
+            target = (width, max(1, int(round(height_px * width / width_px))))
+        else:  # width 0: follows the height
+            assert height is not None
+            target = (max(1, int(round(width_px * height / height_px))), height)
+        return np.array(Image.fromarray(rgb).resize(target, resample=Image.Resampling.BILINEAR))
+
     def __call__(self, record: Record) -> Record:
         rgb = _render_rgb(self._find_source(record), self.colormap, self.vmin, self.vmax)
         if self.flip_vertical:
             rgb = rgb[::-1, :, :]
-        if self.width > 0 and self.height > 0:
-            out_arr = np.array(
-                Image.fromarray(rgb).resize((self.width, self.height), resample=Image.Resampling.BILINEAR)
-            )
-        else:
-            out_arr = _bound_longest_side(rgb, self.max_size)
+        out_arr = self._sized(rgb)
         self._warn_if_it_desyncs_boxes(record, rgb.shape[:2], out_arr.shape[:2])
         return {**record, self.output: ImageItem(out_arr, layout="HWC")}
 

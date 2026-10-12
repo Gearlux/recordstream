@@ -8,7 +8,8 @@ from recordstream.ops.image import ConvertToImage, value_to_image
 # Op: an array-bearing record value (2-D map / CHW tensor / PIL / bool mask) -> an Image item.
 op = ConvertToImage(
     colormap="viridis",   # closed `Colormap` Literal -> enumerable in GUIs / schemas
-    width=1024, height=512,  # exact resize when both > 0; else bound longest side by max_size
+    width=1024, height=512,  # exact resize when both > 0; None keeps that side as it is; 0 follows the other side
+                             # (aspect kept); 0 and 0 (the default) bound the longest side by max_size
     flip_vertical=True,      # e.g. a spectrogram stores row 0 = f_min but display wants f_max on top
     field="spec",            # source key; blank picks the first array-bearing value
     output="image",          # key the HWC-uint8 Image item is written to

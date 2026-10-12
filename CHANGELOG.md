@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
+  has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
+  default, still bound the longest side by `max_size`. A `None` beside a `0` is refused (`docs/image.md`).
 - **`FilesSource.paths()`** — every file the source serves, in record order, from one listing (`source[i]` lists a
   `root` folder again on every access).
 - **`remembered`, `remembering`** (`recordstream.draws`) — a generator's check decorated with `remembered` answers a
