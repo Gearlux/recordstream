@@ -511,9 +511,12 @@ runnable: !class:recordstream.processing.DatasetProcessor
 ```
 
 **Every record carries its settings file.** Beside the generator's outputs the record holds
-`settings`: `confluid.dump` of the drawn generator, so `confluid.load(record["settings"])` rebuilds
-that one example. Record `i` depends only on `seed`, `i` and the draws, so any slice, worker split or
-machine produces the same records.
+`settings`: `confluid.dump(..., qualified=True)` of the drawn generator, so `confluid.load(record["settings"])`
+rebuilds that one example. Every class is named by its importable path (`traffic.Road`), not by its registry name:
+a bare name is unambiguous only among the classes registered when the record was written, so a reader with one
+more package installed — a second class called `Road` — could not load it back. A class defined in the running
+script itself (`__main__`, as `Traffic` and `Road` are here) keeps its registry name. Record `i` depends only on
+`seed`, `i` and the draws, so any slice, worker split or machine produces the same records.
 
 ```yaml
 _target_: Traffic

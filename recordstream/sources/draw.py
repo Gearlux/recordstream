@@ -84,7 +84,9 @@ class DrawSource:
                 f"DrawSource: {type(drawn.settings).__name__} writes an entry named {SETTINGS_ENTRY!r}, where the "
                 "source puts the settings file — rename that output with the generator's keys"
             )
-        record[SETTINGS_ENTRY] = confluid.dump(drawn.settings)
+        # ``qualified``: every class by its importable path — a bare registry name is unambiguous only among the
+        # classes registered NOW, and a reader with one more package installed could not load it back
+        record[SETTINGS_ENTRY] = confluid.dump(drawn.settings, qualified=True)
         return record
 
     def __iter__(self) -> Iterator[Record]:
