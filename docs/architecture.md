@@ -2124,6 +2124,34 @@ with remembering(False):          # every question asked again: the same records
 the refusal wording. What must hold: a remembered answer is the answer the method gives — the records
 are the same with and without memory; a `Choice`'s odds are each accepted value's weight share.
 
+### Amendment: the settings file names its classes by path (2026-10-12)
+
+**Context.** The settings file was `confluid.dump(settings)`, which names a registered class by its registry key:
+the bare name while no other class has it. That is a statement about the process that WROTE the file. A
+generator's settings written with one package installed stopped loading once a second package with a class of the
+same name was (`'Road' is registered by 2 classes, so a bare lookup cannot choose between them`), and a file read in
+a fresh process failed on the first class nothing had imported yet.
+
+**Decision.** `DrawSource` writes `confluid.dump(settings, qualified=True)`: every class by its importable dotted
+path, which resolves whatever else is registered and imports its own module. confluid keeps the registry key where
+the path imports nothing (a class of the running script, `__main__`; a class built inside a function).
+
+**Consequences.** A settings file reloads in any process that has the packages installed. It is longer (a module
+path per class) and no longer equals `confluid.dump(settings)`; it equals the qualified dump. Files written before
+keep their bare names and load only where those names are still unique.
+
+**Example.**
+
+```python
+record = source[0]
+record["settings"].splitlines()[0]          # '_target_: traffic.Traffic' (the class in module traffic)
+confluid.load(record["settings"])           # the same generator, whatever else is registered
+```
+
+**What you may change.** Nothing about the spelling without a reload test beside a namesake
+(`tests/test_draw_source.py::test_the_settings_file_reloads_beside_another_class_of_the_same_name`): a shorter name
+that holds only in the writing process brings the defect back.
+
 ## 25. Discovery categories name a class's role (2026-10-02)
 
 **Context.** Every `@configurable` class lands in the confluid registry, and a front end that

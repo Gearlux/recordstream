@@ -99,6 +99,10 @@ All notable changes to this project are documented here. The format follows
   record and names it by its own index in `ops`.
 
 ### Fixed
+- **`DrawSource`'s settings file names every class by its importable path** (`confluid.dump(..., qualified=True)`):
+  a bare registry name is unambiguous only among the classes registered when the record was written, so once a
+  second package with a class of the same name was installed the file no longer loaded (`'Road' is registered
+  by 2 classes, so a bare lookup cannot choose between them`).
 - **`Stream.parallel(workers, window=2)` and `FlowGraph.parallel(workers, window=2)` keep at most
   `window × workers` records in flight** and drop each once yielded. They submitted the whole source
   first and held every result until the last: 200 records of 1 MB peaked at 204 MB in the parent (now

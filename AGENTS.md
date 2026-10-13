@@ -218,6 +218,9 @@ Gotchas:
   (`tests/test_draws.py::TestAChoiceChecksOnlyTheValueItPicks`). `remembered` goes only on a method that reads
   nothing but the object's fields and its arguments, and an `ignore`d setting is never read by it; records drawn
   with and without memory are the same (`tests/test_remembered.py`). §24 amendment.
+- `DrawSource`'s settings file is `confluid.dump(settings, qualified=True)`: every class by its importable path, never
+  the bare registry name, which holds only among the classes registered when the file was written (§24 amendment
+  2026-10-12; `tests/test_draw_source.py::test_the_settings_file_reloads_beside_another_class_of_the_same_name`).
 - A source declares the entries its records carry with `produces` (§26, the source API): a class
   attribute when fixed, a property answered from the CURRENT settings when they follow them — and a
   property never loads data. `HuggingFaceSource.produces` keeps `image` / `class` whatever the

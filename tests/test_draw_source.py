@@ -1,5 +1,10 @@
 """``DrawSource`` — one record per draw: the drawn generator's outputs and its settings file."""
 
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from typing import List
 
 import confluid
@@ -29,13 +34,13 @@ def test_a_record_holds_the_generators_outputs_and_its_settings_file() -> None:
     rebuilt = confluid.load(record[SETTINGS_ENTRY])
     assert isinstance(rebuilt, ToyGenerator)
     assert rebuilt.run()["total"] == record["total"]
-    assert confluid.dump(rebuilt) == record[SETTINGS_ENTRY]
+    assert confluid.dump(rebuilt, qualified=True) == record[SETTINGS_ENTRY]
 
 
 def test_the_settings_file_is_the_drawn_generator() -> None:
     source = _source()
     drawn = source.draw(2).settings
-    assert source[2][SETTINGS_ENTRY] == confluid.dump(drawn)
+    assert source[2][SETTINGS_ENTRY] == confluid.dump(drawn, qualified=True)
 
 
 def test_it_has_count_records_and_iterates_them_in_order() -> None:
@@ -99,3 +104,49 @@ def test_it_is_a_source_node() -> None:
 def test_a_generator_writing_its_own_settings_entry_is_refused() -> None:
     with pytest.raises(ValueError, match=r"DrawSource: ToyWritesSettings writes an entry named 'settings'"):
         DrawSource(generator=ToyWritesSettings())[0]
+
+
+def test_the_settings_file_names_every_class_by_its_importable_path() -> None:
+    """Never a bare registry name, which is unambiguous only among the classes registered when the record was written
+    (``confluid.dump(..., qualified=True)``)."""
+    settings = _source()[0][SETTINGS_ENTRY]
+    targets = {line.split(":", 1)[1].strip() for line in settings.splitlines() if line.strip().startswith("_target_:")}
+    assert "tests._draw_toys.ToyGenerator" in targets
+    assert all("." in target for target in targets), targets
+
+
+def test_the_settings_file_reloads_beside_another_class_of_the_same_name() -> None:
+    """A class registered later under the same name — another package installed after the record was written — makes
+    the bare name ambiguous; the settings still reload. In a child process, so the namesake never stays registered.
+    Measured 2026-10-12: a generator's settings written with one package loaded failed once a second package with a
+    class of the same name was (``'Pdsch' is registered by 2 classes, so a bare lookup cannot choose between them``)."""
+    settings = _source()[0][SETTINGS_ENTRY]
+    child = textwrap.dedent(
+        """
+        import sys
+
+        import confluid
+        import tests._draw_toys  # noqa: F401 - the record's own classes, all registered
+        from confluid import configurable
+
+
+        @configurable(group="namesake")
+        class ToyGenerator:
+            pass
+
+
+        @configurable(group="namesake")
+        class ToyPlan:
+            pass
+
+
+        print(type(confluid.load(sys.stdin.read())).__name__)
+        """
+    )
+    root = str(Path(__file__).resolve().parents[1])
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([root, os.environ.get("PYTHONPATH", "")])}
+    done = subprocess.run(
+        [sys.executable, "-c", child], input=settings, capture_output=True, text=True, env=env, timeout=120
+    )
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert done.stdout.strip().splitlines()[-1] == "ToyGenerator"
