@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a3] — 2026-10-14
+
 ### Added
 - **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
   has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
