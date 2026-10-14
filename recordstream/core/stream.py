@@ -20,6 +20,7 @@ would close the cycle.
 
 import concurrent.futures
 import multiprocessing
+from collections import deque
 from contextlib import nullcontext
 from typing import Any, Callable, Collection, Iterable, Iterator, List, Optional, Sequence, Set, Tuple, Union, cast
 
@@ -99,7 +100,7 @@ def _check_ops_materialized(ops: List[Any]) -> None:
                 raise TypeError(_fluid_op_guidance(op, i)) from exc
 
 
-def linear_steps(ops: Sequence[Any]) -> Tuple[List[Any], str]:
+def linear_steps(ops: Sequence[Any], *, offset: int = 0) -> Tuple[List[Any], str]:
     """Compile a flat op list into the linear step graph the engine executes.
 
     A sequence IS a graph — every step reads the previous one — so an ``ops:`` list needs no
@@ -108,10 +109,19 @@ def linear_steps(ops: Sequence[Any]) -> Tuple[List[Any], str]:
     only to key the step environment. Positional (not op-class) naming is deliberate — the
     same op twice in a row is two distinct steps, which a name-keyed mapping would collapse.
 
+    A ``Subgraph`` member is opened here (its inside parsed), so a mistake inside it is refused
+    when the stream compiles — before the first record — as ``Stream.ops[i] (a subgraph): …``.
+    ``offset`` is the index of ``ops[0]`` in the Stream's own list, for a caller compiling a slice of
+    it (the streamed route compiles one member at a time), so ``i`` is always the member's real index.
+
     Returns ``(steps, output_step)``; an empty list yields ``([], "")``, the identity graph.
     """
     from recordstream.flow import FlowStep
+    from recordstream.flow.steps import _is_subgraph, _open_subgraph
 
+    for i, op in enumerate(ops):
+        if _is_subgraph(op):
+            _open_subgraph(op, f"Stream.ops[{offset + i}]")
     steps = [FlowStep(name=f"s{i}", op=op, from_=None, bind={}, merge_from=()) for i, op in enumerate(ops)]
     return cast(List[Any], steps), (steps[-1].name if steps else "")
 
@@ -211,6 +221,7 @@ class Stream:
         self.ops: List[Any] = ops or []
         self.class_names: Optional[List[str]] = class_names
         self._workers = 1
+        self._window = 2
         self._chunk_size = chunk_size or 0
         # Populated on first random access when the source is iterable-only
         # (has ``__len__`` but not ``__getitem__``).
@@ -314,9 +325,22 @@ class Stream:
                 sink.write(record)
             sink.flush()
 
-    def parallel(self, workers: int = 4) -> "Stream":
-        """Enable multiprocess execution for the pipeline."""
+    def parallel(self, workers: int = 4, window: int = 2) -> "Stream":
+        """Enable multiprocess execution for the pipeline.
+
+        Args:
+            workers: Spawn worker processes.
+            window: Records each worker may have in flight: at most ``window × workers`` source records are
+                read ahead of the consumer, so memory stays flat however long the source. Records come out in
+                source order, so a wider window keeps the workers busy past a record far slower than the rest;
+                a narrower one holds fewer records.
+        """
+        if window < 1:
+            raise ValueError(
+                f"Stream.parallel(window={window!r}): must be >= 1 — the records each worker may have in flight"
+            )
         self._workers = workers
+        self._window = window
         return self
 
     def batch(self, chunk_size: int) -> "Stream":
@@ -378,20 +402,28 @@ class Stream:
         if source is None:
             return
         _check_ops_materialized(self.ops)
+        # Compile every per-record member NOW, each under its own index in `ops` — a subgraph member is
+        # opened here, so a mistake in it is refused before the first record and names the right member.
+        compiled = {
+            i: linear_steps([op], offset=i)
+            for i, op in enumerate(self.ops)
+            if not (hasattr(op, "stream") and callable(op.stream))
+        }
 
-        def per_record(stream: Iterator[Optional[Record]], op: Any) -> Iterator[Optional[Record]]:
-            steps, outputs = linear_steps([op])
+        def per_record(
+            stream: Iterator[Optional[Record]], steps: List[Any], outputs: str
+        ) -> Iterator[Optional[Record]]:
             for record in stream:
                 if record is None:
                     continue
                 yield from run_steps_multi(record, steps, outputs)
 
         carried: Iterator[Optional[Record]] = iter(source)
-        for op in self.ops:
-            if hasattr(op, "stream") and callable(op.stream):
-                carried = op.stream(carried)
+        for i, op in enumerate(self.ops):
+            if i in compiled:
+                carried = per_record(carried, *compiled[i])
             else:
-                carried = per_record(carried, op)
+                carried = op.stream(carried)
 
         for record in carried:
             if record is not None:
@@ -412,7 +444,12 @@ class Stream:
             yield from run_steps_multi(item, steps, outputs, readers)
 
     def _iter_parallel(self) -> Iterator[Record]:
-        """Multiprocess execution engine."""
+        """Multiprocess execution engine — at most ``window × workers`` records in flight, yielded in source order.
+
+        A source record is submitted only when the window has room, and each result is dropped once yielded.
+        Submitting the whole source first held every result until the last one was yielded (memory growing
+        with the source) and made a stop wait until the rest of the source was processed.
+        """
         source = self._guard_live_source()
         if source is None:
             return
@@ -424,14 +461,16 @@ class Stream:
         from recordstream.flow import _graph_worker_task
 
         steps, outputs = linear_steps(self.ops)
+        in_flight = self._window * self._workers
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
-            futures = []
+            pending: "deque[concurrent.futures.Future[List[Record]]]" = deque()
             extra_families = _extra_op_families()  # ship third-party op families to the workers
             for item in source:
-                futures.append(executor.submit(_graph_worker_task, item, steps, outputs, extra_families))
-
-            for future in futures:
-                yield from future.result()
+                pending.append(executor.submit(_graph_worker_task, item, steps, outputs, extra_families))
+                if len(pending) >= in_flight:
+                    yield from pending.popleft().result()
+            while pending:
+                yield from pending.popleft().result()
 
     def collect(self) -> List[Record]:
         """Materialize the full stream into a list."""

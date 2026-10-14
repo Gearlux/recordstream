@@ -11,6 +11,7 @@ from confluid.registry import get_registry
 
 from recordstream import Pipeline
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
+from recordstream.flow import Subgraph
 from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.contract import RecordContract
 from recordstream.ops.debug import PrintRecordOp
@@ -24,7 +25,7 @@ from recordstream.ops.sink import RecordSinkOp
 from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
 from recordstream.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
 from recordstream.ops.torch import ToTensor
-from recordstream.sources import ConcatSource, DatasetSplit, HuggingFaceSource, RangeSource
+from recordstream.sources import ConcatSource, DatasetSplit, DrawSource, HuggingFaceSource, RangeSource
 from recordstream.storage.directory import DirectorySink
 from recordstream.storage.hdf5 import HDF5Sink, HDF5Source
 from recordstream.storage.zarr import ZarrBatchSink, ZarrGroupSink
@@ -47,6 +48,7 @@ def test_source_classes_tagged() -> None:
     assert DatasetSplit.__confluid_category__ == "source"
     assert RangeSource.__confluid_category__ == "source"
     assert ConcatSource.__confluid_category__ == "source"
+    assert DrawSource.__confluid_category__ == "source"
 
 
 def test_op_classes_tagged() -> None:
@@ -76,6 +78,7 @@ def test_op_classes_tagged() -> None:
         SelectFields,
         PrintRecordOp,
         RecordContract,
+        Subgraph,
     ):
         assert cls.__confluid_category__ == "op", cls.__name__
 
@@ -111,6 +114,7 @@ def test_op_group_tags() -> None:
     assert Parallel.__confluid_group__ == "compose"
     assert Enable.__confluid_group__ == "compose"
     assert Pipeline.__confluid_group__ == "compose"
+    assert Subgraph.__confluid_group__ == "compose"
     assert RandomApply.__confluid_group__ == "compose"
     assert ConfigureOp.__confluid_group__ == "compose"
     assert FormulaOp.__confluid_group__ == "compose"
@@ -122,7 +126,7 @@ def test_categories_enumerable_via_registry() -> None:
     assert {"Stream", "JointStream"} <= registry.list_classes(category="engine")
     assert "DatasetSplit" not in registry.list_classes(category="engine")
     assert not ({"FilterOp", "WrappedOp"} & registry.list_classes(category="engine"))
-    assert {"HuggingFaceSource", "DatasetSplit", "RangeSource", "ConcatSource"} <= registry.list_classes(
+    assert {"HuggingFaceSource", "DatasetSplit", "RangeSource", "ConcatSource", "DrawSource"} <= registry.list_classes(
         category="source"
     )
     assert {
@@ -160,3 +164,4 @@ def test_groups_enumerable_via_registry() -> None:
         "SelectFields",
     } <= registry.list_classes(group="structure")
     assert "Pipeline" in registry.list_classes(category="op", group="compose")
+    assert "Subgraph" in registry.list_classes(category="op", group="compose")

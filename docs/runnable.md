@@ -152,3 +152,49 @@ Orthogonal to entry points, a runnable may inherit two stateless mixins:
   (a plain CLI run) every call is a silent no-op.
 
 Pins: `tests/test_runnable.py` / `tests/test_entrypoint.py`.
+
+## A dataset run on several processes: `DatasetProcessor(workers=N)`
+
+`DatasetProcessor` — the source → ops → sink runnable — builds its records one at a time, in the
+running process. With `workers: N` it builds them in N spawn worker processes: record `i` is
+`source[i]` run through the stream's ops in one of them, and the sink, which stays in the running
+process, receives the records in index order. So the sink writes the files a sequential run
+writes, name for name and byte for byte.
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  workers: 8
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:my_package.TrafficSource {count: 1000, seed: 7}   # record i drawn from (seed, i)
+    ops:
+      - !class:my_package.Render {}
+  sink: !class:recordstream.storage.hdf5.HDF5Sink {path: ./runs/traffic.h5}
+```
+
+Measured with a signal generator whose record `i` is drawn from `(seed, i)` (32 records of about
+5.8 s each, a 16-core machine): 184.5 s one at a time, 32.4 s on 8 workers, 26.4 s on 16 —
+every record the same, byte for byte.
+
+What a run with workers needs, and what it refuses before the first record:
+
+- **A source that can be indexed** — `len()` and `[i]`, with `source[i]` the record iteration
+  gives at position `i`. An iterable-only source is refused:
+  `DatasetProcessor: workers=3 builds each record in a worker from its index, and the source
+  (OnlyIterable) cannot be indexed — give it len() and [i], or set workers: 1`.
+- **Ops that pickle**, as every spawn route asks; the source is pickled once into each worker.
+- **No stream-level op**: a `Parallel` in the list starts workers of its own, and a worker cannot
+  start workers — refused, naming the op's position.
+- **No `chunk_size`** on the stream (a stream that hands out lists of records) — refused.
+
+Choose N by a record's peak memory, not only by the core count: every worker holds the record it
+builds, and at most `2 × N` records are being built or waiting for the sink at once (the next
+index is handed out only when the oldest record has gone to the sink). Each worker imports the
+packages afresh when it starts — a few seconds — so a run of a handful of records gains nothing.
+A record that fails stops the run with its own error; the indices not started are cancelled.
+
+`Stream.parallel(n)` and the `Parallel` op differ: they read the source in the running process and
+send each record to a worker for the ops — right when the ops are the work. `workers` sends the
+INDEX, so a source whose records are the expensive part (a generator, a decoder) runs in the
+workers too. Rationale: `docs/architecture.md` §28.
+
+Pins: `tests/test_processing_workers.py`.

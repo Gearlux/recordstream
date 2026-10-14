@@ -399,9 +399,8 @@ AS-IS drop-in.
 
 Every carrier is a plain dict, and every route applies ops through `_apply_op` — sequential,
 spawn-parallel, streamed, and random-access (`__getitem__`) alike, in `Stream` and in `FlowGraph`.
-Composing ops (`Pipeline`, `RandomApply`, `Enable`, `Parallel`, `ConfigureOp`, the context ops
-`Apply`/`Capture`) route their inner ops through the same chokepoint, so a bare library transform
-nests anywhere a native op does.
+Composing ops (`Pipeline`, `RandomApply`, `Enable`, `Parallel`, `ConfigureOp`) route their inner
+ops through the same chokepoint, so a bare library transform nests anywhere a native op does.
 
 ```python
 Stream(source=my_source, ops=[A.GaussNoise(p=1.0), Brighten()]).to_sink(HDF5Sink(path="out.h5"))
@@ -533,18 +532,17 @@ yielding int32 label tensors is legal, and `CrossEntropyLoss` refuses it with *"
 type Long but found Int"*, so a classifier passes `dtype=torch.int64` and a segmenter does the
 same for its pixel-class mask. What stays task-side is only *which* call to make.
 
-### When the generic rules cannot work: register a task collate
+### When the generic rules cannot work: write a task collate
 
 Stacking is task-shaped, and detection is the canonical failure: each record carries a DIFFERENT
 number of boxes, and rule 2 can only give you `Boxes(boxes=[<1 box>, <3 boxes>])` — per-record
 lists no detection model accepts. A detection model family has its own batch contract (stacked
-images + RAGGED per-record target dicts), so the task package registers a collate that produces
-exactly that:
+images + RAGGED per-record target dicts), so the task package ships a collate function that
+produces exactly that:
 
 ```python
-from recordstream import Image, Boxes, collate, register_collate
+from recordstream import Image, Boxes
 
-@register_collate("detection")
 def detection_collate(items):
     """The torchvision detection contract: stacked images + ragged per-record targets."""
     images = torch.stack([torch.as_tensor(np.asarray(r["image"])).permute(2, 0, 1) for r in items])
@@ -556,17 +554,20 @@ def detection_collate(items):
     metadata = [{k: v for k, v in r.items() if k not in ("image", "target")} for r in items]
     return {"images": images, "targets": targets, "metadata": metadata}
 
-batch = collate(records, key="detection")     # or: DataLoader(..., collate_fn=get_collate("detection"))
+batch = detection_collate(records)           # or: DataLoader(..., collate_fn=detection_collate)
 # images:     [2, 3, 4, 4]                    — uniform, so stacked
 # targets[0]: {'boxes': [1, 4], 'labels': [1]}
 # targets[1]: {'boxes': [3, 4], 'labels': [3]}  — raggedness PRESERVED, per record
 ```
 
-The registration is what "solves" detection: the registry lets the task OPT OUT of the generic
-folding entirely and emit its model family's native batch shape — while the engine keeps owning
-only the GROUPING (yielding lists of records) and never grows task knowledge. Registration is
-additive (an import side effect of the task package); a config wires the collate by reference
-(`collate_fn: !ref:mypkg.detection_collate`) like any other slot. See [kinds.md](kinds.md).
+Writing the collate is what "solves" detection: the task OPTS OUT of the generic folding entirely
+and emits its model family's native batch shape — while the engine keeps owning only the GROUPING
+(yielding lists of records) and never grows task knowledge. The function goes straight to the slot
+that takes one (`DataLoader(collate_fn=...)`, `RecordSequence(transform=...)`), and a config wires it
+by reference (`collate_fn: !ref:mypkg.detection_collate`) like any other slot. It is not registered:
+a registry key cannot carry task state (which keys are input and target, an int-id vs multi-hot
+target) — see [architecture.md §2](architecture.md#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17)
+and [kinds.md](kinds.md).
 
 ## What is NOT here yet (follow-ups)
 

@@ -109,3 +109,39 @@ class TestTheExcludePattern:
         from recordstream.sources.files import FilesSource
 
         assert len(FilesSource(files=["a", "b"])) == 2
+
+
+class TestReadImageDeclaresTheEntryItWrites:
+    """``produces`` names the entry ``output`` writes, so an editor offers it as an output to wire (``image`` into a
+    graph root's ``input``). It follows the setting: an op that writes ``picture`` declares ``picture``."""
+
+    def test_the_default_is_image(self) -> None:
+        assert ReadImage().produces == {"image": "Image"}
+
+    def test_it_follows_the_output_setting(self) -> None:
+        op = ReadImage(output="picture")
+        assert op.produces == {"picture": "Image"}
+        op.output = "input"
+        assert op.produces == {"input": "Image"}
+
+    def test_the_declared_entry_is_what_it_writes(self, images: List[str]) -> None:
+        op = ReadImage(output="picture")
+        out = op({"file": images[0]})
+        assert set(op.produces) <= set(out) and isinstance(out["picture"], Image)
+
+    def test_a_chain_reading_what_it_writes_holds_together(self) -> None:
+        """The chain check sees the entry: a later op that consumes ``image`` is satisfied by it."""
+        from recordstream.ops.contract import check_chain
+
+        class NeedsImage:
+            consumes = {"image": "Image"}
+
+            def __call__(self, record: dict) -> dict:
+                return record
+
+        check_chain([ReadImage(), NeedsImage()])
+
+    def test_it_declares_no_read(self) -> None:
+        """``file`` is a plain path a files source writes and declares nowhere — a declared read would refuse every
+        chain that starts at such a source, so the read stays undeclared (opt-in, nothing checked)."""
+        assert getattr(ReadImage(), "consumes", None) is None

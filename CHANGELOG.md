@@ -6,7 +6,59 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a3] — 2026-10-14
+
 ### Added
+- **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
+  has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
+  default, still bound the longest side by `max_size`. A `None` beside a `0` is refused (`docs/image.md`).
+- **`FilesSource.paths()`** — every file the source serves, in record order, from one listing (`source[i]` lists a
+  `root` folder again on every access).
+- **`Quantity(value, kind)`** (`recordstream.quantity`) — a number written with its unit (`2.5 MSa/s`, `250k`,
+  `1 MHz`, `5 ms`) as a value node that IS the number: a graph wires it into a number setting by `!ref:`, and a
+  settings form shows its `value`. `kind` (`rate`, `frequency`, `time`, `any`) refuses a number written in another
+  kind's unit, naming what it takes. `parse_quantity` gains `units=` (refuse any other unit) and `quantity_unit` says
+  which unit a number was written in.
+- **`remembered`, `remembering`** (`recordstream.draws`) — a generator's check decorated with `remembered` answers a
+  question it has answered before (the same settings, field for field) from memory: the same verdict, the same
+  refusal; `ignore` leaves out settings a part of the check never reads; `remembering(False)` asks every time
+  (`docs/sources.md`).
+- **`DatasetProcessor(workers=N)`** builds a run's records in N spawn processes — record `i` is `source[i]`
+  through the ops in a worker — and hands them to the sink in index order, so the files are the ones a
+  sequential run writes; at most `2 × N` records at once. Needs a source with `len()` and `[i]`; a
+  stream-level op or a `chunk_size` is refused (`docs/runnable.md`).
+- **`Grid(field, low, high, step, spacing, count, ratio)`, a draw on a grid** — every point a whole multiple of
+  `step`, spread `linear` (every multiple), `log` (`count` points) or `power` (`low × ratio^n`); its numbers may be
+  written with their unit (`low: 1MHz`, `high: 2.5 MSa/s`, `step: 100kHz`), read by `parse_quantity`
+  (`docs/sources.md`).
+- **A class whose constructor runs its own `check()` declares `checked_on_construction = True`** — the draws
+  then check each value they try once, by the constructor, instead of again after it (`docs/sources.md`).
+- **`ConvertToImage(vmin, vmax)`** pins the grey scale: the value that becomes black and the value that
+  becomes white, the same for every record; without them the op stretches each array to its own extremes
+  as before. Values outside are clamped; `vmax` not above `vmin` is refused (`docs/image.md`).
+- **A `GraphContract` record entry can be wired** — `delivered: {input: image}` reads the root's `input` from the
+  record key `image`; `stream()` hands the records on with the entry under the root's name, `wired_entries()`
+  answers the map. An entry named like an output or like a parameter of a delivered object is refused at
+  declaration time (`docs/graph-contract.md`).
+- **A `GraphContract` slot the host can do without is declared under `optional`** — never missing, checked
+  like an output when something is wired into it; a slot both required and optional, or optional and named
+  like a parameter of a delivered object, is refused (`docs/graph-contract.md`).
+- **`ReadImage.produces`** — `{output: "Image"}`, the entry it writes, so an editor offers it as an output
+  (`docs/sources.md`).
+- **A source declares the entries its records carry with `produces`** — `HuggingFaceSource.produces` answers
+  from its settings and the dataset's description (`image`, `class`, then every kept metadata column as a
+  `Label`), so an editor offers them as outputs that follow the dataset; `described_columns(path, name,
+  revision)` reads the description without a row and remembers it per process (`docs/sources.md`).
+- **`recordstream.sources.draw.DrawSource` and the draws `Choice` / `Uniform` / `Span` / `Repeat`
+  (`recordstream.draws`)** — a generator's settings drawn anew for every record. The draws run top to
+  bottom and each picks only among the values the generator accepts given the draws above it (its
+  constructors and `check()` judge), so every record is a valid example; a `Choice` with no values
+  takes every value the setting's type allows, a `Uniform` the setting's own range. Each record carries
+  the drawn generator's settings file under `settings`, and depends only on the seed and its index.
+  A list of draws that cannot be met raises `DrawRefused` with the generator's reason; a spec that
+  cannot be read, `DrawSpecError`. A `field` step `name[i]` reaches an element a list setting already
+  holds (`road.lanes[1].position`); an index past the list's end is a `DrawSpecError`. A `Repeat`
+  among a `Repeat`'s `each` grows a list inside each element it adds. Usage: `docs/sources.md`.
 - **`GraphContract`'s class-vocabulary slot is `classes`** — an output slot named like a constructor
   parameter of any class the graph delivers is refused at declaration time (confluid broadcasts the
   slot's value into that parameter; measured on `class_names` beside a `Stream`), and the slot accepts
@@ -20,6 +72,52 @@ All notable changes to this project are documented here. The format follows
   real object; `to_dict()` is JSON with arrays summarised. Snapshots are references unless
   `copy_snapshots=True`; an op that edits its record in place is flagged `in_place`.
   Usage: `docs/trace.md`.
+- **`recordstream.flow.subgraph.Subgraph`** (also `from recordstream.flow import Subgraph`) — a
+  `flow:` mapping used as ONE op, written inline in the step that uses it (`steps:` the flow grammar,
+  `result:` the inner step whose record it returns; blank = the last). The inside runs on the same
+  kernel as any flow. `consumes` / `produces` / `flags` are derived from the inner ops (`produces` and
+  `flags` from the steps on the lineage of `result` only — the record the subgraph returns). Refused
+  before the first record, naming the outer step and the line of the subgraph that refuses (the inner
+  marker of a nested one): a `result:` naming no inner step, a 1→N
+  expanding inner op, an inner `from:` / `merge_from:` / `bind:` naming a step outside, a `from:` or
+  `merge_from:` written inside an inner op's `!class:` marker, and an outer `bind:` / `from:` /
+  `merge_from:` reading a step inside a subgraph. One subgraph is used twice by copying its block or by
+  `steps: {include: prep.steps.yaml}` in each use. Usage: `docs/graph.md` → "Subgraphs".
+- **`Tracer` looks inside a subgraph step** (in a `FlowGraph` or a `Stream`'s ops list): its inner
+  nodes follow it in `names` as `prep/grey` (`ops[1]/grey`, nested `prep/inner/x`), and `run(until=…)`,
+  `step()`, `resume()`, `rerun_from()`, `value()`, `statuses`, `generations`, `check()` and
+  `to_dict()` take them (`to_dict` rows carry `parent`, a subgraph row `inner`).
+- **`recordstream.flow.StepReferenceError`** — the `ValueError` a `from:` / `merge_from:` / `bind:`
+  naming no earlier step raises; its `key`, `ref`, `target`, `step` and `param` say which reference.
+- **`check_chain(..., raised=…)`** — the flags already raised when the chain starts (the steps ahead of
+  a subgraph, when the chain is its inside). Default: none.
+
+### Changed
+- **`Choice` asks the generator only about the value it picks**: a refused value is dropped and another picked among
+  the rest. Each accepted value keeps its weight's share of the accepted ones, but a seed now draws other records.
+- A `flow:` step name may not contain `/` (it names a node inside a subgraph, `prep/grey`):
+  `flow: step name 'prep/grey' may not contain '/' …`.
+- `parse_flow` no longer changes the steps mapping it is given: a bare marker's `from:` /
+  `merge_from:` / `bind:` are read off a copy, so parsing the same steps twice wires the same graph.
+- `Tracer` with `copy_snapshots=True` reruns a first node from a copy of the record as it arrived, so a
+  first node that edits its record in place gives the same result on every rerun; a refusal raised while
+  a tracer builds its plan starts with the tracer's `where`.
+- A `Stream` holding a stream-level op (`Parallel`) opens every subgraph member before the first
+  record and names it by its own index in `ops`.
+
+### Fixed
+- **`DrawSource`'s settings file names every class by its importable path** (`confluid.dump(..., qualified=True)`):
+  a bare registry name is unambiguous only among the classes registered when the record was written, so once a
+  second package with a class of the same name was installed the file no longer loaded (`'Road' is registered
+  by 2 classes, so a bare lookup cannot choose between them`).
+- **`Stream.parallel(workers, window=2)` and `FlowGraph.parallel(workers, window=2)` keep at most
+  `window × workers` records in flight** and drop each once yielded. They submitted the whole source
+  first and held every result until the last: 200 records of 1 MB peaked at 204 MB in the parent (now
+  9 MB), the first record waited until the whole source was read, and stopping after 5 records waited
+  until the other 195 were processed. `window` (records per worker, at least 1) is new; widen it when a
+  few records take far longer than the rest (`README.md`). The `Parallel` op takes the same `window`;
+  its default, 2, is the limit it already had. Its `workers` and `window` accept 1 or more, so a config
+  with `workers: 0` is refused when it is loaded, naming the file and line, instead of at the first record.
 
 ## [0.1.0a2] — 2026-09-27
 

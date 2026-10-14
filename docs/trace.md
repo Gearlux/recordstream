@@ -12,8 +12,10 @@ the same kernel a plain run uses, so what the trace shows is what a run does. Ra
 [architecture.md §22](architecture.md#22-one-record-through-the-kernel-probed-tracer-2026-09-28).
 
 **Node names.** A `Stream`'s ops are `ops[0]`, `ops[1]`, … — their position in the ops list, so the
-same op twice is two nodes. A `FlowGraph`'s steps are their document keys (`scaled`, `mask`, …). Every
-method that takes a node name refuses an unknown one and lists the nodes there are.
+same op twice is two nodes. A `FlowGraph`'s steps are their document keys (`scaled`, `mask`, …). A
+[subgraph](graph.md#subgraphs-a-flow-used-as-one-op) step is followed by its inner nodes, named
+`prep/grey` (see [Inside a subgraph](#inside-a-subgraph)). Every method that takes a node name refuses
+an unknown one and lists the nodes there are.
 
 ## A first run
 
@@ -277,6 +279,75 @@ The error propagates, and the trace keeps it: `tracer.statuses` is
 `tracer.rerun_from("ops[1]", field="image").statuses` is `{'ops[0]': 'ok', 'ops[1]': 'ok', 'ops[2]': 'ok'}`
 with `generations` `{'ops[0]': 0, 'ops[1]': 1, 'ops[2]': 1}` — `ops[0]` was not run again.
 
+## Inside a subgraph
+
+A step whose op is a `Subgraph` — in a `FlowGraph`, or a member of a `Stream`'s ops list — is traced
+by a CHILD tracer over its inner steps, on the same kernel. Its inner nodes follow it in `names`,
+named `<step>/<inner>`: `prep/grey`, a Stream member's `ops[1]/grey`, a subgraph inside a subgraph
+`prep/inner/x`. Every call that takes a node name takes these. The document of
+[graph.md](graph.md#subgraphs-a-flow-used-as-one-op) (`demo.yaml`: `prep` holds `grey` and `scaled`,
+then `mask`), on the two-rectangle image:
+
+```python
+graph = FlowGraph.from_yaml("demo.yaml")
+tracer = Tracer(graph, where="demo.yaml")
+print(tracer.names)
+tracer.run(record, until="prep/scaled")                # pauses INSIDE the subgraph
+print(tracer.paused_at, tracer.statuses)
+tracer.step()                                          # the rest of the inside, then pause before 'mask'
+print(tracer.paused_at)
+tracer.resume()
+tracer.rerun_from("prep/scaled", target_max=0.5)       # the rectangles now scale below the threshold
+print(tracer.generations)
+```
+
+```
+['prep', 'prep/grey', 'prep/scaled', 'mask']
+prep/scaled {'prep': 'paused', 'prep/grey': 'ok', 'prep/scaled': 'paused', 'mask': 'not reached'}
+mask
+{'prep': 1, 'prep/grey': 0, 'prep/scaled': 1, 'mask': 1}
+```
+
+`resume()` completed the run (mask mean `0.2855`); after the rerun the mask mean is `0.0`. The rerun
+rebuilt `prep/scaled` through its constructor and reran the inside from there, then the steps after
+the subgraph: `prep/grey` kept generation 0 and did not run again, and nothing before `prep` would
+have either.
+
+| call | inside a subgraph |
+| --- | --- |
+| `run(seed, until="prep/scaled")` | pauses before `scaled` inside `prep`; `prep` and `prep/scaled` are both `paused` (a subgraph node is `paused` while the run is paused before it or anywhere inside it) |
+| `step()` | pauses before the next node of `names`: paused before `prep`, it pauses before `prep/grey` (it enters the subgraph); paused before the last inner node, it finishes the subgraph and pauses before the next outer node |
+| `resume()` | the rest of the inside, then the steps after the subgraph |
+| `rerun_from("prep/scaled", **params)` | the inside reruns from `scaled`, then the outer steps after `prep`; `rerun_from("prep", result="grey")` rebuilds the subgraph itself — from the inside it runs NOW, so `prep/scaled` keeps the `target_max` an earlier rerun gave it |
+| `value("prep/scaled", "image")` | the inner node's snapshot |
+| `check(seed)` | the subgraph node is checked as the op it is — its `consumes` / `produces` / `flags` are derived from its inside — and then its inside, each inner node over its own lineage, with what reaches the subgraph as the entries provided and the flags raised before it as raised. A refusal at the subgraph node is asked again of its inside, so it names the inner node |
+
+In `to_dict()` (and in the `check` rows) the subgraph node carries `inner` and each inner node
+`parent`:
+
+```
+{'node': 'prep', 'op': 'Subgraph', 'status': 'ok', 'generation': 1, 'inner': ['prep/grey', 'prep/scaled']}
+{'node': 'prep/scaled', 'op': 'Scale', 'status': 'ok', 'generation': 1, 'parent': 'prep'}
+```
+
+The check crosses the boundary in both directions. A flag raised INSIDE reaches a gate after the
+subgraph, and a flag raised BEFORE the subgraph reaches a gate inside it — both graphs run correctly,
+and both were refused before the descent. What is still refused is refused before anything runs,
+naming the inner node:
+
+```
+graph: head, then finish = Subgraph(gated requires 'bright'), nothing raises 'bright'
+ChainContractError: gate.yaml:finish/gated: SgGated is gated on the flag 'bright', which no node before it raises — the flags available at that point are: none
+
+graph: stats = Subgraph(twice reads 'fraction'), THEN frac writes 'fraction'
+ChainContractError: late.yaml:stats/twice: SgDoubled needs the record entry 'fraction', which nothing before it produces — the chain has image, mask at that point (an op that DOES write it must declare it in `produces`)
+```
+
+(`SgGated`, `SgDoubled` are the suite's test ops — `tests/test_trace_subgraph.py`.) A subgraph's
+inside runs through the child tracer on the kernel, never as a flattened copy of the outer step list:
+the traced record is the plain run's record. A `recordstream.Pipeline` step is not descended — it is
+one node.
+
 ## Snapshots are references; the `in_place` flag
 
 By default a node's input snapshot is the very object the kernel handed it, and its output snapshot is
@@ -299,17 +370,23 @@ nodes = Tracer(Stream(ops=[Scale(), blank])).run(record).to_dict()["nodes"]
 With references, `value("ops[0]", "image", side="input")` on a `Tracer(Stream(ops=[blank]))` shows the
 zeros the op wrote (its maximum is `0.0`); with `Tracer(Stream(ops=[blank]), copy_snapshots=True)` the
 input snapshot keeps what the node received (maximum `200.0`). Turn copies on for a chain whose entries
-carry `in_place: true`; leave them off otherwise.
+carry `in_place: true`; leave them off otherwise. With copies on, `rerun_from` a FIRST node — of the graph,
+or the first node inside a subgraph — starts from a copy of the record as it arrived, so an op that bumps a
+counter in place gives the same answer on every rerun (with references it counts up: `k = 2`, then `3`).
 
 ## Every refusal
 
 Each message is located: `where:node:` when the tracer was given a `where` (here `patches.yaml`) and a
-node is involved, `node:` alone without a `where`, and `Tracer:` when no node is involved either.
+node is involved, `node:` alone without a `where`, and `Tracer:` when no node is involved either. A
+structural refusal raised while the tracer parses the graph (a subgraph's `result: nosuch`) starts with
+`where: ` — `ops_bad.yaml: Stream.ops[1] (a subgraph): Subgraph: result 'nosuch' …`.
 
 | you do | you get |
 | --- | --- |
 | `check(seed)` / `run(seed)` with an entry a node needs missing from the seed | `ChainContractError: patches.yaml:ops[1]: BackgroundLevel needs the record entry 'image', which nothing before it produces — the chain has class, picture at that point (an op that DOES write it must declare it in `produces`)` — nothing ran |
 | `run(record, until="nosuch")` | `KeyError: "patches.yaml: no node named 'nosuch' — the nodes are ['ops[0]', 'ops[1]']"` |
+| `run(record, until="prep/nosuch")` — an inner name that does not exist | `KeyError: "demo.yaml: no node named 'prep/nosuch' — the nodes are ['head', 'prep', 'prep/first', 'prep/grey', 'prep/scaled', 'mask']"` |
+| `rerun_from("prep", result="nosuch")` — a rebuilt subgraph whose inside is refused | `ValueError: prep (a subgraph): Subgraph: result 'nosuch' does not name an inner step …` — the trace is untouched |
 | `step()` or `resume()` when nothing is paused | `RuntimeError: patches.yaml: nothing is paused — run(seed, until=<node>) first` |
 | `rerun_from("ops[1]", low_op="~")` — a value the constructor refuses | `ValidationError: 1 validation error for ThresholdConfig / low_op / Input should be '>' or '>=' [type=literal_error, input_value='~', input_type=str]` — the trace is untouched |
 | `rerun_from("ops[1]", nosuch=1)` — a parameter the constructor does not have | `ValidationError: 1 validation error for ThresholdConfig / nosuch / Extra inputs are not permitted [type=extra_forbidden, input_value=1, input_type=int]` |
@@ -334,6 +411,10 @@ node is involved, `node:` alone without a `where`, and `Tracer:` when no node is
   propagates out of `run` with the node still `not reached`; it is not attributed to a node.
 * A node that declares types rather than entry names is `unverifiable` to the check, and so are its
   flags and reports; the run shows what it did.
+* A `recordstream.Pipeline` step is one node — the tracer descends into a `Subgraph`, not into the
+  other composing ops.
+* An outer node and a node inside a subgraph reporting under the same name are not refused (a
+  subgraph derives `consumes`, `produces` and `flags`, not `reports`).
 
 Related: [graph.md](graph.md) for `flow:` documents and the kernel the tracer runs on,
 [graph-contract.md](graph-contract.md) for what a whole graph must deliver, [algorithm.md](algorithm.md)

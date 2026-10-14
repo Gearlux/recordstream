@@ -3,13 +3,101 @@
 Pure data + string grammar: no execution, no confluid, no op dispatch. Everything else in
 :mod:`recordstream.flow` builds on this, so it deliberately sits at the bottom and imports
 nothing from its siblings.
+
+It also holds the few things every layer above must agree on WITHOUT importing each other: what
+an op declares (:func:`_declaration`, read by the tracer's check and by a subgraph's derived
+boundary), and how a SUBGRAPH op is recognised and opened (:func:`_is_subgraph`,
+:func:`_open_subgraph`) — by duck typing, because ``subgraph.py`` imports ``parse.py`` and
+``parse.py`` must open a subgraph right after building it.
 """
 
 import inspect
-from typing import Any, Dict, NamedTuple, Optional, Sequence, Tuple
+from typing import Any, Dict, Literal, NamedTuple, Optional, Sequence, Tuple
 
 RESERVED_STEP_KEYS = ("from", "merge_from", "bind")
 """Step-grammar keys stripped from a step mapping before the op is constructed."""
+
+SUBGRAPH_SEPARATOR = "/"
+"""Joins a subgraph step and one of its inner steps into a node name: ``prep/grey``. Because of it
+a step name may not contain ``/`` (as ``.`` is reserved for ``step.attr`` references)."""
+
+_Declaration = Literal["none", "names", "types"]
+
+
+def _declaration(op: Any) -> _Declaration:  # an op of any family, or None for a fan-in step
+    """How an op declares its interface: by record-entry NAME (``{key: type}``), by TYPE (a
+    ``Transform``'s non-empty tuple of item classes), or not at all (absent or empty).
+
+    The distinction matters because ``check_chain`` reads the declaration as ``{record key: type}``
+    and, handed a tuple of classes, takes each CLASS for a key (root ``TASKS.md``; measured:
+    ``check_chain([Threshold()], provided={"image"})`` refuses on the entry
+    ``"<class 'recordstream.items.NDArrayItem'>"``). A types-only op is therefore never handed over.
+    """
+    if op is None:
+        return "none"
+    declared = (getattr(op, "consumes", None), getattr(op, "produces", None))
+    if any(isinstance(value, (tuple, list)) and value for value in declared):
+        return "types"
+    if any(isinstance(value, dict) for value in declared):
+        return "names"
+    return "none"
+
+
+def _is_subgraph(op: Any) -> bool:  # an op of any family
+    """True for an op whose body is a flow — ``recordstream.flow.subgraph.Subgraph`` or a subclass.
+
+    Read off the op's CLASS attribute ``FLOW_SUBGRAPH`` (never the instance: a tracer's probe forwards
+    attribute reads to the op it wraps, and must not be mistaken for the subgraph itself). Such an op
+    exposes ``flow_steps`` (its parsed inner steps) and ``output_step``.
+    """
+    return getattr(type(op), "FLOW_SUBGRAPH", False) is True
+
+
+#: The attribute a subgraph refusal carries once it names a location, so an outer level adds none.
+_LOCATED = "subgraph_location"
+
+
+def _open_subgraph(op: Any, label: str, where: str = "") -> None:  # op: a Subgraph (see _is_subgraph)
+    """Parse a subgraph's inside NOW, so a mistake in it is refused before the first record runs.
+
+    A refusal from inside names the outer step — ``flow step 'prep' (a subgraph): <inner message>``
+    (``label`` is ``flow step 'prep'`` or ``Stream.ops[1]``) — plus ``(at file:line:col)`` when the
+    caller knows where the subgraph is written. A NESTED refusal already located at the subgraph whose
+    refusal it is keeps that one location: each outer level adds its step name, never a second
+    ``(at …)`` pointing further out (the marker of ``outer`` says nothing about a mistake in ``deep``).
+    The exception keeps its kind (``TypeError`` for an expanding inner op, ``ValueError`` for
+    everything else).
+    """
+    try:
+        op.flow_steps
+    except (TypeError, ValueError) as refusal:
+        located = getattr(refusal, _LOCATED, "")
+        at = f" (at {where})" if where and not located else ""
+        kind = TypeError if isinstance(refusal, TypeError) else ValueError
+        raised = kind(f"{label} (a subgraph): {refusal}{at}")
+        setattr(raised, _LOCATED, located or where)
+        raise raised from refusal
+
+
+class StepReferenceError(ValueError):
+    """A step reference (``from:`` / ``merge_from:`` / ``bind:``) naming no EARLIER step.
+
+    Raised by :func:`recordstream.flow.parse.parse_flow` with the flow grammar's own message
+    (``flow step 'm': from: 'zz' does not name an EARLIER step …``); catch it as the ``ValueError``
+    it is. The attributes let a caller say something more useful — a subgraph re-words it when the
+    name is not one of its inner steps at all (a step outside it): ``key`` is the reserved step key,
+    ``ref`` the reference as written, ``target`` the step it names; ``step`` and ``param`` (for a
+    ``bind:``) are the step that wrote it and the parameter it binds.
+    """
+
+    def __init__(self, message: str, *, key: str, ref: str, target: str, step: str = "", param: str = "") -> None:
+        super().__init__(message)
+        self.key = key
+        self.ref = ref
+        self.target = target
+        self.step = step
+        self.param = param
+
 
 _MISSING = object()
 
@@ -63,9 +151,12 @@ def _split_bind_ref(ref: str) -> _BindRef:
 def _parse_bind_ref(ref: str, known: Sequence[str]) -> _BindRef:
     parsed = _split_bind_ref(ref)
     if parsed.step not in known:
-        raise ValueError(
+        raise StepReferenceError(
             f"flow: bind reference {ref!r} does not name an earlier step "
-            f"(known steps at this point: {list(known)!r})"
+            f"(known steps at this point: {list(known)!r})",
+            key="bind",
+            ref=ref,
+            target=parsed.step,
         )
     return parsed
 

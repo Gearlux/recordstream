@@ -154,6 +154,15 @@ class FilesSource:
         self._served_cache = (key, served)
         return served
 
+    def paths(self) -> List[str]:
+        """Every file this source serves, in record order, from ONE listing — record ``i``'s ``file`` is ``paths()[i]``.
+
+        ``source[i]`` scans a ``root`` folder again on every access (so a file appearing in it appears at once); a
+        consumer that wants every record's file — a walk over a 1880-file folder took 16 s through the index, one
+        scan each — asks here instead. A file added to the folder is in the next answer.
+        """
+        return [str(Path(path)) for path in self._served]
+
     def __len__(self) -> int:
         return len(self._served)
 
