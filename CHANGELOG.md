@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a3] — 2026-10-14
+
 ### Added
 - **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
   columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
