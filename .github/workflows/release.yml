@@ -17,7 +17,7 @@
 #
 # Publish ORDER: loggair -> confluid -> liquifai are all on PyPI already, and
 # this package declares floors on all three, so it publishes after them. The
-# visual-editor package declares `recordstream>=0.1.0a2`, so it publishes after
+# visual-editor package declares a floor on this package, so it publishes after
 # THIS one.
 # =========================================================================
 name: Release to PyPI
