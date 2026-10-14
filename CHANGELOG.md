@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
+  columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
+  larger than the size is refused, never cut (`docs/image.md`).
 - **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
   has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
   default, still bound the longest side by `max_size`. A `None` beside a `0` is refused (`docs/image.md`).

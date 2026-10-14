@@ -18,6 +18,7 @@ is imported lazily inside :func:`_apply_colormap` — only non-``"gray"`` colorm
 need it, so the pure-greyscale path stays matplotlib-free.
 """
 
+from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, get_args
 
 import numpy as np
@@ -1281,6 +1282,73 @@ class ConvertToMask(Transform):
         return {**record, self.output: MaskItem(arr.astype(np.int64))}
 
 
+@configurable(category="op", group="image")
+class PadImage(Transform):
+    """Pad a picture to a fixed size with one value — rows added at the bottom, columns at the right.
+
+    A picture made of a capture shorter than the picture's time span is padded where the capture ENDS: the added rows
+    are a constant (``0``: black), so a detector sees exactly where the recording stops, and nothing the picture holds
+    is stretched or moved. Its boxes (``Boxes``, absolute pixels from the top-left corner) and their outlines stay
+    where they were; only their ``canvas`` — the raster they are stated in — becomes the new size, which a writer
+    normalizes them by. A picture already larger than the size is REFUSED, never cut: cutting is a crop's job.
+
+    Run it AFTER the step that makes the boxes, so they are projected onto the picture's own rows.
+
+    Args:
+        height: The picture's height after the pad, in pixels; 0 keeps the height.
+        width: The picture's width after the pad, in pixels; 0 keeps the width.
+        value: The value of every added pixel, in the picture's own scale (0 is black for uint8 and [0, 1] pictures).
+        input_key: Record key of the picture (an ``Image`` or an array, HWC or 2-D).
+        target_key: Record key of its ``Boxes``; a record without one is padded alone.
+    """
+
+    handles = (ImageItem,)
+
+    def __init__(
+        self,
+        height: int = 0,
+        width: int = 0,
+        value: float = 0.0,
+        input_key: str = "image",
+        target_key: str = "target",
+    ) -> None:
+        super().__init__()
+        if int(height) < 0 or int(width) < 0:
+            raise ValueError(
+                f"PadImage: height and width are sizes in pixels (0 keeps an axis); got {height} x {width}"
+            )
+        self.height = int(height)
+        self.width = int(width)
+        self.value = float(value)
+        self.input_key = str(input_key)
+        self.target_key = str(target_key)
+
+    def __call__(self, record: Record) -> Record:
+        if self.input_key not in record:
+            raise ValueError(f"PadImage: no {self.input_key!r} in the record (keys: {list(record)})")
+        item = record[self.input_key]
+        if isinstance(item, ImageItem) and getattr(item, "layout", "HWC") == "CHW":
+            raise ValueError("PadImage: a CHW picture — pad it before it is tensorized (HWC or 2-D)")
+        pixels = np.asarray(item_data(item))
+        rows, columns = int(pixels.shape[0]), int(pixels.shape[1])
+        height = self.height or rows
+        width = self.width or columns
+        if rows > height or columns > width:
+            raise ValueError(
+                f"PadImage: the picture at {self.input_key!r} is {rows} x {columns} (height x width), larger than the "
+                f"{height} x {width} it is padded to — a pad never cuts"
+            )
+        out = dict(record)
+        if (rows, columns) != (height, width):
+            padded = np.full((height, width) + pixels.shape[2:], self.value, dtype=pixels.dtype)
+            padded[:rows, :columns] = pixels
+            out[self.input_key] = with_data(item, padded) if isinstance(item, NDArrayItem) else padded
+        target = record.get(self.target_key)
+        if isinstance(target, Boxes):
+            out[self.target_key] = replace(target, canvas=(height, width))
+        return out
+
+
 __all__ = [
     "Colormap",
     "COLORMAPS",
@@ -1289,6 +1357,7 @@ __all__ = [
     "IMAGE_MODES",
     "ConvertToImage",
     "ConvertToMask",
+    "PadImage",
     "normalize_to_uint8",
     "value_to_image",
     "record_to_image",

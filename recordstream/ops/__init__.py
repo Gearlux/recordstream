@@ -5,7 +5,7 @@ Submodules:
     - recordstream.ops.numpy: Threshold, ConnectedComponents, Scale (value range), ToType (element
       type) (+ threshold_array / connected_component_boxes / resolve_expression helpers)
     - recordstream.ops.torch: ToTensor — array -> CHW tensor, nothing else (+ to_tensor helper)
-    - recordstream.ops.image: ConvertToImage, ConvertToMask, ConvertMode (channel layout)
+    - recordstream.ops.image: ConvertToImage, ConvertToMask, ConvertMode (channel layout), PadImage
       (+ value_to_image / normalize_to_uint8 …)
     - recordstream.ops.target: EncodeTarget, DecodeTarget,
       CocoToTorchVisionDetection, MasksToDetectionBoxes
@@ -34,7 +34,7 @@ from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formats import ReadFile
 from recordstream.ops.formula import FormulaOp
-from recordstream.ops.image import ConvertMode, ConvertToImage, ConvertToMask
+from recordstream.ops.image import ConvertMode, ConvertToImage, ConvertToMask, PadImage
 from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
@@ -50,6 +50,7 @@ __all__ = [
     "ConvertMode",
     "ConvertToImage",
     "ConvertToMask",
+    "PadImage",
     "CopyField",
     "DecodeTarget",
     "DropField",
