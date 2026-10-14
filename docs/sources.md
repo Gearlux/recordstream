@@ -1,7 +1,7 @@
-# Sources — HuggingFace, splits, ranges, concatenation (`recordstream.sources`)
+# Sources — HuggingFace, splits, ranges, concatenation, drawn settings (`recordstream.sources`)
 
 `recordstream.sources` is a package with **one class per module**. Import from the package —
-`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource` —
+`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource, DrawSource` —
 but spell the **submodule** path in a config, because that is what `cls.__module__` says and
 what a generated config emits:
 
@@ -11,6 +11,7 @@ what a generated config emits:
 | `DatasetSplit` | `split.py` | `recordstream.sources.split.DatasetSplit` |
 | `RangeSource` | `range.py` | `recordstream.sources.range.RangeSource` |
 | `ConcatSource` | `concat.py` | `recordstream.sources.concat.ConcatSource` |
+| `DrawSource` | `draw.py` | `recordstream.sources.draw.DrawSource` |
 
 The shorter `!class:recordstream.sources.HuggingFaceSource` still resolves (Confluid falls back to
 a module-path import, and the package re-exports every name), so an older config keeps loading —
@@ -21,6 +22,7 @@ but a generated one will use the submodule spelling. Rationale:
 
 `HuggingFaceSource` turns any `datasets.Dataset` (a Hub repo id or a local imagefolder path) into plain record dicts of typed values: the `input_feature` column becomes an `Image` under the record key `"image"`, the `target_feature` column a `Label` under `"class"`, and each kept metadata column its own `Label` entry keyed by the column name (plus the source-provenance `hf_path` / `hf_split` entries) — traceability that often goes missing in bare dictionary loading.
 
+- **`produces` (the entries every record carries):** answered from the settings and the dataset's own description — `{"image": "Image", "class": "Label"}` for MNIST, `{"image": "Image", "class": "Label", "coarse_label": "Label"}` for CIFAR-100 with `input_feature: img, target_feature: fine_label`. The image and the label are always `image` and `class`; every kept metadata column follows as a `Label`. See [What a source's records carry](#what-a-sources-records-carry-produces).
 - **`metadata_features` (which extra columns become record entries):** the sentinel **`"*"`** (or `["*"]`, the default) keeps **every column except `input_feature` / `target_feature`** — the full-traceability option, resolved against the dataset's real columns at load; an explicit list keeps exactly those columns; `None` / `[]` keep none.
 
 ```yaml
@@ -34,6 +36,36 @@ hf_train: !class:recordstream.sources.huggingface.HuggingFaceSource()
 > **Use the namespaced repo id** (`ylecun/mnist`, never the legacy bare `mnist`): current `huggingface_hub` rejects namespace-less ids (`HfUriError: Repository id must be 'namespace/name'`, measured 2026-08-06). Worse than the hard failure is the soft one — with a stale local cache present, `datasets` logs "couldn't be found on the Hugging Face Hub" and silently loads the cached copy, so a bare id can appear to work on one machine and fail on a fresh one.
 
 > **Lazy & zero-arg construction** — `HuggingFaceSource` follows the workspace lazy-init convention: the constructor does no work (no network), so `HuggingFaceSource()` is valid and building one is free. The dataset is downloaded only on first access to the read-only `.dataset` property (cached thereafter; reset `_dataset` to reload), and `.resolved_metadata_features` (the `"*"` expansion) is derived lazily from the loaded columns. `path` is therefore optional at construction and validated lazily — accessing `.dataset` with an empty `path` raises a clear `ValueError`.
+
+### What a source's records carry (`produces`)
+
+A source answers ONE question about its records — which entries each one carries, by item type —
+with the same `produces` an op declares. It is a property, answered from the source's CURRENT
+settings, so a visual editor offers the entries as outputs and redraws them when a setting changes.
+`HuggingFaceSource` answers it without reading a row: the image and the label are `image` and
+`class` (its two settings say which columns they are), and the metadata columns `metadata_features`
+keeps come from the dataset's description:
+
+```python
+HuggingFaceSource(path="ylecun/mnist").produces
+# {'image': 'Image', 'class': 'Label'}
+HuggingFaceSource(path="uoft-cs/cifar100", input_feature="img", target_feature="fine_label").produces
+# {'image': 'Image', 'class': 'Label', 'coarse_label': 'Label'}
+HuggingFaceSource(path="uoft-cs/cifar100", metadata_features=[]).produces
+# {'image': 'Image', 'class': 'Label'}
+```
+
+| setting | what `produces` reads | cost |
+| --- | --- | --- |
+| `metadata_features: "*"` (the default) | the dataset's description (`described_columns`), or the loaded dataset's columns once loaded | ~1.5–4 s the first time per dataset, then remembered for the process |
+| an explicit list | the list | nothing |
+| `None` / `[]` | nothing — `image` and `class` only | nothing |
+
+Offline, for a name the Hub does not know, or with no `path`, the answer is `image` and `class`:
+what the settings alone vouch for. The provenance entries (`hf_file`, `hf_path`, `hf_split`) are
+not declared — they say where a record came from, and nobody wires them. A source of your own
+declares `produces` the same way: a class attribute when its entries never change, a property
+when they follow its settings — and a property must not load data.
 
 ## A plain list of files (`FilesSource`)
 
@@ -54,6 +86,9 @@ uint8) and leaves the path as provenance. There is deliberately **no label entry
 arrive unannotated, and whatever labels them adds that entry downstream. A file the imaging
 library cannot open passes through UNCHANGED with a debug log — the record keeps its row and
 one stray text file never costs the run around it. Other file kinds get their own read ops.
+`ReadImage` declares the entry it writes, `produces == {"image": "Image"}` (it follows `output`:
+`ReadImage(output="picture").produces == {"picture": "Image"}`), so an editor offers it as an output to
+wire. The path it reads is not declared: a files source writes it without declaring it.
 
 ### Pointing it at a folder (`root` + `pattern`)
 
@@ -92,6 +127,17 @@ root: '*' is the folder's own files, '*/*' its subdirectories, '**/*' everything
 
 The scan is **lazy** — it happens on first use, never in the constructor — so a folder that
 does not exist yet is reported when the source is read, not when the config is built.
+
+It also happens on **every** read of a record: `source[i]` lists the folder again, so a file
+that appears in it is served at once. A caller that wants every record's file asks
+`source.paths()` instead — the files in record order (`paths()[i]` is record `i`'s `file`),
+from one listing; measured on a folder of 1880 captures, 0.03 s where indexing each record took
+16 s:
+
+```python
+source = FilesSource(root="/data/captures", pattern="*/*/val/*.sigmf-meta")
+files = source.paths()          # one scan; a file added to the folder is in the next answer
+```
 
 ### Asking a file what it says, without opening it
 
@@ -257,6 +303,259 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 > `_target_:` source is built at load time and is what the slot wants. The examples above use
 > `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
 > loaded source.
+
+## Drawing a generator's settings (`DrawSource`)
+
+A generator — an `Algorithm` with no record inputs whose settings describe one example — gives the
+same record every time. `DrawSource` draws its settings anew for every record, so a pipeline over
+it is a training set of different examples. Every example is a valid one: each draw picks only among
+the values the generator itself accepts.
+
+**The one rule.** The draws run top to bottom. Each picks from its own distribution, but only among
+the values the generator accepts given every draw above it. Settings not drawn yet keep the
+generator's own values. "Accepts" means the object holding the setting, and every object above it,
+rebuild through their constructors and pass their `check()` when they have one. The generator's
+rules are not restated anywhere — it judges every value itself.
+
+A class whose constructor already runs its `check()` says so, and is then checked once per value
+tried instead of twice — worth it when the check is the slow part of a draw:
+
+```python
+@configurable
+@dataclass(kw_only=True)
+class Road:
+    checked_on_construction: ClassVar[bool] = True  # __post_init__ runs check(): a draw does not run it again
+    width: Literal[2, 4] = 2
+
+    def __post_init__(self) -> None:
+        self.check()
+```
+
+A check that depends on nothing but the object's settings may also remember its answers: decorated with
+`remembered`, a check asked again about the same settings — field for field, exactly — answers from memory, with
+the same verdict or the same refusal. A record's draws ask the same question often (a third of one radio
+generator's 6 900 checks a record were repeats), and the records stay the same:
+
+```python
+from recordstream.draws import remembered
+
+@configurable
+@dataclass(kw_only=True)
+class Road:
+    checked_on_construction: ClassVar[bool] = True
+    width: Literal[2, 4] = 2
+    lanes: Optional[List[Lane]] = None
+
+    def __post_init__(self) -> None:
+        self.check()
+
+    @remembered                      # the same settings, the same answer
+    def check(self) -> None:
+        self._check_width()
+        ...
+
+    @remembered(ignore=("lanes",))   # a part that never reads the lanes: asked once for every set of lanes
+    def _check_width(self) -> None:
+        ...
+```
+
+The method must read nothing but the object's fields (and its arguments, which are part of the question), and a
+setting in `ignore` must never be read by it. A returned value is shared by every caller — return values nobody
+changes (tuples, read-only arrays). A `ValueError` or `TypeError` is remembered and raised again as a fresh copy;
+any other error is raised each time. At most `REMEMBERED` (1024) answers are kept per method and process;
+`method.forget()` clears them and `with remembering(False):` asks every time, to measure or to compare.
+
+| draw (`recordstream.draws`) | given no values | what it does |
+| --- | --- | --- |
+| `Choice(field, values, weights)` | every value the setting's type allows: a `Literal`'s values, both bools, `None` for an optional setting, every integer of a range of at most 1024 | picks a value by weight and asks the generator about it; a refused value is dropped and another picked among the rest — each accepted value with its weight's share of the accepted ones |
+| `Uniform(field, low, high)` | the setting's own range | a number from the range, tried up to 100 times until one is accepted |
+| `Grid(field, low, high, step, spacing, count, ratio)` | the setting's own range (`step` is required) | a number on a grid, every point a whole multiple of `step`: `linear` every multiple in the range, `log` `count` points even on a log scale, `power` `low`, `low × ratio`, `low × ratio²` … — each point rounded to the step and kept in the range; tries the points in random order, up to 100 |
+| `Span(field, share)` | — | for a list of bounded integers: a run of consecutive values covering a share of those accepted one at a time |
+| `Repeat(field, count, each)` | — | grows a list one element at a time, each from its class's defaults with its own draws `each` (a `Repeat` among them grows a list inside the element); the list ends early when an element's first draw finds no room |
+
+A `Grid` keeps a number on values another part of the pipeline handles well — a sample rate that is a whole
+multiple of a source's, a size in whole blocks. `low`, `high` and `step` are numbers, or numbers written with
+their unit (an SI prefix and `Hz`, `Sa/s`, `S/s` or `s`; the unit is read, never converted):
+
+```yaml
+- !class:recordstream.draws.Grid {field: sample_rate_hz, low: 1MHz, high: 2.5MHz, step: 100kHz}
+#   → 1, 1.1, 1.2 … 2.5 MSa/s (16 points)
+- !class:recordstream.draws.Grid {field: sample_rate_hz, low: 1MHz, high: 2.5MHz, step: 100kHz, spacing: log, count: 6}
+#   → 1, 1.2, 1.4, 1.7, 2.1, 2.5 MSa/s
+- !class:recordstream.draws.Grid {field: sample_rate_hz, low: 1MSa/s, high: 8MSa/s, step: 100kHz, spacing: power, ratio: 2}
+#   → 1, 2, 4, 8 MSa/s
+```
+
+A grid with no multiple of its step in the range, a log grid without `count`, a power grid without a
+`ratio` above 1, a `count` or `ratio` on a spacing that does not use it, or a number that cannot be read
+(`1 mhz`) is a spec error; `parse_quantity("2 MSa/s")` reads a number the same way (`2000000.0`).
+
+A `field` is the setting's dotted path from the generator (`road.width`), or from the element inside
+a `Repeat` (`position`). A path through a setting that is `None` is skipped. A step `name[i]` is the
+i-th element (from 0) of a list the setting already holds — it must be there, since only a `Repeat`
+adds elements:
+
+```python
+import random
+from recordstream.draws import draw_settings
+
+two = Traffic(road=Road(lanes=[Lane(position=0), Lane(position=1)]))
+draw_settings(two, [Choice(field="road.lanes[1].position")], random.Random(7)).settings.road
+# Road(width=8, closed=None, lanes=[Lane(position=0), Lane(position=3)])
+draw_settings(two, [Choice(field="road.lanes[2].position")], random.Random(7))
+# DrawSpecError: road.lanes[2].position: lanes has 2 elements; [2] is past its end — only a Repeat adds elements
+```
+
+With `lanes` unset (`None`) the same draw is skipped, like any path through `None`; an element that is
+itself `None` (in a list such as `Optional[List[Optional[Lane]]]`) is drawn like any value.
+
+**A list inside each element.** A `Repeat` among a `Repeat`'s `each` grows a list inside the element
+being added, as far as that element allows:
+
+```python
+@configurable
+@dataclass(kw_only=True)
+class Town:
+    roads: Optional[List[Road]] = None
+
+
+drawn = draw_settings(Town(), [
+    Repeat(field="roads", count=(2, 2), each=[
+        Choice(field="width", values=[2, 4]),
+        Repeat(field="lanes", count=(8, 8), each=[Choice(field="position")]),
+    ]),
+], random.Random(7))
+[(road.width, len(road.lanes)) for road in drawn.settings.roads]  # [(4, 4), (2, 2)]
+dict(drawn.log)["roads[0].lanes"]                                  # '4 of 8'
+```
+
+Eight lanes were asked of each road; each got as many as its own width holds.
+
+```python
+from dataclasses import dataclass
+from typing import Dict, List, Literal, Optional
+
+from confluid import configurable
+
+from recordstream import Algorithm, Output, Param
+from recordstream.draws import Choice, Repeat, Uniform
+from recordstream.sources import DrawSource
+
+
+@configurable
+@dataclass(kw_only=True)
+class Lane:
+    position: Literal[0, 1, 2, 3, 4, 5, 6, 7] = 0
+
+
+@configurable
+@dataclass(kw_only=True)
+class Road:
+    width: Literal[2, 4, 8] = 8
+    closed: Optional[Literal[0, 1]] = None  # a closed lane, or None
+    lanes: Optional[List[Lane]] = None
+
+    def __post_init__(self) -> None:
+        taken = [lane.position for lane in self.lanes or ()]
+        if len(set(taken)) != len(taken):
+            raise ValueError("Road: two lanes on one position")
+        if any(p >= self.width or p == self.closed for p in taken):
+            raise ValueError("Road: a lane off the road or on the closed position")
+
+
+@configurable
+class Traffic(Algorithm):
+    road: Road = Param(default=Road(), doc="The road.")
+    speed: float = Param(default=50.0, doc="The speed in km/h.")
+    load: int = Output(doc="Lanes in use.")
+
+    def compute(self) -> Dict[str, int]:
+        return {"load": len(self.road.lanes or [])}
+
+
+source = DrawSource(
+    generator=Traffic(),
+    count=1000,
+    seed=7,
+    draws=[
+        Choice(field="road.width"),
+        Choice(field="road.closed", values=[None, 0], weights=[3, 1]),
+        Repeat(field="road.lanes", count=(0, 8), each=[Choice(field="position")]),
+        Uniform(field="speed", low=30, high=120),
+    ],
+)
+source[0]["load"]       # 1
+source.draw(0).log      # [('road.width', 8), ('road.closed', None), ('road.lanes[0].position', 7),
+                        #  ('road.lanes', '1 of 1'), ('speed', 91.46952050974008)]
+```
+
+The same in a config:
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:recordstream.sources.draw.DrawSource
+      count: 1000
+      seed: 7
+      generator: !class:my_package.Traffic {}
+      draws:
+        - !class:recordstream.draws.Choice {field: road.width}
+        - !class:recordstream.draws.Choice {field: road.closed, values: [null, 0], weights: [3, 1]}
+        - !class:recordstream.draws.Repeat
+          field: road.lanes
+          count: [0, 8]
+          each:
+            - !class:recordstream.draws.Choice {field: position}
+        - !class:recordstream.draws.Uniform {field: speed, low: 30, high: 120}
+  sink: ...
+```
+
+**Every record carries its settings file.** Beside the generator's outputs the record holds
+`settings`: `confluid.dump(..., qualified=True)` of the drawn generator, so `confluid.load(record["settings"])`
+rebuilds that one example. Every class is named by its importable path (`traffic.Road`), not by its registry name:
+a bare name is unambiguous only among the classes registered when the record was written, so a reader with one
+more package installed — a second class called `Road` — could not load it back. A class defined in the running
+script itself (`__main__`, as `Traffic` and `Road` are here) keeps its registry name. Record `i` depends only on
+`seed`, `i` and the draws, so any slice, worker split or machine produces the same records.
+
+```yaml
+_target_: Traffic
+road:
+  _target_: Road
+  width: 8
+  lanes:
+  - _target_: Lane
+    position: 7
+speed: 91.46952050974008
+```
+
+**Lists grow while there is room.** Over the 1000 records the most lanes drawn per width are
+`{2: 2, 4: 4, 8: 8}`: a `Repeat` asked for up to 8 adds what fits and stops.
+
+**The order is the one thing to learn.** A value can be refused because a setting drawn LATER still
+has its default — a setting that copies its parent until it is set, for instance. Draw first what
+opens up the choices after it.
+
+**A list that cannot be met stops with the generator's own reason:**
+
+```python
+import random
+from recordstream.draws import draw_settings
+
+draw_settings(Traffic(road=Road(lanes=[Lane(position=6)])), [Choice(field="road.width", values=[2, 4])], random.Random(0))
+# DrawRefused: road.width: none of [2, 4] is accepted after nothing drawn —
+#              Road: a lane off the road or on the closed position
+```
+
+A spec that cannot be read raises `DrawSpecError` instead: a setting that does not exist (the
+message lists the ones there are), a `Choice` with no values on a setting that is not a closed set,
+a `Uniform` on a setting with no range, a range written backwards.
+
+**What the draws do not know.** Only refusals the generator makes before it computes count: a rule
+checked inside `compute()` is invisible to them — give the generator a `check()` holding it. A
+valid example is not necessarily a realistic one; realism comes from the ranges you write.
+Why the generator is the judge, and the approaches rejected:
+[architecture.md §24](architecture.md#24-a-generators-settings-are-drawn-one-setting-at-a-time-with-the-generator-as-the-judge-2026-10-02).
 
 ## A view forwards a key-restricted walk
 

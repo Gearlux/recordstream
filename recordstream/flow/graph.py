@@ -8,6 +8,7 @@ is what keeps the core→flow direction one-way.
 
 import concurrent.futures
 import multiprocessing
+from collections import deque
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 from confluid import configurable
@@ -52,6 +53,7 @@ class FlowGraph:
         self.outputs = str(outputs)
         self._chunk_size = int(chunk_size)
         self._workers = 1
+        self._window = 2
         self._parsed: Optional[Tuple[List[FlowStep], str]] = None
         self._readers: Optional[Dict[str, List[Tuple[int, str]]]] = None
 
@@ -148,24 +150,28 @@ class FlowGraph:
             yield from run_steps_multi(item, steps, outputs, readers)
 
     def _iter_parallel(self) -> Iterator[Record]:
-        """Multiprocess execution — the graph's OWN spawn pool, one future per source record.
+        """Multiprocess execution — the graph's OWN spawn pool, at most ``window × workers`` records in flight.
 
         Mirrors :meth:`recordstream.core.Stream._iter_parallel`: ``spawn`` (consistent with
         Loggair, no CI deadlocks), third-party op families shipped to the workers by
-        reference. The steps pickle because their ops already must; the source never crosses
-        the boundary (only the seed record does).
+        reference, a source record submitted only when the window has room and each result
+        dropped once yielded, in source order. The steps pickle because their ops already
+        must; the source never crosses the boundary (only the seed record does).
         """
         assert self.source is not None
         steps, outputs = self._ensure_parsed()
         ctx = multiprocessing.get_context("spawn")
 
+        in_flight = self._window * self._workers
         with concurrent.futures.ProcessPoolExecutor(max_workers=self._workers, mp_context=ctx) as executor:
+            pending: "deque[concurrent.futures.Future[List[Record]]]" = deque()
             extra_families = _extra_op_families()
-            futures = [
-                executor.submit(_graph_worker_task, item, steps, outputs, extra_families) for item in self.source
-            ]
-            for future in futures:
-                yield from future.result()
+            for item in self.source:
+                pending.append(executor.submit(_graph_worker_task, item, steps, outputs, extra_families))
+                if len(pending) >= in_flight:
+                    yield from pending.popleft().result()
+            while pending:
+                yield from pending.popleft().result()
 
     @property
     def _expands(self) -> bool:
@@ -204,9 +210,19 @@ class FlowGraph:
             raise IndexError(f"Record {index} filtered out by the flow")
         return result
 
-    def parallel(self, workers: int = 4) -> "FlowGraph":
-        """Enable multiprocess execution on the graph's own spawn pool."""
+    def parallel(self, workers: int = 4, window: int = 2) -> "FlowGraph":
+        """Enable multiprocess execution on the graph's own spawn pool.
+
+        Args:
+            workers: Spawn worker processes.
+            window: Records each worker may have in flight, as in :meth:`recordstream.core.Stream.parallel`.
+        """
+        if window < 1:
+            raise ValueError(
+                f"FlowGraph.parallel(window={window!r}): must be >= 1 — the records each worker may have in flight"
+            )
         self._workers = workers
+        self._window = window
         return self
 
     def batch(self, chunk_size: int) -> "FlowGraph":

@@ -95,7 +95,7 @@ class RestorationOutput(TypedDict, Generic[ArrayT]):
 
     Keys:
         image: ``[B, C, H, W]`` float — the restored image, in the SAME value range as the
-            model's input (``[0, 1]`` for a pipeline that ends in ``ToTensor(normalize=True)``).
+            model's input (``[0, 1]`` for a pipeline that rescales with ``Scale`` before ``ToTensor``).
 
     **One key, and that is the whole point of the contract.** The other tasks here carry three
     because their raw output needs interpreting — ``logits`` are not ``probs`` are not

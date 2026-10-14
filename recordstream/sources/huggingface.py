@@ -1,7 +1,7 @@
 """``HuggingFaceSource`` — a Hugging Face dataset as a stream of record dicts."""
 
 from pathlib import Path
-from typing import Any, Collection, Dict, Iterator, List, Optional
+from typing import Any, Collection, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
 from confluid import configurable, output
@@ -67,6 +67,36 @@ def _resolve_metadata_features(
     rest = [c for c in (column_names or []) if c not in excluded]
     extras = [r for r in requested if r != METADATA_ALL_FEATURES and r not in excluded and r not in rest]
     return rest + extras
+
+
+#: The columns each dataset's description lists, by ``(path, name, revision)`` — only answers that NAME columns are
+#: kept, so an ask that failed (offline, an unknown name) is asked again next time rather than remembered.
+_DESCRIBED: Dict[Tuple[str, Optional[str], Optional[str]], Tuple[str, ...]] = {}
+
+
+def described_columns(path: str, name: Optional[str] = None, revision: Optional[str] = None) -> Tuple[str, ...]:
+    """The column names a HuggingFace dataset's DESCRIPTION lists, in order — ``()`` when it cannot say.
+
+    Reads ``datasets.load_dataset_builder(...).info.features``: the dataset card's schema, no row downloaded.
+    One ask costs about a second (measured 1.6-2.0 s the first time, ~1 s after, on MNIST and CIFAR-10/100), and an
+    editor reads :attr:`HuggingFaceSource.produces` on every redraw, so a successful answer is remembered for the
+    life of the process (in ``_DESCRIBED``). Any failure — offline, an unknown name,
+    ``datasets`` missing, a local folder whose builder has no schema until a split is prepared — answers ``()``.
+    """
+    key = (path, name, revision)
+    if key in _DESCRIBED:
+        return _DESCRIBED[key]
+    try:
+        from datasets import load_dataset_builder
+
+        features = load_dataset_builder(path, name=name, revision=revision).info.features
+    except Exception as exc:  # noqa: BLE001 — every failure means "the description cannot say"
+        logger.debug(f"described_columns({path!r}): no description ({type(exc).__name__}: {exc})")
+        return ()
+    columns = tuple(str(column) for column in (features or {}))
+    if columns:
+        _DESCRIBED[key] = columns
+    return columns
 
 
 @configurable(category="source")
@@ -291,6 +321,45 @@ class HuggingFaceSource:
                     if names:
                         break
         return [str(entry) for entry in names] if names else []
+
+    @property
+    def produces(self) -> Dict[str, str]:
+        """``{record key: item type}`` — the entries every record carries, as the SOURCE API answers it.
+
+        The same declaration an op makes with ``produces``, answered here from this source's SETTINGS and the
+        dataset's own DESCRIPTION, so a visual editor offers the entries as outputs and they follow the dataset
+        when a setting changes: ``image`` (an ``Image``, from :attr:`input_feature`), ``class`` (a ``Label``,
+        from :attr:`target_feature`), then every kept metadata column as a ``Label`` under its own name —
+        ``{"image": "Image", "class": "Label", "coarse_label": "Label"}`` for CIFAR-100.
+
+        The image and the label keep the names ``image`` and ``class`` whatever the dataset calls its columns:
+        the two settings already say which column is which, so a consumer reading ``image`` / ``class`` works on
+        any dataset without being told the column names again (user decision 2026-10-04).
+
+        What ``metadata_features`` keeps decides the rest: an explicit list is used as written; ``"*"`` takes the
+        dataset's columns — from the loaded dataset when it is loaded, else from :func:`described_columns`, which
+        reads the description only (never a row) and answers nothing offline or for a name the Hub does not know,
+        so the answer is then the two entries the settings alone vouch for. The provenance entries (``hf_file``,
+        ``hf_path``, ``hf_split``) are left out: they say where a record came from and nobody wires them.
+        """
+        entries = {"image": "Image", "class": "Label"}
+        for column in self._kept_metadata_columns():
+            entries.setdefault(column, "Label")
+        return entries
+
+    def _kept_metadata_columns(self) -> List[str]:
+        """The metadata columns :meth:`produces` declares — resolved WITHOUT loading the dataset."""
+        requested = self.metadata_features
+        if not requested:
+            return []
+        wants_all = METADATA_ALL_FEATURES in ([requested] if isinstance(requested, str) else requested)
+        columns: Optional[List[str]] = None
+        if wants_all:
+            if self._dataset is not None:
+                columns = list(getattr(self._dataset, "column_names", None) or [])
+            elif self.path:
+                columns = list(described_columns(self.path, self.name or None, self.revision))
+        return _resolve_metadata_features(requested, columns, self.input_feature, self.target_feature)
 
     @property
     def resolved_metadata_features(self) -> List[str]:

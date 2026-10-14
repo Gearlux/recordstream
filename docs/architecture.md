@@ -23,11 +23,12 @@ Maintenance rules:
 | Library interop | `core._apply_op`, `register_op_family` | External libraries run as-is via the op-family dispatch — no adapters | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) |
 | Engines | `core/` (`Stream`/`JointStream`), `flow/` (`FlowGraph`) | One op-application chokepoint, four routes; one per-record kernel behind two authoring forms | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25), [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30), [§5](#5-the-engines-own-callable-wrappers-live-in-core-2026-07-20-still-true-after-the-2026-08-01-package-split) |
 | Graph wiring | `flow/steps.py`, `flow/parse.py` | Fan-out/fan-in/cross-step values are step GRAMMAR (`from:`/`merge_from:`/`bind:`), never ops | [§3](#3-the-graph-is-the-execution-model--the-lowering-pass-was-deleted-2026-07-30) |
+| Subgraphs | `flow/subgraph.py` | A flow used as ONE op, written inline; its inside runs on the same kernel | [§23](#23-a-subgraph-is-an-op-2026-09-29) |
 | Batching | `collate.py` | Grouping is the engine's; stacking is a pluggable registry | [§2](#2-batching-is-two-stage-collation-is-a-pluggable-registry-recordstreamcollate-2026-07-17) |
 | Storage & query | `storage/*` | The `typedrecord-v1` key-group layout over the codec; metadata scans without array loads | [§1](#1-the-record-data-model-and-the-type-dispatched-op-engine-2026-07-25) (contracts) + [storage.md](storage.md) |
 | Introspection & serialization | `discovery.py` | Callable↔string identity + registration-free module scans | [§4](#4-callablestring-serialization--passive-introspection-recordstreamdiscovery-2026-07-20) |
 | Runnables & workflows | `runnable.py`, `workflow.py`, `processing.py`, `cli.py` | `run()` objects, entry-point markers, combinators, the one `recordstream run` runner | [§7](#7-the-entrypoint-markers-are-the-dispatch-table-run_entrypoint-2026-07-29) + [runnable.md](runnable.md), [workflow.md](workflow.md) |
-| Model boundary | `outputs.py`, `predictions.py`, `core.ensure_record_dataset`, `labels.class_counts` | Dataset normalization in, prediction contracts + sinks out, class-balance statistics | [§8](#8-the-model-boundary-belongs-to-the-package-that-reads-it-2026-07-29) + [predictions.md](predictions.md) |
+| Model boundary | `outputs.py`, `predictions.py`, `core.ensure_record_dataset`, `labels.class_counts` | Dataset normalization in, prediction contracts + sinks out, class-balance statistics | [§8b](#8b-the-model-boundary-belongs-to-the-package-that-reads-it-2026-07-29) + [predictions.md](predictions.md) |
 
 ---
 
@@ -208,14 +209,18 @@ batched record: per key, typed values encode through the `recordstream/io.py` co
 (torch → stacked tensor, numpy → stacked array, else a list), each declared item attr becomes a
 LIST of per-record values (decoded back into one batched item of the same type), and a
 `"plain"`-tagged value batches as the plain list. Batches must be key-homogeneous — a mismatch
-raises. Consuming projects register task aliases (`"detection"`, `"yolo"`, …) **additively**;
-re-registering a key deliberately overwrites so a consumer can replace a default. The divergent
-consumer conventions were deliberately NOT unified here — the registry is an addressable home
-consumers opt into, not a forced migration.
+raises. The registry is **engine-internal**: only shape-generic, parameter-free collates register
+(`"record"` and `"list"` — they differ in one decision, whether array payloads are stacked, and that
+decision belongs to the model). A task's batch shape is parameterized by task-decided state — which
+keys are input and target, an int-id vs multi-hot target, a channels-last transpose — that a bare
+registry string cannot carry; a registered `"tuple"` with baked default keys would be the
+silent-wrong-keys trap. So a task-shaped collate is passed as a callable to the slot that takes one
+(`DataLoader(collate_fn=...)`, `RecordSequence(transform=...)`) and never registered (decided
+2026-08-06; no workspace consumer had ever registered one). Re-registering a key overwrites it.
 
 The open, string-keyed half of the registry exists first and foremost for **AI-callable tools**
 (the workspace converges on an MCP tool surface — see the root `AGENTS.md` end-goal): a JSON tool
-argument can carry `"collate": "yolo"` but never a Python function object, and a tool schema can
+argument can carry `"collate": "list"` but never a Python function object, and a tool schema can
 offer the legal values only if the set is discoverable at runtime (`registered_collates()`). In
 ordinary Python (and in YAML via a dotted `!ref:` to the function), passing the collate function
 directly remains the normal path.
@@ -238,7 +243,7 @@ directly remains the normal path.
 ```python
 from torch.utils.data import DataLoader
 
-from recordstream import Stream, collate, collate_records, get_collate, register_collate
+from recordstream import Stream, collate, collate_records
 
 stream = Stream(source=my_source, ops=[...])
 
@@ -249,13 +254,12 @@ batch["image"].layout                                # per-record attrs -> a lis
 loader = DataLoader(stream, batch_size=8, collate_fn=collate_records)
 
 
-# A task alias registers additively (runs when the defining module is imported).
-@register_collate("yolo")
+# A task's own batch layout is a plain callable, passed straight to the slot — never registered.
 def yolo_collate(items):
     ...  # stack to the task's own batch layout
 
 
-loader = DataLoader(stream, batch_size=8, collate_fn=get_collate("yolo"))
+loader = DataLoader(stream, batch_size=8, collate_fn=yolo_collate)
 ```
 
 ### Addendum: the READ-BACK lives here too (`recordstream.batch`, 2026-07-29)
@@ -293,9 +297,11 @@ mask = batch_tensor(batch, "target").long()               # a segmenter's [N, H,
 
 ### What you may change (and where it's documented)
 
-- **Plugging in your own batch layout** is the supported extension point — decorate a function
-  with `@register_collate("your-key")` and select it via `get_collate`/`collate`. Usage:
-  [kinds.md](kinds.md); the detection walkthrough: [record-model.md](record-model.md).
+- **Plugging in your own batch layout** is the supported extension point — pass your callable to
+  the slot that takes one (`DataLoader(collate_fn=...)`, `RecordSequence(transform=...)`). Register
+  a key only for a collate that is shape-generic and takes no parameters, one a JSON tool argument
+  could name. Usage: [kinds.md](kinds.md); the detection walkthrough:
+  [record-model.md](record-model.md).
 - **Changing the default collate's semantics** (how `"record"` stacks, the attrs-become-lists
   convention) is an architectural change: every batch consumer depends on it. Update this record
   and the recordstream `AGENTS.md` metadata mandate together.
@@ -571,8 +577,9 @@ a **settable property**, and instance identity is the **declared `name`**, which
 
 A property rather than a plain attribute for two reasons: `confluid.accepts_key` admits "public
 settable class attributes", so the property keeps `enabled` overridable independently of the
-signature; and it gives ONE funnel to reject a non-bool, so a quoted YAML `enabled: "true"` fails
-at its `file:line` instead of being silently truthy.
+signature; and it gives ONE funnel to reject a non-bool, so nothing lands as the toggle silently truthy:
+through the constructor confluid's validation turns a quoted YAML `enabled: "false"` into `False` and
+refuses a typo (`"ture"`) at its `file:line`, and a plain attribute write of a non-bool raises.
 
 The retired form is not silently ignored: a stray public boolean attribute (what `visualize: false`
 now lands as) raises on first record with the replacement spelling in the message.
@@ -735,7 +742,7 @@ ValueError: Unknown task 'export'; expected one of ['fit', 'test'].
   `runnable_entrypoints` rather than beside it — the invariant to preserve is that the markers stay
   the only place the mapping is written down.
 
-## 8. The autograd marker is named for the framework; its FLAG for what it decides (2026-07-29)
+## 8a. The autograd marker is named for the framework; its FLAG for what it decides (2026-07-29)
 
 ### Context
 
@@ -807,7 +814,7 @@ else:
   same rule — name the class for the concern, the flag for the decision the executor makes, and
   remember that a duck-typed read of a missing flag is silent.
 
-## 8. The model boundary belongs to the package that reads it (2026-07-29)
+## 8b. The model boundary belongs to the package that reads it (2026-07-29)
 
 ### Context
 
@@ -838,8 +845,8 @@ A package owns a contract when it owns the reader. So:
 - `class_counts` / `inverse_frequency_weights` land beside `LabelMap`, because how often each
   class occurs is a statistic over the labels.
 
-The line is drawn at the *framework convention*, not at "does this import torch" (this package
-already hard-depends on torch — a `Stream` IS a `torch.utils.data.Dataset`). What did NOT move:
+The line is drawn at the *framework convention*, not at "does this import torch" (torch is an
+optional extra of this package, not a dependency of the engine — record 9). What did NOT move:
 whether a loss accepts a `weight` argument and how to inject it. That is `torch.nn`'s constructor
 convention — Keras takes `class_weight` on `fit()` — so it lives in the consuming runnable as an
 overridable method, and this package never learns what a loss is.
@@ -1897,3 +1904,504 @@ where a breakpoint may sit. What must hold: the run stays the kernel's run (no s
 probe stays transparent to everything the kernel does to an op; snapshots stay references unless
 asked; a rerun rebuilds through the constructor from the live values; a refused value or a refused
 check leaves the trace as it was. Usage: [trace.md](trace.md).
+
+## 23. A subgraph is an op (2026-09-29)
+
+**Context.** A graph that grows past a dozen steps wants a group of them folded into one step — a
+"preparation" block shown as one node, opened when needed, reused in a second place. The flow
+grammar has no such spelling, and three ways of writing one were measured against each other in the
+same file (a grey → scale block ahead of a threshold, on an image whose right answer is a mask with
+mean `0.2855`):
+
+* **YAML anchors merged into `flow:`** (`subgraphs: {prep: &prep {…}}`, then `flow: {<<: *prep, …}`).
+  Runs, but YAML merge puts the merged keys FIRST: a block merged after an outer step still ran before
+  it (`[('twice', …), ('frac', …)]` for a document that wrote `frac` first), so an inner step reading
+  an entry the outer step writes could not be written at all; a second `<<:` in the same mapping
+  vanished without a word; an outer step with an inner step's name silently REPLACED it (the run then
+  died in the wrong op: `ConnectedComponents expects a 2-D mask; got shape (120, 160, 3)`); and a gate
+  inside a merged block read a flag the outer step had not raised yet (`gated_ran False`, silently).
+* **A named definition used by reference** (`subgraphs: {prep: !class:… {…}}`, then
+  `op: !ref:subgraphs.prep`). Every use is ONE object: after a run the first use's `@output` read
+  `0.7145` — the second use's value — instead of its own `0.2855`, and a setting written on one use
+  (`!ref:thr {low_level: 0.2}`) changed the other; written on a dotted target it vanished. The inside
+  was one opaque node.
+* **An op whose body is a flow, written inline in the step that uses it.** Runs (`0.2855`), keeps
+  document order, names are scoped, each use is its own object.
+
+**Decision.** `recordstream.flow.subgraph.Subgraph(steps, result)` is an ordinary
+`@configurable(category="op", group="compose")` class — no new YAML syntax, no confluid change. Its
+`steps` are the flow grammar and its `__call__` hands them to the SAME kernel (`run_steps`, with the
+reader accounting cached): there is no second executor, and no lowering of the inside into the outer
+step list (the §3 mistake in another shape). Five rules, each from a measured break:
+
+* **`result`, never `outputs`**: confluid broadcasts a document's top-level `outputs:` into a
+  constructor parameter of that name — the outer flow's `outputs: boxes` overwrote it and the run
+  failed with `flow: outputs 'boxes' does not name a step`.
+* **Declarations are derived.** `consumes` / `produces` come from the inner ops (by entry name when
+  every inner op declares names, as a tuple of types otherwise), and so do `flags` — without derived flags a
+  graph that runs correctly was refused: `Gated is gated on the flag 'bright',
+  which no node before it raises`. `produces` and `flags` describe the record the subgraph RETURNS:
+  only the inner steps on the `from:` / `merge_from:` lineage of `result` count (amended 2026-09-29 —
+  measured, a `result` naming an earlier step or a sibling branch still declared the other branch's
+  entry and flag, so `check_chain` passed a need that failed at the first record and a gate that ran
+  without its flag; the same steps written flat were refused). `check_chain` gained `raised` (flags raised before a chain starts)
+  so the inside is checked knowing the flags the outer steps raised.
+* **Refused before the first record.** `parse_flow` opens a subgraph right after building it (by duck
+  typing, `FLOW_SUBGRAPH` — `subgraph.py` imports `parse.py`), and a `Stream` opens one when it
+  compiles its ops, so a `result:` naming no inner step, an expanding inner op, an inner reference to a
+  step outside, or a `from:` written inside an inner op's `!class:` marker (measured silently wrong:
+  mask mean `0.0`) is refused naming the outer step and its line — before, some of these failed at the
+  first record with no line, and the outside→inside `bind:` passed the static check and died at run.
+* **A value inside is not read from outside.** An outer `bind: {value: measure.level}` reaching a step
+  inside `measure` is refused; the fix is to move the step out.
+* **Inner nodes are named `prep/grey`.** A tracer lists them after their subgraph step (a child tracer
+  per subgraph step, on the same kernel — `run(until="prep/scaled")` pauses inside it), and a step
+  name may therefore not contain `/`, as `.` was already reserved for `step.attr`.
+
+**Consequences.** Reuse is by copy — a copied block, a steps file kept as a template and inserted as
+a copy, or one steps file named by `steps: {include: prep.steps.yaml}` in each use (each use gets its
+own op objects, measured) — and never by sharing one object. A `bind:` mapping written inside an
+inner op's marker cannot be refused: confluid reads a mapping under a marker as addressed
+configuration and leaves no trace of it on the built op. A `recordstream.Pipeline` step stays one
+opaque node to the tracer. The subgraph's derived `consumes` takes "earlier" as document order, so a
+sibling branch's product counts as available there (every inner step runs, so its needs count); the
+tracer's descent checks each inner node on its own lineage and is exact. A refusal in a nested subgraph
+points at the marker of the subgraph that refuses: the parser reads the nested markers' locations
+before confluid builds them and keeps each on the built subgraph.
+
+**Example.**
+
+```python
+from recordstream.flow import FlowGraph, Subgraph, Tracer
+from recordstream.ops.image import ConvertMode
+from recordstream.ops.numpy import Scale, Threshold
+
+prep = Subgraph(steps={"grey": ConvertMode(mode="L"), "scaled": Scale(source_min=0.0, source_max=255.0)})
+graph = FlowGraph(flow={"prep": prep, "mask": Threshold(low_level=0.5)})
+Tracer(graph).names                 # ['prep', 'prep/grey', 'prep/scaled', 'mask']
+Subgraph(steps={"grey": ConvertMode(mode="L")}, result="nosuch").flow_steps
+# ValueError: Subgraph: result 'nosuch' does not name an inner step (the steps are: ['grey'])
+```
+
+**What you may change.** More derived declarations (`reports`), what the refusals say, descending into
+other composing ops. What must hold: the inside runs on the engine's kernel (no second executor, no
+flattening), every structural refusal comes before the first record, a value inside is not read from
+outside, reuse copies, and a subgraph needs no confluid change. Usage: [graph.md](graph.md#subgraphs-a-flow-used-as-one-op),
+[trace.md](trace.md#inside-a-subgraph).
+
+## 24. A generator's settings are drawn one setting at a time, with the generator as the judge (2026-10-02)
+
+**Context.** A generator — an `Algorithm` whose settings describe one example, such as a synthetic
+radio signal — produces the same record every time, so a training set needs its settings drawn anew
+per record, and every draw has to be an example the generator accepts. Its settings interlock: on a
+radio-cell generator a frame structure forbids data in some subframes, a bandwidth narrows the
+control region, an optional sub-object inherits a parent's value until it is set. Three ways were
+measured or weighed:
+
+* **Draw every setting independently and discard what the generator refuses.** Measured on that
+  generator: 145 of 400 random settings valid; of 993 drawn with one of its two frame structures, 4
+  survived (840 of 1007 with the other). The kept mix is the spec conditioned on validity, which
+  silently drops whatever the rules make rare — a set meant to be 40 % of one kind came out 0.4 %.
+* **A sampler written per generator** that draws in dependency order. Always valid, but it restates
+  the generator's rules (about 25 refusals in that one generator) in a second place that drifts,
+  every generator needs its own, and a user can tune only what its author exposed.
+* **A constraint solver.** The same rules rewritten in a solver's language, a heavy dependency, and
+  sampling a solver's solutions evenly is a problem of its own.
+
+**Decision.** The generator judges, one setting at a time. `recordstream.draws` holds four draws (a fifth, `Grid`, below) —
+`Choice`, `Uniform`, `Span`, `Repeat` — run top to bottom by `draw_settings`; each picks from its own
+distribution, but only among the values for which the setting's object, and every object above it up
+to the generator, rebuild through their constructors and pass `check()`. The objects are rebuilt from
+their constructor parameters read back from same-named attributes (the workspace rule that settings
+stay in the signature), so any `@configurable` class works — a dataclass, an `Algorithm`, a plain
+class — with no registration. Because every step keeps the whole object valid, the last one is valid:
+there is no final rejection. `Choice` picks a value by weight and asks about it, a refused one dropped
+and another picked (given no values: a closed `Literal`, a bool, an integer range of at most 1024);
+`Uniform` tries up to 100 values from its range; `Span` measures the values a list
+of integers accepts one at a time and takes a run covering a share of them (a share, because the
+sensible length depends on an earlier draw — a run of 100 cannot fit a space of 50); `Repeat` grows
+a list one element at a time, the element's first draw deciding whether there is room.
+`recordstream.sources.draw.DrawSource` turns the draws into records: record `i` is drawn from a random
+state seeded by `(seed, i)` alone and carries the drawn generator's settings file under `settings`.
+
+**Consequences.** Measured on the radio-cell generator with its 1000 draws: 1000 valid, the frame
+structures drawn 620 / 380 for an asked 60 / 40, its six bandwidths 156–176 times each, data blocks
+5.2 per frame on one structure and 3.9 on the other (fewer subframes had room); 200 of 200 generated;
+60 of 60 read back by an independent decoder; 5 ms per draw, 55 ms with a `Span` over 110 values,
+against 22–32 ms to generate the example. The order of the draws decides what a later default
+allows: with a sub-object's inherited setting drawn after its parent's, the parent's largest value
+was never drawn (0 of 216); drawn before, it was (50 of 216). A rule checked only inside `compute()`
+is invisible — a generator gives such rules a `check()`. A list that cannot be met raises
+`DrawRefused` with the generator's own message, never an invented answer. A `Repeat` among a
+`Repeat`'s `each` grows a list inside the element being added (2026-10-05): its path runs through
+that element, which its first placement puts in the list. It waited for confluid to build a model
+for a class that contains itself — before that, the self-referring annotation switched validation
+OFF with a warning ("validation is OFF … RecursionError", measured on confluid 0.4.0, where
+`Repeat(count=(-1, 2))` was then accepted). A `field` reaches into a list the settings already hold with `name[i]` — the settings of
+several bursts in one record, each with its own values, are drawn this way — but only to an element
+that exists: an index past the end is a spec error, not a new element, so a list's length stays the
+template's or a `Repeat`'s, never a side effect of a path. A class whose constructor runs its own
+`check()` declares `checked_on_construction = True` and a draw leaves out its second check
+(2026-10-07): a generator whose settings object is deep down every path checked it at every
+rebuild, and with an expensive check (a radio carrier's, 0.23 ms on average) the duplicates
+were 7 s of a 49 s training-set build. A class without the attribute is checked after its
+constructor as before; declaring it on a class whose constructor does not check would let a draw
+accept a value nothing judged. A fifth draw, `Grid` (2026-10-07), draws a number among whole
+multiples of a step: a value drawn from a range is fine for the generator but can be costly for what
+handles it next — a sample rate of 2 389 906.5 Hz over a 100 kHz source made a resampler design a
+14-million-tap filter (0.43 s a call; over 33.3 kHz 1.4 billion taps, a record that never finished),
+while every rate on a 100 kHz grid needed at most 1 501 (8 records in 3.8 s). The grid is the
+spec's to choose — a draw does not know what reads its value — and it is written in the units
+of the setting (`step: 100kHz`), read by `parse_quantity`, which converts prefixes only. Its points
+are tried without replacement in random order, so the draw is uniform over the accepted ones, and a
+linear grid of a million points is never listed.
+
+**Example.**
+
+```python
+import random
+from recordstream.draws import Choice, Repeat, draw_settings
+
+drawn = draw_settings(Traffic(), [Choice(field="road.width"),
+                                  Repeat(field="road.lanes", count=(0, 8), each=[Choice(field="position")])],
+                      random.Random(7))
+drawn.settings.road  # Road(width=2, closed=None, lanes=[Lane(position=0), Lane(position=1)])
+drawn.log            # [('road.width', 2), ('road.lanes[0].position', 0), ('road.lanes[1].position', 1),
+                     #  ('road.lanes', '2 of 2')]
+```
+
+`Traffic` is the generator defined in [sources.md](sources.md#drawing-a-generators-settings-drawsource): a road
+drawn two wide, and the `Repeat` drew two lanes, both of which fit.
+
+**What you may change.** More draws (a normal), more units `parse_quantity` reads, what the refusals say, faster
+judging (checking only the objects a change reaches). What must hold: the generator is the only
+judge — no rule is restated in a draw; every step keeps the object valid, so nothing is rejected at
+the end; a record depends only on the seed, its index and the draws; and the settings file rides the
+record. Usage: [sources.md](sources.md#drawing-a-generators-settings-drawsource).
+
+### Amendment: a Choice asks about the value it picks, and a check remembers its answers (2026-10-08)
+
+**Context.** Choosing the settings was the largest single part of a generated radio record: 19 % of
+8 records' 44.5 s. A check was not slow (0.10-0.17 ms), but one record asked about 6 900 of them, for
+two reasons: a `Choice` built and checked the object for EVERY value before picking one (one offset
+draw checked 547 values to keep one), and a third of the questions had been answered already — the
+same settings judged again, mostly a `Choice` re-checking the value already set.
+
+**Decision.** Two changes, each keeping the generator the only judge. `Choice` picks a value by
+weight and asks about that one; a refused value is dropped and the pick repeated among the rest.
+Each accepted value comes out with its weight's share of the accepted ones, exactly as before — only
+the random numbers are spent differently, so a seed draws other (equally valid) records. And
+`remembered`, a decorator a generator puts on its check: the question is every setting, exactly
+(dataclass fields recursively, arrays by their bytes, a number with its type), plus the method's
+arguments; the answer the return value or the refusal, raised again as a fresh copy. `ignore` leaves
+out settings a part of a check never reads, so a part that does not look at a list the draws keep
+changing is asked once for every version of the list. Rejected: a cache keyed by object identity
+(settings are mutable dataclasses — a slot set in place would keep a stale verdict) and a cheaper
+partial re-check in the draws (it would restate which rules a setting touches — a second judge).
+
+**Consequences.** Measured on 8 generated cellular records: 74 066 rebuilt objects became 23 498 with
+the pick, and the records' time 45.1 s → 37.9 s with both (two runs each).
+Remembering changes no record (compared byte for byte, with and without); the pick changes every
+drawn record, with the same odds (the share of a rare setting over 384 drawn carriers: 5.2 % before,
+5.5 % after). A test that pinned what one seed happens to draw is measured again. A remembered method
+that read anything but the fields — a clock, a global, an ignored setting — would answer wrongly: the
+decorator states the contract, and each user pins it (a check run with and without memory gives the
+same records; an ignored setting replaced by one that fails on any read).
+
+**Example.**
+
+```python
+from recordstream.draws import Choice, draw_settings, remembered, remembering
+
+draw_settings(road, [Choice(field="width", values=[2, 4], weights=[1, 3])], random.Random(0))
+# picks 4 three times in four, 2 once — asking the generator about the value picked only
+
+with remembering(False):          # every question asked again: the same records, slower
+    drawn = draw_settings(road, draws, random.Random(7))
+```
+
+**What you may change.** The memory's size (`REMEMBERED`), what has a fingerprint (more value types),
+the refusal wording. What must hold: a remembered answer is the answer the method gives — the records
+are the same with and without memory; a `Choice`'s odds are each accepted value's weight share.
+
+### Amendment: the settings file names its classes by path (2026-10-12)
+
+**Context.** The settings file was `confluid.dump(settings)`, which names a registered class by its registry key:
+the bare name while no other class has it. That is a statement about the process that WROTE the file. A
+generator's settings written with one package installed stopped loading once a second package with a class of the
+same name was (`'Road' is registered by 2 classes, so a bare lookup cannot choose between them`), and a file read in
+a fresh process failed on the first class nothing had imported yet.
+
+**Decision.** `DrawSource` writes `confluid.dump(settings, qualified=True)`: every class by its importable dotted
+path, which resolves whatever else is registered and imports its own module. confluid keeps the registry key where
+the path imports nothing (a class of the running script, `__main__`; a class built inside a function).
+
+**Consequences.** A settings file reloads in any process that has the packages installed. It is longer (a module
+path per class) and no longer equals `confluid.dump(settings)`; it equals the qualified dump. Files written before
+keep their bare names and load only where those names are still unique.
+
+**Example.**
+
+```python
+record = source[0]
+record["settings"].splitlines()[0]          # '_target_: traffic.Traffic' (the class in module traffic)
+confluid.load(record["settings"])           # the same generator, whatever else is registered
+```
+
+**What you may change.** Nothing about the spelling without a reload test beside a namesake
+(`tests/test_draw_source.py::test_the_settings_file_reloads_beside_another_class_of_the_same_name`): a shorter name
+that holds only in the writing process brings the defect back.
+
+## 25. Discovery categories name a class's role (2026-10-02)
+
+**Context.** Every `@configurable` class lands in the confluid registry, and a front end that
+offers classes to a person — a visual editor's node palette, a discovery service's slot picker, a
+form generator — asks for one kind at a time: `list_classes(category="source")`. So `category=`
+decides where a class can be found. Three cases are easy to get wrong. `Stream` yields records and
+has `__len__`, so it looks like a dataset — but it is the thing that composes a dataset with ops.
+`DatasetSplit` wraps another source, so it looks like an engine — but a person wiring a
+`source:` slot looks for it among the sources. And some classes are meant to be wired by a YAML
+document but never dragged onto a canvas: a label map, a storage reader, a wrapper around a raw
+Python callable.
+
+**Decision.** A category names the role a class plays in a pipeline, not what it resembles.
+
+| category | role | classes |
+|---|---|---|
+| `engine` | composes sources and ops | `Stream`, `JointStream`, `FlowGraph` |
+| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
+| `op` | `Record -> Optional[Record]` | every op meant to be a node |
+| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink` |
+| `value` | produces a value with no record involved | `ClassNamesOutput`, `ClassNamesScan`, `RandomNumber` |
+| `contract` | states what a whole graph takes and delivers | `GraphContract` |
+
+A class wired only by a document carries NO category: `FilterOp` / `WrappedOp` (they hold a raw
+callable no canvas can supply, §5), `LabelMap`, the storage sources, the draws, `RecordSequence`
+(§10). Front ends offer a positive allowlist of categories, so "no category" means "in no palette"
+while the class still loads from YAML. An op also carries `group=`, which is presentation only:
+the folder it is listed under (`numpy`, `image`, `torch`, `structure`, `compose`, `formats`,
+`contract`, `sink`, `debug`).
+
+**Consequences.**
+
+- Applying ops is what makes a class an engine. A view source stays a source, so it is offered
+  wherever a source is.
+- An op without `category="op"` disappears from every palette without an error: an allowlist
+  cannot tell "forgot" from "meant". `tests/test_categories.py` pins the tags so a dropped or
+  renamed tag fails there instead of emptying a picker.
+- `RecordSinkOp`, which writes through a `DataSink` in the middle of a chain, is an `op` in group
+  `sink`, not a `sink`. A predictions sink is neither: its `write(prediction, metadata)` is not
+  `DataSink.write(record)` (§8b, the model boundary).
+- A package `__init__` lists its classes in `__all__`, because a module scan filters on
+  `__module__` and finds nothing in a package (§11, §12).
+
+**Example.**
+
+```python
+import recordstream                           # registers this package's classes
+from confluid import configurable
+from confluid.registry import get_registry
+
+@configurable(category="op", group="image")   # a node, listed under …/Op/image
+class Sharpen: ...
+
+@configurable                                 # loads from YAML, in no palette
+class LookupTable: ...
+
+registry = get_registry()
+registry.list_classes(category="engine")      # {'FlowGraph', 'JointStream', 'Stream'}
+registry.list_classes(category="value")       # {'ClassNamesOutput', 'ClassNamesScan', 'RandomNumber'}
+```
+
+**What you may change.** Add or rename groups freely. Add a category only for a genuinely new
+role, together with the front ends' allowlist and the pins. What must hold: a category names a
+role, every node-facing op carries `op`, and a class wired only by a document carries none.
+
+## 26. A graph root's record entry is wired by the key it is read from (2026-10-04)
+
+**Context.** A graph root (`GraphContract`) declares the records it delivers by the HOST's names —
+`records: {input: Image, target: Label}` — because the host reads one shape whatever dataset is wired
+in. A source writes its own keys: a HuggingFace source writes `image` and `class`. Measured on a
+classification root fed by MNIST: every record refused, `classification source: record #0 has no
+entry 'input' (expected Image); present: image[Image], class[Label], hf_path[Label], hf_split[Label]`.
+The person had to know both spellings and place two rename steps, which nothing on the canvas
+suggested. Three ways were weighed:
+
+* **Match by type.** The root needs an Image and a Label; take the record's Image and its Label. MNIST's
+  records carry THREE Labels (`class`, `hf_path`, `hf_split`), so type alone picks wrongly or must ask.
+* **Rename steps the person places** (`RenameField image → input`). Works today; it is exactly what
+  the person could not discover.
+* **The person wires the entry.** The root's entries are inputs on the canvas, a source's declared
+  entries (`produces`) are outputs, and the wire is saved as the key: `delivered: {input: image}`.
+
+**Decision.** The third. `delivered` already holds what the drawing wired into the root, so a wired
+record entry joins it as a plain word — the key it is read from. `stream()` puts one step of its own
+before the `RecordContract` it appends (`WiredEntries`): it checks each wired entry under its key and
+hands the record on with it under the root's name. `RecordContract` gained no setting — measured with a
+first version that gave it an `entries` setting: every pane's boundary card grew a field nobody sets, a
+shipped canvas went stale and a settings form counted 15 fields instead of 14. `WiredEntries` is
+`@configurable` WITHOUT a category: no palette offers it, but a host that SAVES the stream a root hands
+on (a workspace file dumps the stream it lists) gets it back — measured 2026-10-05 with a plain class:
+`dump: … has no reconstructible document spelling` on save, then `Failed to construct … missing 3
+required positional arguments` when the saved workspace was opened again. An entry nothing is wired into is read under its own name,
+so a chain that already writes `input` needs no wire. A source declares the entries every record
+carries with the same `produces` an op uses — the SOURCE API: a property answered from the source's
+current settings, so the outputs an editor draws follow the dataset (`HuggingFaceSource.produces` reads
+the dataset's description, never a row, and remembers it per process: measured 1.5–4 s the first time,
+0 ms after). The image and the label keep the keys `image` and `class` whatever the dataset calls its
+columns: the source's two settings already say which column is which, so every consumer reading
+`image` / `class` works on any dataset unchanged. Naming them after the columns was weighed and
+dropped (2026-10-04): each training config would have had to repeat the column names.
+
+**Consequences.** The rename is one place (the boundary) and the drawing says it. The record leaving
+the boundary is a new dict whenever an entry is wired; with none, no step is added and the record
+object passes through unchanged as before. Because a `delivered:` key is broadcast by confluid into a
+sibling that takes a parameter of that name, a record entry gets the output slots' refusal (an entry
+named like a parameter of a delivered object), and an entry may not share a name with an output.
+Only declared entries can be wired; a source that declares nothing still works through the
+unwired, own-name path.
+
+**Example.**
+
+```python
+contract = GraphContract(
+    name="classification source",
+    outputs={"stream": "Stream", "classes": "List[str]"},
+    records={"input": "Image", "target": "Label"},
+    delivered={"stream": Stream(source=records), "classes": ["cat", "dog"], "input": "image", "target": "class"},
+)
+contract.wired_entries()          # {'input': 'image', 'target': 'class'}
+next(iter(contract.stream()))     # {'input': Image, 'target': Label, …the other entries}
+```
+
+**What you may change.** What the refusals say; more sources declaring `produces`. What must hold:
+the wire is saved as the key (a word, never a reference to an object), the move happens only at the
+root's boundary, and an unwired entry keeps its own name. Usage:
+[graph-contract.md](graph-contract.md#wiring-a-record-entry-the-roots-names-the-sources-keys).
+
+## 27. A graph root declares the slots the host can do without apart, under `optional` (2026-10-05)
+
+**Context.** A workspace takes records from two graphs: its source graph (a dataset) and its files
+graph (the pictures a person drops). Both need a class list to annotate against. The files graph's
+list lived on a loose `ClassNamesOutput` card that nothing was wired to and that shipped empty, so
+dropped pictures had no list (measured: names `∅` → a dropped record's classes `[]`). Requiring a
+`classes` output on the files root would make the person type the dataset's list a second time;
+leaving it out of the root gives the canvas no socket to wire. The person picked: typed into the
+files graph, the list is that; left unwired, dropped pictures use the source graph's (user decision
+2026-10-05).
+
+**Decision.** `GraphContract` gains `optional: {slot: kind}` beside `outputs`. `outputs` keep their
+meaning — every one required, `missing()` lists the unwired ones — and an optional slot is never
+missing. Wired, it gets the same checks as an output (kind, an empty typed list, a producer that
+declares nothing) and `class_names` reads it the same way. The declaration refuses a slot that is
+both required and optional, and runs the broadcast-collision rule over optional slots too.
+
+**Consequences.** A reader of a root sees which slots must be wired (`outputs`) and which the host
+answers itself (`optional`); an editor draws an optional socket without the required mark. The
+host owns the fallback — this class says nothing about what the host does instead — so an optional
+slot is only declared where a host has an answer for it.
+
+**Example.**
+
+```python
+files = GraphContract(
+    name="classification files",
+    outputs={"stream": "Stream"},
+    optional={"classes": "List[str]"},
+    delivered={"stream": Stream(source=records)},
+)
+files.missing()      # []  — the class list is left to the host
+files.class_names    # []  — and the host answers with its source graph's list
+```
+
+**What you may change.** The refusal wording; more optional slots, each with the host's answer
+named in its docs. What must hold: `outputs` stay required, and an optional slot, once wired, is
+checked exactly like an output. Usage: [graph-contract.md](graph-contract.md#a-slot-the-host-can-do-without-optional).
+
+## 28. A dataset run builds its records in workers, by index (`DatasetProcessor(workers=N)`, 2026-10-08)
+
+**Context.** A dataset run whose records are expensive to MAKE ran on one core: a signal
+generator's records (5.8 s each, drawn from `(seed, i)`) are built inside the source, before any op,
+and the two existing parallel routes — `Stream.parallel(n)` and the `Parallel` op — read the
+source in the running process and ship each finished record to a worker for the ops. Measured on 32
+generated records: one core busy of sixteen, 184.5 s. The work had to move into the workers, and
+the sink — which holds per-run state: an index counter, a sidecar, a merged descriptor — had to stay
+in one process so the files come out as a sequential run writes them.
+
+**Decision.** `DatasetProcessor` takes `workers` (default 1, today's run). Above 1 it sends each
+record's INDEX to a spawn worker, which builds `source[i]` and runs the stream's ops on it (the
+compiled steps of `linear_steps`, the same kernel as the sequential route); the source and the
+steps are pickled once into each worker by the pool's initializer. The running process yields the
+results in index order to the sink. At most `2 × workers` records are being built or waiting: the
+next index is handed out only when the oldest result has been yielded. A source without `len()` and
+`[i]`, a stream-level op (a worker cannot start workers) and a `chunk_size` are refused before the
+first record, each naming the setting that resolves it — never a silent fallback to one core.
+
+Rejected: dispatching indices from `Stream.parallel` (it would change what every existing caller
+pickles — the whole source instead of each record — and its contract); a `workers` flag on the
+`recordstream run` CLI (a run's shape lives in its config: one config, three front doors);
+parallel sinks (their per-run state would need merging).
+
+**Consequences.** Output is identical to the sequential run — measured on 390 generated files, every
+one byte for byte the same — because each record depends only on its index and the sink sees the
+same order. The cost is per worker: each imports its packages afresh (a few seconds) and holds the
+record it builds, so N is chosen by a record's peak memory (a 4.1 GB generator record: 8 workers on a
+64 GB machine, not 16). A source whose `[i]` and iteration disagree would write different records;
+the sources here agree.
+
+**Example.**
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  workers: 8
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:my_package.TrafficSource {count: 1000, seed: 7}
+  sink: !class:recordstream.storage.hdf5.HDF5Sink {path: ./runs/traffic.h5}
+```
+
+```text
+32 records: 184.5 s one at a time, 32.4 s on 8 workers, 26.4 s on 16 — identical records
+```
+
+**What you may change.** The in-flight bound (`2 × workers`), the refusal wording, more cases
+refused up front. What must hold: the sink stays in the running process and receives the records in
+index order; a worker builds a record from its index alone; `workers: 1` is the sequential route,
+untouched. Usage: [runnable.md](runnable.md#a-dataset-run-on-several-processes-datasetprocessorworkersn).
+
+## 29. A number written with its unit is a node that IS the number (`Quantity`, 2026-10-09)
+
+**Context.** A setting a person types is often a rate or a frequency, written with its unit — `250k`, `2.5 MSa/s` —
+while the class it configures takes a plain `float` (Hz). The draws already read such numbers (`parse_quantity`,
+§24), but only inside a `Grid`; a graph had no way to hand a step `2.5 MSa/s`. Reading units in every step would
+restate the rule per class; reading them in the configuration layer would make confluid a second language (the root
+ruling "a configuration utility, not a compiler").
+
+**Decision.** The reading is a NODE: `Quantity(value, kind)` is a `float` subclass whose value is
+`parse_quantity(value)`. A `!ref:` to it hands a number setting the number itself, validated like any number — no new
+spelling, no attribute reference (confluid refuses `!ref:node.output`), no change to the class that takes it. A visual
+editor shows a value node whose class IS a scalar with an output of that scalar's type, so the wire meets a number
+setting. `kind` names the KIND (`rate`, `frequency`, `time`) — never the unit the number is in, which stays in the
+value (the 2026-10-07 ruling on `Grid`): the units of a kind are one
+scale (`Hz` and `Sa/s` both 1/s), and the refusal is what a kind buys (`5 ms` typed as a rate). A builder FUNCTION
+returning the float was measured first: confluid builds it, but a visual editor's document model resolves classes only,
+so it could neither draw nor set it.
+
+**Consequences.** Every number setting of every graph can take a written unit without its class changing. The
+reading happens in `__new__` (a float's value is fixed when it is made) — a pure function of two settings, so the
+node stays cheap to build. A `Quantity` is a float everywhere a float is read; its `value` and `unit` stay readable.
+
+**Example.**
+
+```python
+import confluid
+document = confluid.load("rate:\n  _target_: Quantity\n  value: 2.5 MSa/s\n  kind: rate\n"
+                         "taker:\n  _target_: RateTaker\n  rate:\n    _ref_: rate\n")
+document["taker"].rate            # 2500000.0
+Quantity(value="5 ms", kind="rate")
+# DrawSpecError: Quantity: '5 ms' is a time — a rate is written in Hz, Sa/s, S/s or with no unit (250k, 2.5 MSa/s)
+```
+
+**What you may change.** More kinds (a level in dBm), more units `parse_quantity` reads, the refusal's words. What must
+hold: the node IS the number (no wrapper a setting would have to unwrap), one reading rule (`parse_quantity`), a
+number with no unit is taken as it is. Pins: `tests/test_quantity.py`.
+

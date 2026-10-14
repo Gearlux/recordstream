@@ -21,7 +21,8 @@ contract appends a `RecordContract` as the delivered stream's last op.
 | `inputs` | `{slot: kind}` the HOST provides when it runs the graph | `{files: "List[str]"}` |
 | `outputs` | `{slot: kind}` the graph must deliver — EVERY entry is required | `{stream: Stream, classes: "List[str]"}` |
 | `records` | `{entry: item type}` every record of a delivered stream carries | `{input: Image, target: Label}` |
-| `delivered` | `{slot: value}` — what the drawn graph wired into each output; written by the editor, read by the host | `{stream: !ref:stream, classes: [cat, dog]}` |
+| `optional` | `{slot: kind}` the graph MAY deliver — only where the host has its own answer when it is left unwired | `{classes: "List[str]"}` |
+| `delivered` | `{slot: value}` — what the drawn graph wired into each output, and into each `records` entry the key it is read from; written by the editor, read by the host | `{stream: !ref:stream, classes: [cat, dog], input: image}` |
 
 A kind is one of the graph slot kinds — `Stream`, `Source`, `Sink`, `Op`, `Record`, `List[str]`,
 `str`, `int`, `float`, `bool` — or any registered item type name (`Image`, `Label`, `Boxes`, …).
@@ -56,6 +57,62 @@ contract.class_names             # ['0', '1', …, '9'] — read from the wired 
 
 `stream()` never rewrites the delivered Stream (it is the document's object); the returned
 Stream carries `class_names` too, so the vocabulary travels with the records.
+
+## Wiring a record entry: the root's names, the source's keys
+
+A host reads records by the root's names (`input`, `target`); a source writes its own (a
+HuggingFace source writes `image` and `class`, and declares them in `produces`). A visual editor
+draws each `records` entry as an input of the root and each declared entry of a source as an
+output; a wire from `image` into `input` is saved as the key it is read from:
+
+```yaml
+data: !class:recordstream.sources.huggingface.HuggingFaceSource {path: ylecun/mnist}
+stream: !class:recordstream.core.stream.Stream
+  source: !ref:data
+contract: !class:recordstream.ops.contract.GraphContract
+  name: classification source
+  outputs: {stream: Stream, classes: "List[str]"}
+  records: {input: Image, target: Label}
+  delivered:
+    stream: !ref:stream
+    classes: !ref:data
+    input: image                # the root's `input` is the source's `image`
+    target: class
+```
+
+`stream()` hands every record on with those entries under the root's names — the host sees
+`input` and `target`, the other entries ride along — and `wired_entries()` answers
+`{"input": "image", "target": "class"}`. No rename step is drawn: the wire says it. An entry
+nothing is wired into is read under its own name, so a chain that already writes `input` needs
+no wire.
+
+The same refusal the outputs get covers a wired entry: an entry named like an output, or like a
+constructor parameter of a delivered object, is refused at declaration time (confluid would push
+the key into that parameter).
+
+## A slot the host can do without (`optional`)
+
+Every entry of `outputs` is required. A slot the host has its own answer for is declared apart,
+under `optional`: a graph of dropped files may type its own class list, and when it leaves the slot
+unwired the host uses its source graph's. Wired, an optional slot is checked like an output (an
+empty typed list is refused); unwired, it is never missing.
+
+```yaml
+class_list: !class:recordstream.ops.contract.ClassNamesOutput {names: [cat, dog]}
+contract: !class:recordstream.ops.contract.GraphContract
+  name: classification files
+  inputs: {files: "List[str]"}
+  outputs: {stream: Stream}
+  optional: {classes: "List[str]"}
+  records: {input: Image}
+  delivered:
+    stream: !ref:stream
+    classes: !ref:class_list        # leave this line out and the host answers with its own list
+    input: image
+```
+
+A slot declared both under `outputs` and under `optional` is refused, and so is an optional slot
+named like a constructor parameter of a delivered object (the broadcast rule below).
 
 ## A graph with host inputs
 
@@ -145,6 +202,9 @@ so the first one a reader sees is the one to act on:
 | typed something that is not a list | `classification source: 'classes' is a str, not a list of names` |
 | wired a producer that declares no class names | `classification source: 'classes' is delivered by a FilesSource, which declares no class names — wire a source that does (a HuggingFace source has one) or type the names as a list` |
 | asked a sink graph for its stream | `sink: this graph delivers no stream (it delivers: sink)` |
+| declared a slot both as an output and as optional | `g: 'classes' is declared both as an output and as an optional slot — give it one place` |
+| declared a record entry with an output's name | `g: 'stream' is declared both as an output and as a record entry — they are wired into the same place, so give them different names` |
+| wired a record entry to something that is not a key | `classification source: the record entry 'input' is wired to 3 — it names the entry it is read from, a word like 'image'` |
 
 One more is raised where the stream is READ, not where the graph is applied — the `records`
 contract runs as the delivered stream's last op, so a record missing a declared entry is refused
@@ -152,6 +212,12 @@ the moment it is produced:
 
 ```
 classification source: record #0 has no entry 'input' (expected Image); present: note[str]
+```
+
+and, for an entry wired to a key the records lack:
+
+```
+classification source: record #0 has no entry 'image' (wired into 'input', expected Image); present: picture[Image], class[Label]
 ```
 
 ## See also

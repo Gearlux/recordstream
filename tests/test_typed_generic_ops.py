@@ -11,6 +11,8 @@ Each op REUSES its shared math helper, so the op output is pinned identical to t
 (parity). recordstream-only — no domain-package import.
 """
 
+from typing import Optional, Tuple
+
 import numpy as np
 import pytest
 from confluid.registry import get_registry, resolve_class
@@ -75,6 +77,75 @@ class TestConvertToImage:
     def test_no_array_field_raises(self) -> None:
         with pytest.raises(ValueError, match="no array-bearing field"):
             ConvertToImage()({"lbl": Boxes(boxes=[[0, 0, 1, 1]])})
+
+
+class TestConvertToImageSizing:
+    """Each of ``width`` / ``height`` is ``None`` (keep the source's), ``0`` (follow the other, aspect kept) or a size.
+
+    ``_ramp_2d()`` is 8 rows × 10 columns, so an image of it is (H, W) = (8, 10).
+    """
+
+    @staticmethod
+    def _shape(width: Optional[int], height: Optional[int]) -> Tuple[int, ...]:
+        op = ConvertToImage(colormap="gray", width=width, height=height)
+        return tuple(np.asarray(op({"spec": Mask(_ramp_2d())})["image"]).shape)
+
+    def test_a_width_alone_keeps_the_rows(self) -> None:
+        assert self._shape(20, None) == (8, 20, 3)
+
+    def test_a_height_alone_keeps_the_columns(self) -> None:
+        assert self._shape(None, 16) == (16, 10, 3)
+
+    def test_a_width_with_a_zero_height_keeps_the_aspect_ratio(self) -> None:
+        assert self._shape(20, 0) == (16, 20, 3)
+        assert self._shape(15, 0) == (12, 15, 3)
+
+    def test_a_height_with_a_zero_width_keeps_the_aspect_ratio(self) -> None:
+        assert self._shape(0, 16) == (16, 20, 3)
+
+    def test_the_followed_side_is_at_least_one_pixel(self) -> None:
+        # 2 rows × 1000 columns squeezed to 10 wide: 2 × 10 / 1000 = 0.02 rows, which is one row, never none.
+        wide = Mask(np.arange(2 * 1000, dtype=np.float32).reshape(2, 1000))
+        out = np.asarray(ConvertToImage(colormap="gray", width=10, height=0)({"spec": wide})["image"])
+        assert out.shape == (1, 10, 3)
+
+    def test_both_none_keeps_the_source_pixel_for_pixel_whatever_max_size(self) -> None:
+        big = np.arange(600 * 700, dtype=np.float32).reshape(600, 700)  # longer than the default max_size of 512
+        out = np.asarray(ConvertToImage(colormap="gray", width=None, height=None)({"spec": Mask(big)})["image"])
+        assert np.array_equal(out, _render_rgb(big, "gray"))
+
+    def test_both_zero_still_bounds_the_longest_side(self) -> None:
+        # The default (0, 0): the op's behaviour before None existed.
+        big = np.arange(600 * 700, dtype=np.float32).reshape(600, 700)
+        out = np.asarray(ConvertToImage(colormap="gray", width=0, height=0)({"spec": Mask(big)})["image"])
+        assert out.shape == _bound_longest_side(_render_rgb(big, "gray"), 512).shape
+        assert max(out.shape[:2]) == 512
+        assert ConvertToImage(colormap="gray")({"spec": Mask(big)})["image"].shape == out.shape
+
+    def test_both_sizes_still_resize_exactly(self) -> None:
+        assert self._shape(20, 5) == (5, 20, 3)
+
+    def test_a_flip_composes_with_a_kept_side(self) -> None:
+        arr = _ramp_2d()
+        flipped = np.asarray(
+            ConvertToImage(colormap="gray", width=None, height=None, flip_vertical=True)({"spec": Mask(arr)})["image"]
+        )
+        plain = np.asarray(ConvertToImage(colormap="gray", width=None, height=None)({"spec": Mask(arr)})["image"])
+        assert np.array_equal(flipped, plain[::-1])
+
+    @pytest.mark.parametrize("width, height", [(None, 0), (0, None)])
+    def test_a_zero_that_follows_a_kept_side_is_refused(self, width: Optional[int], height: Optional[int]) -> None:
+        # One side kept as it is and the other asked to follow it: there is nothing to follow.
+        with pytest.raises(ValueError, match="ConvertToImage: .*None.*0"):
+            ConvertToImage(width=width, height=height)
+
+    def test_the_sizes_default_to_zero(self) -> None:
+        op = ConvertToImage()
+        assert (op.width, op.height) == (0, 0)
+
+    def test_none_survives_construction_as_none(self) -> None:
+        op = ConvertToImage(width=None, height=32)
+        assert (op.width, op.height) == (None, 32)
 
 
 # --------------------------------------------------------------------------- #
@@ -254,3 +325,39 @@ def test_discovery_tags(name: str, cls: type, group: str) -> None:
     registry = get_registry()
     assert name in registry.list_classes(category="op")
     assert name in registry.list_classes(group=group)
+
+
+class TestConvertToImagePinnedScale:
+    """``vmin`` / ``vmax`` pin the grey scale (2026-10-06).
+
+    Without them the op stretches whatever it is given to the full 0..255 — right for a preview,
+    wrong for a value a step before it already put on a chosen scale: measured on a dB spectrogram
+    normalized to 0..1 relative to its noise floor, the stretch moved the floor from 0 to wherever
+    the window's minimum happened to be. With the bounds given, 0 is black and 1 is white, always.
+    """
+
+    def test_the_bounds_pin_the_scale(self) -> None:
+        ramp = np.linspace(0.0, 1.0, 8 * 10, dtype=np.float32).reshape(8, 10)
+        stretched = np.asarray(ConvertToImage(colormap="gray")({"v": Mask(ramp)})["image"])
+        pinned = np.asarray(ConvertToImage(colormap="gray", vmin=0.0, vmax=2.0)({"v": Mask(ramp)})["image"])
+        assert stretched.max() == 255 and pinned.max() == 127
+        assert stretched.min() == 0 and pinned.min() == 0
+
+    def test_values_outside_the_bounds_are_clamped(self) -> None:
+        arr = np.array([[-1.0, 0.0, 0.5, 1.0, 2.0]] * 2, dtype=np.float32)  # two rows: a 1-row map squeezes to 1-D
+        out = np.asarray(ConvertToImage(colormap="gray", vmin=0.0, vmax=1.0)({"v": Mask(arr)})["image"])
+        assert out[0, :, 0].tolist() == [0, 0, 127, 255, 255]
+
+    def test_a_three_channel_float_array_is_pinned_too(self) -> None:
+        arr = np.full((4, 4, 3), 0.25, dtype=np.float32)
+        out = np.asarray(ConvertToImage(vmin=0.0, vmax=1.0)({"v": Mask(arr)})["image"])
+        assert int(out.min()) == int(out.max()) == 63
+
+    def test_one_bound_alone_pins_that_side(self) -> None:
+        arr = np.array([[0.0, 1.0, 2.0]] * 2, dtype=np.float32)
+        out = np.asarray(ConvertToImage(colormap="gray", vmin=1.0)({"v": Mask(arr)})["image"])
+        assert out[0, :, 0].tolist() == [0, 0, 255]
+
+    def test_a_vmax_not_above_vmin_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="vmax"):
+            ConvertToImage(vmin=1.0, vmax=1.0)

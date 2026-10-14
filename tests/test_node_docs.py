@@ -14,6 +14,8 @@ from confluid import parse_param_docs  # type: ignore[import-not-found]
 
 from recordstream import Pipeline, Transform
 from recordstream.core import FilterOp, JointStream, Stream, WrappedOp
+from recordstream.draws import Choice, Repeat, Span, Uniform
+from recordstream.flow import Subgraph
 from recordstream.ops.configure import ConfigureOp
 from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
@@ -25,16 +27,22 @@ from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
 from recordstream.ops.target import CocoToTorchVisionDetection, DecodeTarget, EncodeTarget, MasksToDetectionBoxes
 from recordstream.ops.torch import ToTensor
-from recordstream.sources import HuggingFaceSource
+from recordstream.sources import DrawSource, HuggingFaceSource
 
 _NODE_CLASSES = [
     HuggingFaceSource,
+    DrawSource,
+    Choice,
+    Uniform,
+    Span,
+    Repeat,
     Stream,
     JointStream,
     FilterOp,
     WrappedOp,
     Transform,
     Pipeline,
+    Subgraph,
     Threshold,
     ConnectedComponents,
     ConvertToImage,

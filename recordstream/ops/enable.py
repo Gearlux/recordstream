@@ -74,7 +74,9 @@ class Enable:
       * ``ops`` is required and must be a non-empty list — validated **lazily**
         on first call (zero-arg construction stays valid per the recordstream
         "Partial Initialization & Zero-Arg Construction" convention).
-      * ``enabled`` must be a ``bool``; a non-bool raises ``TypeError`` at set time.
+      * ``enabled`` must be a ``bool``; a non-bool raises ``TypeError`` at set time. Through the
+        constructor, confluid's validation first turns an accepted ``"true"`` / ``"false"`` into the
+        bool and refuses any other string.
       * Any OTHER boolean attribute set on the wrapper raises ``ValueError`` on
         first call. That is the migration guard for the retired dynamic-toggle
         form (``visualize: false`` as a bare kwarg), which would otherwise be

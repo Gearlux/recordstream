@@ -11,7 +11,7 @@ Part of the **Modular Quartet**: `Loggair`, `Confluid`, `Liquifai`, and `RecordS
 -   **Type-dispatched native ops:** a `Transform` samples its parameters once per record and applies a per-type kernel to every value it handles — teach an existing op a new value type with one `@MyOp.kernel(NewType)` registration.
 -   **Graph pipelines:** readable [`flow:` documents](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) of named steps — `from:` forks, `merge_from:` merges, `bind:` feeds one step's value into another's parameter. An `ops:` list is the same engine's linear spelling; both parse to one step graph.
 -   **Debug a graph:** [`Tracer`](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) runs one record through a `Stream` or a `FlowGraph` on the engine's own kernel — stop before a node, see what every node received and produced, rerun one node with a new value and recompute only from there.
--   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context; [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
+-   **High Performance:** Native multiprocess support via `.parallel(workers=N)` using the safe `spawn` context. At most `window × N` records are in flight (`.parallel(workers=N, window=2)`, `2` the default) and each is dropped once yielded, so memory stays flat however long the source; records come out in source order, so widen `window` when a few records take far longer than the rest. The `Parallel` op takes the same two settings in a config (`!class:recordstream.ops.parallel.Parallel` with `workers: 4` and `window: 2`). [1→N expanding ops](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md#1n-expanding-ops-iterable-only-pipelines) flatten in every route.
 -   **Advanced Storage:** HDF5, Zarr and Directory backends with matching read-back sources and [metadata-only querying](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md#queryable-metadata-recordstreamstoragequery) — filter stored datasets without loading a single array.
 -   **Passive Introspection:** ops declare the value types they [handle / consume / produce](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) and are discoverable by category for visual editors and schema generators.
 -   **Algorithms:** declare what an op is tuned by, reads and computes (`Param` / `Input` / `Output`) and write `compute()`. The [record handling, the constructor, the settings schema and the chain contract](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) are derived from those declarations.
@@ -214,6 +214,74 @@ edits its record in place is flagged `in_place`. Measured over 200 records of 64
 0.103 ms per record plain, 0.161 ms traced (0.027 ms of it the static check). Walkthrough:
 [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md).
 
+### A flow used as one op (`Subgraph`)
+
+A `Subgraph` is a `flow:` mapping written inside the step that uses it. The outer flow sees ONE step;
+its inside runs on the same kernel as any flow, on the record that step receives:
+
+```yaml
+flow:
+  prep:
+    op: !class:recordstream.flow.subgraph.Subgraph
+      steps:
+        grey:
+          op: !class:recordstream.ops.image.ConvertMode {mode: L}
+        scaled:
+          op: !class:recordstream.ops.numpy.Scale {source_min: 0.0, source_max: 255.0, target_min: 0.0, target_max: 1.0}
+      result: scaled
+  mask:
+    op: !class:recordstream.ops.numpy.Threshold {low_level: 0.5}
+outputs: mask
+```
+
+On a 120x160 image with two light rectangles on a dark background this yields a mask with mean
+`0.2855`, exactly as the same three steps written flat. `result:` names the inner step whose record
+leaves the subgraph (blank = the last one). The tracer lists the inside:
+`Tracer(graph).names` is `['prep', 'prep/grey', 'prep/scaled', 'mask']`, and
+`run(record, until="prep/scaled")` pauses inside it.
+
+Every mistake in a subgraph written as a flow step's op or as an `ops:` list member is refused **before the first record**, in words, naming the outer step (a subgraph held inside another op's slot — `Enable(ops=[…])`, `RandomApply(op=…)`, `Pipeline(transforms=[…])` — is opened only when that op first calls it):
+
+| you write | you get |
+| --- | --- |
+| `result: nosuch` | `flow step 'prep' (a subgraph): Subgraph: result 'nosuch' does not name an inner step (the steps are: ['grey', 'scaled']) (at demo.yaml:3:9)` |
+| an inner step with `from: grey`, where `grey` is an OUTER step | `… Subgraph: step 'mask' reads 'grey' (from: 'grey'), which is not a step inside this subgraph — a step inside a subgraph reads only the record the subgraph receives and the steps before it inside …` |
+| an outer step with `bind: {value: measure.level}`, `level` a step inside `measure` | `flow step 'stamp': bind value='measure.level' reads 'level' of 'measure', which is a subgraph — a step outside a subgraph cannot read a value of a step inside it; move that step out of the subgraph` |
+| a 1→N expanding op inside (here the test op `SgSplit`) | `… Subgraph: step 'split' (SgSplit) is a 1→N expanding op, and a subgraph returns one record per record it receives — move the step out of the subgraph` |
+| a step named `prep/grey` | `flow: step name 'prep/grey' may not contain '/' (reserved for the nodes inside a subgraph …)` |
+
+A subgraph's `consumes`, `produces` and `flags` are read off its inner ops, so `check_chain` and the
+tracer's check see it as the steps it holds: a flag raised inside reaches a gate after it. `produces` and `flags`
+count only the inner steps on the lineage of `result` — the record the subgraph returns.
+
+**Using one subgraph twice** — three ways:
+
+1. **Copy the block.** A second `op: !class:…Subgraph` with the same `steps:` is an independent copy.
+2. **Keep it as a template.** A steps file (next point) kept aside and inserted as a copy wherever it
+   is needed; nothing links the copies back.
+3. **Include one steps file.** Move the steps to `prep.steps.yaml` (a bare steps mapping) and write
+   `steps: {include: prep.steps.yaml}` in each use — every use gets its own op objects:
+
+   ```yaml
+   flow:
+     read: {}
+     prep:
+       op: !class:recordstream.flow.subgraph.Subgraph
+         steps:
+           include: prep.steps.yaml
+         result: scaled
+     prep2:
+       from: read
+       op: !class:recordstream.flow.subgraph.Subgraph
+         steps:
+           include: prep.steps.yaml
+   ```
+
+YAML anchors and `!ref:` are not reuse spellings: an anchor merged into `flow:` always runs first
+whatever line it is written on, and a `!ref:` makes every use ONE object, so a setting written on one
+use changes the other. Full guide: [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md#subgraphs-a-flow-used-as-one-op);
+why it is an op: [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md).
+
 ### Writing an op as an algorithm (`Algorithm`)
 
 An algorithm declares its settings, inputs and outputs, and never sees a record:
@@ -242,6 +310,63 @@ Used as an op, it reads each input from the record entry of the same name and wr
 the same way; `keys` names other entries, and `Output(replaces="boxes")` writes back where an input
 was read. Inputs are found by name only, so `check_chain` knows before a run what a pipeline needs.
 Full guide: [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md).
+
+### A training set of valid examples (`DrawSource`)
+
+A generator (an `Algorithm` with no record inputs) gives the same record every time. `DrawSource`
+draws its settings anew per record. The draws run top to bottom, and each picks only among the values
+the generator itself accepts given the draws above it — so every record is a valid example and the
+generator's rules are never restated:
+
+```python
+from recordstream.draws import Choice, Repeat, Uniform
+from recordstream.sources import DrawSource
+
+source = DrawSource(
+    generator=Traffic(),          # an Algorithm whose settings hold a Road with lanes
+    count=1000,
+    seed=7,
+    draws=[
+        Choice(field="road.width"),                                   # every value its Literal allows
+        Choice(field="road.closed", values=[None, 0], weights=[3, 1]),
+        Repeat(field="road.lanes", count=(0, 8), each=[Choice(field="position")]),  # while there is room
+        Uniform(field="speed", low=30, high=120),
+    ],
+)
+source[0]["load"]                 # the generator's output
+source[0]["settings"]             # its drawn settings file: confluid.load() rebuilds that one example
+```
+
+Record `i` depends only on `seed`, `i` and the draws. A list of draws that cannot be met stops with
+the generator's own reason (`DrawRefused: road.width: none of [2, 4] is accepted after nothing drawn —
+Road: a lane off the road …`). The draws are `Choice`, `Uniform`, `Grid` (a number among whole multiples
+of a step, linear, log or power, written with its unit: `low: 1MHz, high: 2.5MHz, step: 100kHz`), `Span`
+and `Repeat`. Full guide: [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md#drawing-a-generators-settings-drawsource);
+why the generator judges: [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md).
+
+### A number written with its unit, as a node (`Quantity`)
+
+A setting a person types is often a rate, a frequency or a time, and a person writes it with its unit. `Quantity` reads
+it — `parse_quantity`'s rule, the one a `Grid`'s numbers follow — and IS the number (a `float`), so a graph wires it
+into any number setting and a settings form shows its `value` where the setting was:
+
+```yaml
+rate:
+  _target_: Quantity
+  value: 2.5 MSa/s          # 250k, 1 MHz, 250 kHz, 1e6, 250000 …
+  kind: rate                # rate (Hz, Sa/s, S/s) · frequency (Hz) · time (s) · any — never the unit
+resampler:
+  _target_: MyResampler     # takes `samplerate: float`
+  samplerate:
+    _ref_: rate             # → 2500000.0
+```
+
+A number written in a unit of another kind is refused, naming what the kind takes:
+
+    Quantity: '5 ms' is a time — a rate is written in Hz, Sa/s, S/s or with no unit (250k, 2.5 MSa/s)
+
+A number with no unit is taken as it is. `parse_quantity(value, units=("Hz",))` refuses any other unit on its own,
+and `quantity_unit(value)` says which unit a number was written in (`'Sa/s'` for `2.5 MSa/s`, `None` for `250000`).
 
 ### Declaring the class vocabulary (`ClassNamesOutput`, `ClassNamesScan`)
 
@@ -294,16 +419,16 @@ wire evaluates it when it saves the graph and writes the resulting list into `na
 | [docs/record-model.md](https://github.com/Gearlux/recordstream/blob/main/docs/record-model.md) | The record data model: a plain dict of typed values, type-dispatched ops and kernels, mixing libraries as-is, custom item types, engines, storage layout |
 | [docs/algorithm.md](https://github.com/Gearlux/recordstream/blob/main/docs/algorithm.md) | Writing an op as an `Algorithm`: `Param` / `Input` / `Output` slots, `compute()`, entry names (`keys`), replacing outputs, what tools derive (`algorithm_spec`, `consumes` / `produces`, the settings schema) |
 | [docs/kinds.md](https://github.com/Gearlux/recordstream/blob/main/docs/kinds.md) | Writing ops (kernels, `field=`, type-changing ops), the collate registry (`collate_records`) + its read-back (`batch_values` / `batch_tensor` / `batch_metadata`), the Keras `RecordSequence` adapter, 1→N expanding ops |
-| [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
+| [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, subgraphs (`Subgraph` — a flow used as one op, and using one twice), expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
 | [docs/graph-contract.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph-contract.md) | what ONE graph must deliver — outputs (all required), the records of a delivered stream, `delivered:` written by the editor, the `classes` slot rule, and every refusal `check()` gives |
-| [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, the JSON trace, every refusal |
-| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, looking inside a subgraph (`prep/grey`), the JSON trace, every refusal |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, `DrawSource` (a generator's settings drawn per record), Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
 | [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
-| [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and the `Capture`/`Apply` context ops) |
-| [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting` |
+| [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and a flow step's `bind:`) |
+| [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting`, a dataset run on several processes (`DatasetProcessor(workers=N)`) |
 | [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
 | [docs/augmentation.md](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
 | [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
