@@ -107,6 +107,26 @@ ops:
 when given one (or when the source item already holds it); a trainer wanting normalized
 cxcywh converts at its own sink/collate — never by storing non-canonical rows in a `Boxes`.
 
+## Padding a picture to a size (`PadImage`)
+
+A picture shorter than its fixed size — a recording that ends before the picture's span does — is padded where it
+ENDS, never stretched: `PadImage` adds rows at the bottom and columns at the right, every added pixel `value` (0:
+black). Its `Boxes` are absolute pixels from the top-left corner, so they and their outlines stay where they were; only
+their `canvas` becomes the new size, which a writer normalizes them by. Run it after the step that makes the boxes.
+
+```yaml
+- !class:recordstream.ops.image.PadImage {height: 1032, value: 0}   # a 504 x 590 picture -> 504 x 1032, rows 590+ black
+```
+
+| setting | meaning |
+| --- | --- |
+| `height`, `width` | the size after the pad, in pixels; `0` keeps that side |
+| `value` | every added pixel, in the picture's own scale |
+| `input_key`, `target_key` | the picture (HWC or 2-D) and its `Boxes` (`image`, `target`); a record without boxes is padded alone |
+
+A picture already larger than the size is refused — `PadImage: the picture at 'image' is 3 x 4 (height x width),
+larger than the 2 x 4 it is padded to — a pad never cuts` — and so is a CHW picture (pad before `ToTensor`).
+
 ## Masks (`ConvertToMask`)
 
 The segmentation counterpart, and the same shape of op — read one field, write a differently-typed item under `output`. A segmentation dataset ships its target as a greyscale/paletted PNG whose pixel values *are* the class ids (an Oxford-IIIT Pet trimap, Cityscapes label ids, a VOC segmentation map); this turns that payload into the `int64` `[H, W]` `Mask` every per-pixel loss expects.
