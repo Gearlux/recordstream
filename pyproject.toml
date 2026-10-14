@@ -1,6 +1,6 @@
 [project]
 name = "recordstream"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Clean, functional data pipelines for ML research and production."
 readme = "README.md"
 authors = [{ name = "Gert Behiels" }]
@@ -19,10 +19,11 @@ classifiers = [
     "Typing :: Typed",
 ]
 # Floors are what this package is actually TESTED against, not the oldest release that
-# once worked: `confluid==0.1.0` is provably unsatisfiable here (liquifai requires
-# confluid>=0.2.0), so the old `>=0.1.0` described a combination nobody could install.
+# once worked. confluid 0.4.1 is the first release whose `to_pydantic` builds a model for a
+# class that contains itself: `Repeat.each` names `Repeat`, and on 0.4.0 that switched the
+# class's validation OFF (`Repeat(count=(-1, 2))` was accepted; 0.4.1 refuses it).
 dependencies = [
-    "confluid>=0.3.0",
+    "confluid>=0.4.1",
     "loggair>=0.2.0",
     "numpy",
     "Pillow",
