@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
+  cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
+  the machine has, `cpu` included, is used as written.
+
 ## [0.1.0a3] — 2026-10-14
 
 ### Added

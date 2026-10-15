@@ -2405,3 +2405,43 @@ Quantity(value="5 ms", kind="rate")
 hold: the node IS the number (no wrapper a setting would have to unwrap), one reading rule (`parse_quantity`), a
 number with no unit is taken as it is. Pins: `tests/test_quantity.py`.
 
+
+## 30. A named device the machine lacks falls back to its best one (`ModelPredict.device`, 2026-10-15)
+
+**Context.** A pipeline document carrying `ModelPredict` names where its model runs, and the document is run on
+machines other than the one it was written on: written on a CUDA box as `device: cuda`, it was refused on a Mac with
+`ModelPredict: device 'cuda' is not available on this machine — available: cpu, mps`, and the only way through was to
+edit the document for each machine.
+
+**Decision.** The device is resolved once, on the first torch model: a named device the machine has is used as
+written; `auto`, or a named one it lacks, takes the machine's best (cuda, then mps, then cpu). A fallback from a NAMED
+device logs one INFO line naming both. The `device` setting itself keeps its value. A refusal was rejected because a
+prediction is the same answer on any device: running on another one costs speed, never correctness, while a refusal
+stops the whole pipeline. A training loop is a different case — one that takes a device at its word keeps a benchmark
+from moving devices silently — and is not this op's concern.
+
+**Consequences.** A document runs on any machine without an edit. `cpu` is always present, so an explicit `cpu` (to
+compare against a GPU run, or to keep a GPU free) is never moved. The log line is the record that a run used another
+device than the document names.
+
+**Example.**
+
+```yaml
+- !class:recordstream.ops.predict.ModelPredict
+    model: !class:<your model wrapper> {checkpoint_path: runs/checkpoints/mnist/last.ckpt}
+    device: cuda
+```
+
+```
+document says   machine has          runs on
+cuda            cpu, cuda            cuda
+cuda            cpu, mps (a Mac)     mps    ModelPredict: device 'cuda' is not available on this machine — running on mps
+mps             cpu, cuda            cuda
+cuda            cpu                  cpu
+cpu             cpu, cuda, mps       cpu
+auto            cpu, mps             mps
+```
+
+**What you may change.** The order among accelerators, the words of the log line. What must hold: a device the machine
+has is used as written, the setting is never rewritten, and a missing device never stops the pipeline. Pins:
+`tests/test_ops_predict.py::TestTheDeviceIsSelectableAndLimitedToTheMachine`.
