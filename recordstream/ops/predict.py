@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 PredictKind = Literal["classification", "detection", "segmentation", "restoration"]
 
 #: Where a torch model runs. ``auto`` picks the best AVAILABLE device (cuda > mps > cpu);
-#: naming one that this machine does not have is an error listing what it does.
+#: a named one runs there when this machine has it, else on the machine's best device.
 DeviceName = Literal["auto", "cpu", "cuda", "mps"]
 
 
@@ -116,8 +116,10 @@ class ModelPredict:
         output: Record field stamped with the prediction (``segmentation`` stamps
             ``<output>_mask``).
         device: Where a torch model runs — ``auto`` (default) picks the best available
-            (cuda > mps > cpu); naming an absent one raises listing this machine's
-            devices. Ignored for a model without a ``.to``.
+            (cuda > mps > cpu); a named one is used when this machine has it, else the
+            machine's best device is (said once in the log), so a pipeline written on a
+            CUDA box runs on a machine without one. ``cpu`` is always present, so it is
+            never moved to a GPU. Ignored for a model without a ``.to``.
         score: Classification only — record field the CONFIDENCE (max probability) is
             ADDED under, as a ``Label``. ``""`` disables it. Declared AFTER ``device``
             on purpose: canvas widget values are POSITIONAL, so a new parameter is
@@ -159,18 +161,23 @@ class ModelPredict:
         self._resolved_device: str = ""
 
     def _resolve_device(self) -> str:
-        """The concrete device for THIS machine — resolved once, on the first torch model."""
+        """The concrete device for THIS machine — resolved once, on the first torch model.
+
+        A named device the machine lacks falls back to the machine's best one rather than
+        refusing: a prediction is the same answer on any device, and a pipeline document is
+        run on machines other than the one it was written on.
+        """
         if not self._resolved_device:
             devices = available_devices()
-            if self.device == "auto":
-                self._resolved_device = "cuda" if "cuda" in devices else ("mps" if "mps" in devices else "cpu")
-            elif self.device in devices:
+            if self.device in devices:
                 self._resolved_device = self.device
             else:
-                raise ValueError(
-                    f"ModelPredict: device {self.device!r} is not available on this machine — "
-                    f"available: {', '.join(devices)}"
-                )
+                self._resolved_device = "cuda" if "cuda" in devices else ("mps" if "mps" in devices else "cpu")
+                if self.device != "auto":
+                    logger.info(
+                        f"ModelPredict: device {self.device!r} is not available on this machine — "
+                        f"running on {self._resolved_device}"
+                    )
         return self._resolved_device
 
     def _model(self) -> Any:

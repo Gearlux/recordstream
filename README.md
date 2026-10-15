@@ -110,7 +110,13 @@ pipeline: !class:recordstream.core.stream.Stream
     - !class:recordstream.ops.predict.ModelPredict
         model: !class:<your model wrapper> {checkpoint_path: runs/checkpoints/mnist/last.ckpt}
         kind: classification        # or detection / segmentation / restoration
+        device: auto                # or cpu / cuda / mps
 ```
+
+`device: auto` runs on the best device the machine has (cuda, then mps, then cpu). A named device runs there when
+the machine has it; one it lacks falls back to the machine's best and logs
+`ModelPredict: device 'cuda' is not available on this machine — running on mps`, so a document written on a CUDA box
+runs anywhere. `cpu` is always present, so it never moves to a GPU.
 
 A viewer reads the stamped `predict*` fields back as layers; `recordstream run` executes
 the same document offline.
