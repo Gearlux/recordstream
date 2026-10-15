@@ -6,9 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`DifferenceSource(source, remove, key, compare)`** (`recordstream.sources.difference`) — `source` without every
+  record whose `key` a record of `remove` also carries (a test set left out of a training pool); `compare` is
+  `value`, `name` (the file name, any folder) or `stem` (that name less its extension). The keys are read through
+  each source's projection, once (`docs/sources.md`).
+
+### Changed
+- `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
+  cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
+  the machine has, `cpu` included, is used as written.
+
 ## [0.1.0a3] — 2026-10-14
 
 ### Added
+- **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
+  columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
+  larger than the size is refused, never cut (`docs/image.md`).
 - **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
   has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
   default, still bound the longest side by `max_size`. A `None` beside a `0` is refused (`docs/image.md`).

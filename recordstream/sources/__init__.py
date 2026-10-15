@@ -14,6 +14,7 @@ Submodules:
     - recordstream.sources.split: DatasetSplit (+ the SplitName Literal)
     - recordstream.sources.range: RangeSource (a contiguous ``[start:stop)`` slice)
     - recordstream.sources.concat: ConcatSource (several indexable sources end to end)
+    - recordstream.sources.difference: DifferenceSource (one source less the records another carries)
     - recordstream.sources.draw: DrawSource (a generator's settings drawn anew per record)
 
 ``__all__`` below is load-bearing, not decoration: a visual editor's node bridge scans this
@@ -23,6 +24,7 @@ second pass — the one that surfaces these nodes — walks exactly this ``__all
 """
 
 from recordstream.sources.concat import ConcatSource
+from recordstream.sources.difference import CompareBy, DifferenceSource
 from recordstream.sources.draw import DrawSource
 from recordstream.sources.files import FilesSource
 from recordstream.sources.huggingface import METADATA_ALL_FEATURES, HuggingFaceSource
@@ -30,8 +32,10 @@ from recordstream.sources.range import RangeSource
 from recordstream.sources.split import DatasetSplit, SplitName
 
 __all__ = [
+    "CompareBy",
     "ConcatSource",
     "DatasetSplit",
+    "DifferenceSource",
     "DrawSource",
     "HuggingFaceSource",
     "FilesSource",

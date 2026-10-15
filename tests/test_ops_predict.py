@@ -102,16 +102,66 @@ class TestTheDeviceIsSelectableAndLimitedToTheMachine:
         op = ModelPredict(model=_Classifier(), kind="classification")
         assert op._resolve_device() in available_devices()
 
-    def test_a_device_this_machine_lacks_is_refused_listing_what_it_has(self) -> None:
-        from recordstream.ops.predict import available_devices
+    @pytest.mark.parametrize(
+        ("named", "machine", "expected"),
+        [
+            # A device the machine has is used as written.
+            ("cuda", ["cpu", "cuda"], "cuda"),
+            ("mps", ["cpu", "mps"], "mps"),
+            ("cpu", ["cpu", "cuda", "mps"], "cpu"),  # an explicit CPU is never moved to a GPU
+            # One it lacks: the machine's accelerator, CUDA before MPS, else the CPU.
+            ("cuda", ["cpu", "mps"], "mps"),
+            ("mps", ["cpu", "cuda"], "cuda"),
+            ("cuda", ["cpu"], "cpu"),
+            ("mps", ["cpu"], "cpu"),
+            # auto: the best device present.
+            ("auto", ["cpu", "cuda", "mps"], "cuda"),
+            ("auto", ["cpu", "mps"], "mps"),
+            ("auto", ["cpu"], "cpu"),
+        ],
+    )
+    def test_a_named_device_the_machine_lacks_falls_back_to_its_accelerator_then_the_cpu(
+        self, monkeypatch: pytest.MonkeyPatch, named: str, machine: "list[str]", expected: str
+    ) -> None:
+        monkeypatch.setattr("recordstream.ops.predict.available_devices", lambda: list(machine))
+        op = ModelPredict(model=_Classifier(), kind="classification", device=named)  # type: ignore[arg-type]
+        assert op._resolve_device() == expected
+        assert op.device == named  # the setting itself is left as written
 
-        machine = available_devices()
-        absent = next((d for d in ("cuda", "mps") if d not in machine), None)
-        if absent is None:  # pragma: no cover - a machine with every device
-            pytest.skip("this machine has every torch device")
-        op = ModelPredict(model=_Classifier(), kind="classification", device=absent)  # type: ignore[arg-type]
-        with pytest.raises(ValueError, match="available"):
-            op._resolve_device()
+    def test_a_fallback_is_said_once_and_a_device_present_is_not(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from loguru import logger
+
+        monkeypatch.setattr("recordstream.ops.predict.available_devices", lambda: ["cpu", "mps"])
+        fallback = ModelPredict(model=_Classifier(), kind="classification", device="cuda")
+        present = ModelPredict(model=_Classifier(), kind="classification", device="mps")
+        seen: "list[str]" = []
+        sink = logger.add(lambda message: seen.append(message.record["message"]), level="INFO")
+        try:
+            fallback._resolve_device()
+            fallback._resolve_device()
+            present._resolve_device()
+        finally:
+            logger.complete()
+            logger.remove(sink)
+        assert [line for line in seen if "ModelPredict" in line] == [
+            "ModelPredict: device 'cuda' is not available on this machine — running on mps"
+        ]
+
+    def test_a_model_moves_to_the_fallback_device(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("recordstream.ops.predict.available_devices", lambda: ["cpu"])
+
+        class _Movable(_Classifier):
+            def __init__(self) -> None:
+                super().__init__()
+                self.moved_to: "list[str]" = []
+
+            def to(self, device: str) -> "_Movable":
+                self.moved_to.append(device)
+                return self
+
+        model = _Movable()
+        ModelPredict(model=model, kind="classification", device="cuda")({"image": np.zeros((4, 4))})
+        assert model.moved_to == ["cpu"]
 
     def test_cpu_is_always_available(self) -> None:
         from recordstream.ops.predict import available_devices

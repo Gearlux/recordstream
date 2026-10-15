@@ -2405,3 +2405,79 @@ Quantity(value="5 ms", kind="rate")
 hold: the node IS the number (no wrapper a setting would have to unwrap), one reading rule (`parse_quantity`), a
 number with no unit is taken as it is. Pins: `tests/test_quantity.py`.
 
+
+## 30. A named device the machine lacks falls back to its best one (`ModelPredict.device`, 2026-10-15)
+
+**Context.** A pipeline document carrying `ModelPredict` names where its model runs, and the document is run on
+machines other than the one it was written on: written on a CUDA box as `device: cuda`, it was refused on a Mac with
+`ModelPredict: device 'cuda' is not available on this machine — available: cpu, mps`, and the only way through was to
+edit the document for each machine.
+
+**Decision.** The device is resolved once, on the first torch model: a named device the machine has is used as
+written; `auto`, or a named one it lacks, takes the machine's best (cuda, then mps, then cpu). A fallback from a NAMED
+device logs one INFO line naming both. The `device` setting itself keeps its value. A refusal was rejected because a
+prediction is the same answer on any device: running on another one costs speed, never correctness, while a refusal
+stops the whole pipeline. A training loop is a different case — one that takes a device at its word keeps a benchmark
+from moving devices silently — and is not this op's concern.
+
+**Consequences.** A document runs on any machine without an edit. `cpu` is always present, so an explicit `cpu` (to
+compare against a GPU run, or to keep a GPU free) is never moved. The log line is the record that a run used another
+device than the document names.
+
+**Example.**
+
+```yaml
+- !class:recordstream.ops.predict.ModelPredict
+    model: !class:<your model wrapper> {checkpoint_path: runs/checkpoints/mnist/last.ckpt}
+    device: cuda
+```
+
+```
+document says   machine has          runs on
+cuda            cpu, cuda            cuda
+cuda            cpu, mps (a Mac)     mps    ModelPredict: device 'cuda' is not available on this machine — running on mps
+mps             cpu, cuda            cuda
+cuda            cpu                  cpu
+cpu             cpu, cuda, mps       cpu
+auto            cpu, mps             mps
+```
+
+**What you may change.** The order among accelerators, the words of the log line. What must hold: a device the machine
+has is used as written, the setting is never rewritten, and a missing device never stops the pipeline. Pins:
+`tests/test_ops_predict.py::TestTheDeviceIsSelectableAndLimitedToTheMachine`.
+
+## 31. A set difference compares one key, decided once (`DifferenceSource`, 2026-10-15)
+
+**Context.** A test set must never reach training, and the two live as separate datasets: a curated test set copied
+out of a pool of recordings, the pool itself feeding a training run. Nothing combined two sources other than end to
+end (`ConcatSource`); leaving the test set out meant a hand-kept exclude list beside each run, which drifts the moment
+the test set changes.
+
+**Decision.** `DifferenceSource(source, remove, key, compare)` keeps the records of `source` whose `key` no record of
+`remove` carries. ONE key, compared one of three closed ways — as it is, by the file name a path ends in, or by that
+name less its extension — because the cases met are a path (the same file), a copy in another folder, and a file
+converted on its way into the other set (`x.pickle` → `x.json`). A domain whose "same record" is something else (every
+window of one recording) writes that name into an entry with a source of its own and compares it as a value; the
+alternatives — a regex knob, a predicate, a list of keys combined — were rejected as a language growing inside a
+view. The keys are read through `project` (a listing of recordings answers without decoding a sample) and the kept
+indices decided once, on first use, like `RangeSource`'s.
+
+**Consequences.** A test set is left out by naming it, and a change to it reaches every run at its next start. A
+record the domain considers "the same" but that agrees on no key is kept: the key is the whole definition, so a
+consumer chooses it with care. `remove` is walked whole once; `source` must be indexable.
+
+**Example.**
+
+```python
+from recordstream.sources import DifferenceSource
+
+pool = [{"file": "/pool/a/x.pickle"}, {"file": "/pool/a/y.json"}, {"file": "/pool/b/x.json"}]
+test = [{"file": "/test/tier1/x.json"}]
+[r["file"] for r in DifferenceSource(source=pool, remove=test, compare="stem")]   # ['/pool/a/y.json']
+[r["file"] for r in DifferenceSource(source=pool, remove=test, compare="name")]   # ['/pool/a/x.pickle', '/pool/a/y.json']
+[r["file"] for r in DifferenceSource(source=pool, remove=test)]                   # all three
+```
+
+**What you may change.** The refusal wording; another way of reading the kept records. What must hold: one key,
+the closed `compare`, both sides read through their projections, a record without the key refused by its index, and
+the kept records in `source`'s order. Pins: `tests/test_difference_source.py`.
