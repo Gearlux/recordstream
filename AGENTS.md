@@ -19,7 +19,7 @@ document); storage sinks write them. On top sits the runnable layer: `recordstre
 | data model | `items.py`, `io.py` (codec), `dispatch.py`, `transform.py` (`Transform`, `Pipeline`), `algorithm.py` |
 | engine | `core/` (`families` → `mapstyle` → `wrappers` → `stream`), `flow/` (`steps` → `parse` → `execute` → `graph`, plus `subgraph`, `trace`) |
 | ops | `ops/`: `numpy`, `image`, `torch`, `target`, `structure`, `formula`, `formats` (`ReadFile`), `contract`, `predict`, `sink`, `debug`, the compose ops |
-| sources | `sources/`: `huggingface`, `files`, `split`, `range`, `concat`, `draw`; `draws.py`; `formats.py` (file-format registry) |
+| sources | `sources/`: `huggingface`, `files`, `split`, `range`, `concat`, `difference`, `draw`; `draws.py`; `formats.py` (file-format registry) |
 | storage | `storage/`: `hdf5`, `zarr`, `directory`, `query`, `cache` |
 | batching | `collate.py`, `batch.py` (read-back), `keras.py`, `loaders.py` |
 | boundaries | `projection.py`, `uri.py`, `labels.py`, `outputs.py`, `predictions.py` |
@@ -199,6 +199,9 @@ Gotchas:
   (`tests/test_files_source_formats.py::TestTheServedListingIsResolvedOncePerFileList`). `source[i]` re-lists a
   `root` folder per access (a new file appears at once); `paths()` is the one-listing answer for every record's file —
   never cache the folder listing to make the index fast (`tests/test_files_source_root.py::TestEveryPathAtOnce`).
+- `DifferenceSource` compares ONE entry (`key`) by a closed `compare` (`value`/`name`/`stem`); a domain's notion of
+  "the same record" is an entry a domain source writes, never a new `compare` spelling or a per-key predicate. It
+  reads both sides' keys through `project` once (§31, `tests/test_difference_source.py`).
 - Identity (§13, `tests/test_dataset_uri.py`): `dataset_uri` is the canonical handle,
   `dataset_url` a link for a person or `None`. Both read stored config only. The free functions
   follow `.source`; a wrapper never decorates the URI; `ConcatSource` answers `None`.

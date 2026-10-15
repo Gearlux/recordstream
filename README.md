@@ -110,7 +110,13 @@ pipeline: !class:recordstream.core.stream.Stream
     - !class:recordstream.ops.predict.ModelPredict
         model: !class:<your model wrapper> {checkpoint_path: runs/checkpoints/mnist/last.ckpt}
         kind: classification        # or detection / segmentation / restoration
+        device: auto                # or cpu / cuda / mps
 ```
+
+`device: auto` runs on the best device the machine has (cuda, then mps, then cpu). A named device runs there when
+the machine has it; one it lacks falls back to the machine's best and logs
+`ModelPredict: device 'cuda' is not available on this machine — running on mps`, so a document written on a CUDA box
+runs anywhere. `cpu` is always present, so it never moves to a GPU.
 
 A viewer reads the stamped `predict*` fields back as layers; `recordstream run` executes
 the same document offline.
@@ -422,11 +428,11 @@ wire evaluates it when it saves the graph and writes the resulting list into `na
 | [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, subgraphs (`Subgraph` — a flow used as one op, and using one twice), expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
 | [docs/graph-contract.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph-contract.md) | what ONE graph must deliver — outputs (all required), the records of a delivered stream, `delivered:` written by the editor, the `classes` slot rule, and every refusal `check()` gives |
 | [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, looking inside a subgraph (`prep/grey`), the JSON trace, every refusal |
-| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, `DrawSource` (a generator's settings drawn per record), Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, `DifferenceSource` (one dataset less another's records), `DrawSource` (a generator's settings drawn per record), Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
-| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
+| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), padding a picture to a size (`PadImage`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
 | [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and a flow step's `bind:`) |
 | [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting`, a dataset run on several processes (`DatasetProcessor(workers=N)`) |
 | [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |

@@ -1,7 +1,7 @@
-# Sources — HuggingFace, splits, ranges, concatenation, drawn settings (`recordstream.sources`)
+# Sources — HuggingFace, splits, ranges, concatenation, differences, drawn settings (`recordstream.sources`)
 
 `recordstream.sources` is a package with **one class per module**. Import from the package —
-`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource, DrawSource` —
+`from recordstream.sources import HuggingFaceSource, DatasetSplit, RangeSource, ConcatSource, DifferenceSource, DrawSource` —
 but spell the **submodule** path in a config, because that is what `cls.__module__` says and
 what a generated config emits:
 
@@ -11,6 +11,7 @@ what a generated config emits:
 | `DatasetSplit` | `split.py` | `recordstream.sources.split.DatasetSplit` |
 | `RangeSource` | `range.py` | `recordstream.sources.range.RangeSource` |
 | `ConcatSource` | `concat.py` | `recordstream.sources.concat.ConcatSource` |
+| `DifferenceSource` | `difference.py` | `recordstream.sources.difference.DifferenceSource` |
 | `DrawSource` | `draw.py` | `recordstream.sources.draw.DrawSource` |
 
 The shorter `!class:recordstream.sources.HuggingFaceSource` still resolves (Confluid falls back to
@@ -303,6 +304,41 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 > `_target_:` source is built at load time and is what the slot wants. The examples above use
 > `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
 > loaded source.
+
+## Leaving out another dataset's records (`DifferenceSource`)
+
+`DifferenceSource(source, remove, key, compare)` is `source` without every record whose `key` some record of
+`remove` also carries — a set difference. The case it is for: a test set is a dataset of its own, the training pool
+is another, and nothing of the test set may reach training.
+
+```yaml
+captures: !class:recordstream.sources.difference.DifferenceSource
+  source: !class:recordstream.sources.files.FilesSource
+    root: ${env:DATA_ROOT}/captures
+    pattern: "**/*.json"
+  remove: !class:recordstream.sources.files.FilesSource
+    root: ${env:DATA_ROOT}/test set
+    pattern: "**/*.json"
+  key: file          # the entry compared (the default)
+  compare: stem      # value (the default) | name | stem
+```
+
+| `compare` | two keys agree when … | `/pool/a/x.pickle` vs `/test/x.json` | `/pool/a/x.json` vs `/test/b/x.json` |
+| --- | --- | --- | --- |
+| `value` | they are equal | kept | kept |
+| `name` | their file names are (any folder) | kept | **left out** |
+| `stem` | their file names less the last extension are | **left out** | **left out** |
+
+- Records are compared by the ONE key, nothing else; every copy of a removed key goes, and the records kept stay
+  in `source`'s order. `removed` says how many went.
+- Only the keys are read to decide, through each source's projection (a source of recordings lists its keys without
+  decoding a sample), once, on first use; the kept records are then read from `source` on demand. `source` must be
+  indexable (`len`, `[i]`); `remove` is only walked.
+- When "the same record" is a notion of the domain — every window of one recording, say — let a domain source write
+  that name into an entry and compare it: `key: capture`.
+- Refused, naming the record: a record without the key (`DifferenceSource: source record 1 has no 'file' entry to
+  compare`), a key `name`/`stem` cannot read as a path, an unhashable value. Rationale:
+  [architecture §31](architecture.md#31-a-set-difference-compares-one-key-decided-once-differencesource-2026-10-15).
 
 ## Drawing a generator's settings (`DrawSource`)
 
