@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`DifferenceSource(source, remove, key, compare)`** (`recordstream.sources.difference`) — `source` without every
+  record whose `key` a record of `remove` also carries (a test set left out of a training pool); `compare` is
+  `value`, `name` (the file name, any folder) or `stem` (that name less its extension). The keys are read through
+  each source's projection, once (`docs/sources.md`).
+
 ### Changed
 - `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
