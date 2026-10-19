@@ -172,3 +172,57 @@ class TestEveryPathAtOnce:
         before = source.paths()
         (tree / "late.txt").write_text("x")
         assert source.paths() == sorted(before + [str(tree / "late.txt")])
+
+
+class TestAnExcludeWithASlashMatchesThePath:
+    """`exclude` is a name glob — `*.tmp` — unless it holds a slash: then it is matched against the path RELATIVE to
+    `root` (fnmatch, so `*` crosses folders), and a whole set of captures is held out by its folder: `*/dvb*/*`. A list
+    source has no root, so a slashed glob matches the whole path there. Why: a hold-out fold trains on every set but
+    one, and a name glob cannot say which folder a file is in."""
+
+    @pytest.fixture()
+    def sets(self, tmp_path: Path) -> Path:
+        for folder in (
+            "wideband/dvb/train",
+            "wideband/dvb_rcs2/train",
+            "wideband/lte/train",
+            "narrowband/airband/train",
+        ):
+            (tmp_path / folder).mkdir(parents=True)
+            (tmp_path / folder / "rec_0.meta").write_text(folder)
+        return tmp_path
+
+    @staticmethod
+    def _relative(source: FilesSource, root: Path) -> List[str]:
+        return [Path(path).relative_to(root).as_posix() for path in source.paths()]
+
+    def test_a_folder_glob_holds_a_set_out(self, sets: Path) -> None:
+        source = FilesSource(root=str(sets), pattern="*/*/train/*.meta", exclude="*/dvb*/*", formats=[])
+        assert self._relative(source, sets) == ["narrowband/airband/train/rec_0.meta", "wideband/lte/train/rec_0.meta"]
+
+    def test_a_glob_without_a_slash_still_matches_the_name_alone(self, sets: Path) -> None:
+        kept = FilesSource(root=str(sets), pattern="*/*/train/*.meta", exclude="rec_1*", formats=[])
+        assert len(kept) == 4
+        none = FilesSource(root=str(sets), pattern="*/*/train/*.meta", exclude="rec_0.meta", formats=[])
+        assert len(none) == 0
+
+    def test_a_slashed_glob_is_anchored_at_the_root(self, sets: Path) -> None:
+        """`dvb/*` names a folder AT the root; the dvb sets are one level down, so nothing is held out — write
+        `*/dvb*/*`."""
+        source = FilesSource(root=str(sets), pattern="*/*/train/*.meta", exclude="dvb/*", formats=[])
+        assert len(source) == 4
+
+    def test_the_list_form_matches_the_whole_path(self, sets: Path) -> None:
+        files = sorted(str(p) for p in sets.glob("*/*/train/*.meta"))
+        source = FilesSource(files=files, exclude="*/dvb*/*", formats=[])
+        assert source.paths() == [f for f in files if "/dvb" not in f]
+
+    def test_a_changed_exclude_re_filters_the_listing(self, sets: Path) -> None:
+        source = FilesSource(root=str(sets), pattern="*/*/train/*.meta", exclude="*/dvb*/*", formats=[])
+        assert len(source) == 2
+        source.exclude = "*/lte/*"
+        assert self._relative(source, sets) == [
+            "narrowband/airband/train/rec_0.meta",
+            "wideband/dvb/train/rec_0.meta",
+            "wideband/dvb_rcs2/train/rec_0.meta",
+        ]

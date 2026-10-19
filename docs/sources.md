@@ -140,6 +140,25 @@ source = FilesSource(root="/data/captures", pattern="*/*/val/*.sigmf-meta")
 files = source.paths()          # one scan; a file added to the folder is in the next answer
 ```
 
+### Holding a folder out (`exclude`)
+
+`exclude` drops files from the listing without reading them. Without a slash it is a name glob —
+`exclude: "*.tmp"` drops every temporary file whatever its folder. With a slash it is matched
+against the path **relative to `root`**, and `*` crosses folders, so a whole set of captures is
+held out by its place in the tree:
+
+```yaml
+source: !class:recordstream.sources.files.FilesSource
+  root: $DATA_ROOT/signal_detection/iq
+  pattern: "*/*/train/*.sigmf-meta"   # every set's training captures …
+  exclude: "*/dvb*/*"                 # … but the folders dvb and dvb_rcs2, one level down
+```
+
+A slashed glob is anchored at the root: `dvb/*` names a folder *at* the root and holds nothing out
+one level down, so a set below the family folders is written `*/dvb*/*`. For a `files` list there is
+no root, and the glob is matched against the whole path. Changing `exclude` on a built source re-filters
+the next listing.
+
 ### Asking a file what it says, without opening it
 
 Some questions about a listing are not worth a decode. *Where was each of these recordings
