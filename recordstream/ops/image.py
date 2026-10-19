@@ -3,12 +3,12 @@
 This is the single home for "turn an arbitrary value into an image": the
 :class:`ConvertToImage` op plus the library functions
 (:func:`value_to_image` / :func:`record_to_image`) that back it and the GUI
-record preview. It lives in recordstream (not waivefront) because the conversion is
+record preview. It lives in recordstream (not in a domain project) because the conversion is
 fully generic — a 2-D map, a CHW tensor, a PIL image, a boolean mask all render
-the same way regardless of domain — so every project (waivefront's spectrogram
+the same way regardless of domain — so every project (a signal project's spectrogram
 render, any image dataset preview, GUI viewer nodes) reuses ONE implementation.
 
-Domain-specific rendering stays in the consuming package: waivefront's
+Domain-specific rendering stays in the consuming package: a signal project's
 ``RenderOverlaysOp`` draws signal-region rectangles on top of the PIL image this
 op produces, and ``RenderSignalPlotOp`` builds IQ time/freq/constellation panels.
 Those need signal semantics; this op does not.
@@ -62,7 +62,7 @@ def normalize_to_uint8(
 
 # Closed set of supported matplotlib colormaps — the SINGLE source of truth for every colormap knob
 # across the workspace (``value_to_image`` / ``record_to_image`` / ``ConvertToImage`` and, via
-# re-export, waivefront's renderers) AND for GUI colormap dropdowns (which read ``COLORMAPS``).
+# re-export, a consuming project's renderers) AND for GUI colormap dropdowns (which read ``COLORMAPS``).
 # A closed ``Literal`` (never a bare ``str``) makes the choice self-documenting and machine-
 # introspectable: visual-editor palettes, navigaitor's form-spec, and MCP tool schemas enumerate the
 # options straight from the annotation via ``typing.get_args`` instead of hard-coding a parallel list
