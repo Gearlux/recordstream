@@ -34,8 +34,13 @@ class FilesSource:
     Args:
         files: The file paths to serve, in the order to serve them.
         name: Id prefix a consuming viewer derives record ids from.
-        exclude: Optional filename glob whose matches are NOT served as records — a
-            manual filter on top of the registry rule (name-level, no file reads).
+        exclude: Optional glob whose matches are NOT served as records — a manual filter on
+            top of the registry rule, no file reads. Without a slash it is matched against each
+            file's NAME (``*.tmp``); with one, against the path relative to ``root`` (the whole
+            path for a ``files`` list), ``*`` crossing folders, so a whole folder of captures is
+            held out by its place: ``*/dvb*/*`` leaves out every file under a folder whose name
+            starts with ``dvb``, one level down. A slashed glob is anchored at the root: ``dvb/*``
+            names a folder AT the root.
         root: Folder to list instead of passing ``files``. ``~`` and ``$VAR`` are expanded,
             so a config can say ``$DATA_ROOT/captures``. Empty (default) = list ``files``.
             Passing both is refused — two answers to "which files" is a config bug, not a
@@ -146,13 +151,23 @@ class FilesSource:
             return cached[1]
         served = listed
         if self.exclude:
-            from fnmatch import fnmatch
-
-            served = [f for f in served if not fnmatch(Path(f).name, self.exclude)]
+            served = [f for f in served if not self._excluded(f)]
         if formats:
             served = [f for f in served if not any(fmt.consumes(Path(f)) for fmt in formats)]
         self._served_cache = (key, served)
         return served
+
+    def _excluded(self, path: str) -> bool:
+        """``exclude``'s verdict on one listed file: a glob holding a slash is matched against the path relative
+        to ``root`` (the whole path for a ``files`` list), one without against the file's name alone."""
+        from fnmatch import fnmatch
+
+        if "/" not in self.exclude:
+            return fnmatch(Path(path).name, self.exclude)
+        if self.root:
+            root = Path(os.path.expanduser(os.path.expandvars(self.root)))
+            return fnmatch(Path(path).relative_to(root).as_posix(), self.exclude)
+        return fnmatch(Path(path).as_posix(), self.exclude)
 
     def paths(self) -> List[str]:
         """Every file this source serves, in record order, from ONE listing — record ``i``'s ``file`` is ``paths()[i]``.

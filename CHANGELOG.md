@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`FilesSource(exclude=…)` holds a FOLDER out** — a glob holding a slash is matched against the path relative to
+  `root` (the whole path for a `files` list), `*` crossing folders: `exclude: "*/dvb*/*"` leaves out every file
+  under a folder whose name starts with `dvb`, one level down. A glob without a slash still matches the file's name
+  alone, as before (`docs/sources.md`).
 - **`DifferenceSource(source, remove, key, compare)`** (`recordstream.sources.difference`) — `source` without every
   record whose `key` a record of `remove` also carries (a test set left out of a training pool); `compare` is
   `value`, `name` (the file name, any folder) or `stem` (that name less its extension). The keys are read through
