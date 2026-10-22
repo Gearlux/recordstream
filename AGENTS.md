@@ -285,6 +285,9 @@ Gotchas:
   records; `workers: 1` stays the untouched sequential route. An unindexable source, a stream-level op
   and a `chunk_size` are refused before the first record, never run on one core silently. §28.
   (`tests/test_processing_workers.py`)
+- `DatasetProcessor(start=N)` resumes a run by building `source[N:]` through a `RangeSource` over a COPY of the
+  stream (the processor's own stream keeps its source); never by skipping records after building them. An
+  unindexable source is refused. §28 amendment (`tests/test_processing_start.py`).
 
 ## Storage
 

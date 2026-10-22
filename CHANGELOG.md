@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`DatasetProcessor(start=N)` resumes a run** — it builds only `source[N:]` (a `RangeSource` over the source), the
+  records a whole run gives at those indices, one at a time or on workers; an unindexable source is refused
+  (`docs/runnable.md`).
 - **`FilesSource(exclude=…)` holds a FOLDER out** — a glob holding a slash is matched against the path relative to
   `root` (the whole path for a `files` list), `*` crossing folders: `exclude: "*/dvb*/*"` leaves out every file
   under a folder whose name starts with `dvb`, one level down. A glob without a slash still matches the file's name

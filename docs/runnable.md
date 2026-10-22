@@ -198,3 +198,22 @@ INDEX, so a source whose records are the expensive part (a generator, a decoder)
 workers too. Rationale: `docs/architecture.md` §28.
 
 Pins: `tests/test_processing_workers.py`.
+
+### Resuming a run: `start`
+
+A run stopped part way resumes where its sink stopped with `start: N`: it builds only `source[N:]`, the records a
+whole run gives at those indices, one at a time or on workers, and never builds the first N again. The sink must
+number its output from N too:
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  start: 7248                         # samples 0-7247 are written
+  workers: 2
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:my_package.TrafficSource {count: 7812, seed: 7}   # record i drawn from (seed, i)
+  sink: !class:my_package.NumberedSink {path: ./runs/traffic, start: 7248}
+```
+
+The source must be indexable; otherwise the run is refused before the first record:
+`DatasetProcessor: start=2 builds the records from source[2] on, and the source (OnlyIterable) cannot be indexed —
+give it len() and [i], or set start: 0`. A `start` past the end builds nothing. Pins: `tests/test_processing_start.py`.
