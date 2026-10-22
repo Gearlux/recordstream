@@ -13,8 +13,12 @@ docked into a visual-editor canvas as a runnable node.
 With ``workers`` above 1 the records are BUILT in spawn worker processes — record ``i`` is
 ``source[i]`` run through the ops in one of them — while the sink stays here and receives them in
 index order (rationale: ``docs/architecture.md``, "A dataset run builds its records in workers").
+
+With ``start`` the run builds only ``source[start:]`` (a :class:`~recordstream.sources.range.RangeSource` over the
+source): a run resumed where its sink stopped, the records before ``start`` never built again.
 """
 
+import copy
 import multiprocessing
 from collections import deque
 from concurrent.futures import Future, ProcessPoolExecutor
@@ -33,12 +37,15 @@ from recordstream.core.stream import linear_steps
 from recordstream.flow import _result_readers, run_steps_multi
 from recordstream.items import Record
 from recordstream.runnable import ProgressReporting
+from recordstream.sources.range import RangeSource
 from recordstream.storage.base import Storage
 
 logger = get_logger(__name__)
 
 #: How many processes build records at once; 1 builds them in the running process, one at a time.
 Workers = Annotated[int, Interval(ge=1)]
+#: The first source index a run builds; 0 builds every record.
+Start = Annotated[int, Interval(ge=0)]
 
 #: How many records per worker may be in flight — being built, or built and waiting for the sink in index order.
 _WINDOW_PER_WORKER = 2
@@ -87,6 +94,8 @@ class DatasetProcessor(ProgressReporting):
             ``"DatasetProcessor"``). Ignored when ``show_progress`` is ``False``.
         workers: How many spawn processes build the records at once — record i is source[i] through the ops,
             the sink gets them in order; 1 (default) builds them here, one at a time.
+        start: The first source index built — a run resumed where its sink stopped builds source[start:] and never
+            the records before; 0 (default) builds every record. The source must be indexable.
     """
 
     def __init__(
@@ -96,12 +105,14 @@ class DatasetProcessor(ProgressReporting):
         show_progress: bool = False,
         progress_desc: Optional[str] = None,
         workers: Workers = 1,
+        start: Start = 0,
     ) -> None:
         self.stream = stream
         self.sink = sink
         self.show_progress = show_progress
         self.progress_desc = progress_desc
         self.workers = workers
+        self.start = start
 
     def run(self) -> None:
         logger.info("Starting DatasetProcessor...")
@@ -127,6 +138,7 @@ class DatasetProcessor(ProgressReporting):
 
         # Drive an executor's progress bar (a GUI canvas) per item — independent of the console
         # ``show_progress`` rich bar; a no-op when no progress callback was injected.
+        stream = _from_start(stream, int(self.start))
         total = _stream_total(stream)
         desc = self.progress_desc or "DatasetProcessor"
         records: Iterable[Any] = stream if workers == 1 else _records_from_workers(stream, workers)
@@ -166,6 +178,25 @@ class DatasetProcessor(ProgressReporting):
             return records
         desc = self.progress_desc or "DatasetProcessor"
         return _ProgressIter(records, total=total, desc=desc)
+
+
+def _from_start(stream: Stream, start: int) -> Stream:
+    """``stream`` building only ``source[start:]`` — a copy over a :class:`RangeSource`, the processor's own stream
+    left as it was — or ``stream`` itself when ``start`` is 0."""
+    if start == 0:
+        return stream
+    if start < 0:
+        raise ValueError(f"DatasetProcessor: start must be >= 0; got {start}")
+    source = stream.source
+    if not (hasattr(source, "__len__") and hasattr(source, "__getitem__")):
+        raise ValueError(
+            f"DatasetProcessor: start={start} builds the records from source[{start}] on, and the source "
+            f"({type(source).__name__}) cannot be indexed — give it len() and [i], or set start: 0"
+        )
+    resumed = copy.copy(stream)
+    resumed.source = RangeSource(source, start=start)
+    logger.info(f"Starting at record {start} of {len(cast(Sized, source))}.")
+    return resumed
 
 
 def _records_from_workers(stream: Stream, workers: int) -> Iterator[Record]:

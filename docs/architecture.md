@@ -2368,6 +2368,16 @@ refused up front. What must hold: the sink stays in the running process and rece
 index order; a worker builds a record from its index alone; `workers: 1` is the sequential route,
 untouched. Usage: [runnable.md](runnable.md#a-dataset-run-on-several-processes-datasetprocessorworkersn).
 
+**Amendment (2026-10-21): `start` resumes a run.** A generator run of thousands of records that stops part way
+(a machine out of memory, a session ended) used to be resumable only by a sink that skips what it holds — every record
+before it was built again to be thrown away (7248 replayed captures, about an hour, to reach the 564 missing). Since
+record `i` is `source[i]` whatever the run, `DatasetProcessor(start=N)` builds `source[N:]` through a `RangeSource`
+over a copy of the stream: the same records at those indices, sequential or on workers, the processor's own stream
+untouched. Rejected: a skip predicate on the sink (the record is built before it is asked), a `start` on each source
+(every source would need it). Example: `DatasetProcessor(stream=Stream(source), sink=sink, start=7248, workers=2)`.
+What you may change: nothing about which records are built — `source[N:]`, in order. Pin:
+`tests/test_processing_start.py`.
+
 ## 29. A number written with its unit is a node that IS the number (`Quantity`, 2026-10-09)
 
 **Context.** A setting a person types is often a rate or a frequency, written with its unit — `250k`, `2.5 MSa/s` —
