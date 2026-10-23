@@ -177,14 +177,14 @@ recordstream = "recordstream.cli:main"
 [project.entry-points."liquifai.apps"]
 recordstream = "recordstream.cli:app"
 
-# Which of this project's extras are ML FRAMEWORKS, for `aisland framework`. Selecting a name
-# here is what makes `aisland setup` add the matching extra to this project's install.
+# Which of this project's extras are ML FRAMEWORKS, for aisland's `framework` selection. Choosing a name
+# is what makes `aisland setup` add the matching extra to this project's install.
 #
 # The core engine is numpy — `torch` powers only `ToTensor` and the output builders, and `keras`
 # only `recordstream.keras`, so a workspace that selects no framework still gets a fully working
 # record engine.
-[tool.aisland]
-frameworks = ["torch", "keras"]
+[tool.aisland.selection.framework]
+choices = ["torch", "keras"]
 
 [tool.setuptools.packages.find]
 where = ["."]
