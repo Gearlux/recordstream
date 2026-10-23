@@ -2378,6 +2378,40 @@ untouched. Rejected: a skip predicate on the sink (the record is built before it
 What you may change: nothing about which records are built — `source[N:]`, in order. Pin:
 `tests/test_processing_start.py`.
 
+**Amendment (2026-10-22): `workers: auto` and the memory guard.** A fixed count is sized for one machine: the
+signal-detection sets said 8 for a 64 GB machine (a record peaks at 4.1 GB in its worker), and on an 18 GB machine 8
+such workers beside another run drove it past 80 GB. The count is now measured on the records and held to while the
+run goes. Each worker measures what a record took (`recordstream.resources.measure`): peak resident memory above
+what it held before the record (`ru_maxrss` — a lifetime peak, so a later, smaller record reads high: the plan errs
+large), the MPS driver's memory added where the GPU shares the machine's memory (1 GB on MPS adds about 80 MB to the
+resident size), CPU over wall time, CUDA's peak and free memory. The running process plans with the largest of each
+(`WorkerGovernor`): the building records' peaks × 1.25, plus the footprint of each worker not started yet, within
+free memory − a reserve of 2 GB or 10 %; with `auto` also within the cores and the GPU. What the started workers hold
+is already missing from free memory and is never charged again: charging every started worker the largest footprint
+measured (one worker keeps a big record's memory, the others do not) planned one record at a time with 4.4 GB free and
+0.5 GB records (the bluetooth quickstart, 2026-10-23), where four fit. `auto` ramps from one record instead of probing first, so no
+record is built twice. The pool is created at the ceiling (`auto`: the core count) and the count is enforced by when
+records are handed out — a process pool cannot resize, a hand-out can. Free memory is read every 0.5 s while
+records build. Under the reserve no record starts; under it with at most one building, the run ends its workers and
+raises `OutOfMemory` — waiting could not make room.
+Rejected: a separate probe phase (it builds records twice or throws them away); killing a worker of several to make
+room (its record would be built again); limiting a fixed count by the cores (that count is the user's call on CPU);
+`OMP_NUM_THREADS=1` in the workers (it changes speed — measured, not set); the same governor for `Stream.parallel`,
+`FlowGraph.parallel` and the `Parallel` op in this change (`TASKS.md`). Consequences: `psutil` is a core dependency
+(no stdlib call reads free memory on macOS); output stays byte for byte that of one at a time (10 generated 5G NR
+records compared). Ending a worker mid-record reads the pool's private `_processes` until Python 3.14's
+`terminate_workers()`.
+Example:
+
+```text
+Building 10 record(s), workers: auto — 1 worker builds record 0 to measure it.
+workers: auto → 2 (memory: 4.2 GB free − 2.0 GB reserve, 1.0 GB a record + 0.3 GB a worker; cores: 12 at 1.0 each)
+```
+
+What you may change: the reserve, the margin, the GPU share, the monitor interval. What must hold: `workers: 1`
+stays the untouched sequential route; the count never rises above the one asked for; no record starts under the
+reserve. Pins: `tests/test_resources.py`, `tests/test_processing_workers.py::TestAuto`, `::TestTheMemoryGuard`.
+
 ## 29. A number written with its unit is a node that IS the number (`Quantity`, 2026-10-09)
 
 **Context.** A setting a person types is often a rate or a frequency, written with its unit — `250k`, `2.5 MSa/s` —

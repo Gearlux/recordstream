@@ -285,6 +285,13 @@ Gotchas:
   records; `workers: 1` stays the untouched sequential route. An unindexable source, a stream-level op
   and a `chunk_size` are refused before the first record, never run on one core silently. §28.
   (`tests/test_processing_workers.py`)
+- `DatasetProcessor(workers=auto)` measures record 0 in one worker, then hands out records while
+  `recordstream.resources.WorkerGovernor` says they fit (memory, cores, CUDA); every multi-worker run
+  keeps the reserve — none starts under it, and under it with at most one building the run ends its
+  workers and raises `OutOfMemory`. The count is enforced by when records are handed out, never by
+  resizing the pool; a fixed count is a ceiling only memory may lower. A worker reads torch from
+  `sys.modules` and never imports it. Default stays `workers: 1` (user decision 2026-10-22). §28
+  amendment 2026-10-22. (`tests/test_resources.py`, `tests/test_processing_workers.py::TestTheMemoryGuard`)
 - `DatasetProcessor(start=N)` resumes a run by building `source[N:]` through a `RangeSource` over a COPY of the
   stream (the processor's own stream keeps its source); never by skipping records after building them. An
   unindexable source is refused. §28 amendment (`tests/test_processing_start.py`).

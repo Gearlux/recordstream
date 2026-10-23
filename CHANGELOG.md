@@ -7,6 +7,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`DatasetProcessor(workers: auto)` picks how many records to build at once** — it measures record 0 in one
+  worker (peak memory, cores, GPU memory), then builds as many at once as the machine's free memory, cores and GPU
+  hold, following the free memory while it runs; the log says what decided the count (`docs/runnable.md`). The
+  default stays `workers: 1`.
+- **A memory guard on every run on workers** — a fixed count is lowered when the measured records do not fit, no
+  record starts while free memory is under the reserve (2 GB, or a tenth of the machine), and a run under it with one
+  record building stops with `recordstream.resources.OutOfMemory` instead of driving the machine into swap.
+- `psutil` is a dependency (it reads the machine's free memory).
 - **`DatasetProcessor(start=N)` resumes a run** — it builds only `source[N:]` (a `RangeSource` over the source), the
   records a whole run gives at those indices, one at a time or on workers; an unindexable source is refused
   (`docs/runnable.md`).

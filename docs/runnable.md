@@ -186,18 +186,68 @@ What a run with workers needs, and what it refuses before the first record:
   start workers — refused, naming the op's position.
 - **No `chunk_size`** on the stream (a stream that hands out lists of records) — refused.
 
-Choose N by a record's peak memory, not only by the core count: every worker holds the record it
-builds, and at most `2 × N` records are being built or waiting for the sink at once (the next
-index is handed out only when the oldest record has gone to the sink). Each worker imports the
-packages afresh when it starts — a few seconds — so a run of a handful of records gains nothing.
-A record that fails stops the run with its own error; the indices not started are cancelled.
+A fixed N is chosen by a record's peak memory, not only by the core count: every worker holds the
+record it builds, and at most `2 × N` records are being built or waiting for the sink at once (the
+next index is handed out only when there is room). Each worker imports the packages afresh when it
+starts — a few seconds — so a run of a handful of records gains nothing. A record that fails stops
+the run with its own error; the indices not started are cancelled.
+
+### Letting the run choose: `workers: auto`
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  workers: auto
+```
+
+The run builds record 0 in one worker and measures it there: the worker's peak memory above what it
+held before the record (on a machine whose GPU shares the memory, what the GPU took is added), the
+cores the record kept busy, the CUDA memory it used. From then on, before each record starts, it
+reads the machine's free memory and starts the record only when all of it fits:
+
+- every building record's planned peak — the largest peak measured, times 1.25 — and the
+  footprint of every worker not started yet, within the free memory less the reserve the run
+  leaves the machine: 2 GB, or a tenth of the machine's memory when that is more (what the started
+  workers hold is already missing from the free memory, and counted once);
+- the cores: a record that keeps 4 cores busy counts as 4;
+- when the records use CUDA, 90 % of the GPU's free memory.
+
+The count follows the free memory while the run goes, and the log says what decided it:
+
+```text
+Building 10 record(s), workers: auto — 1 worker builds record 0 to measure it.
+workers: auto → 2 (memory: 4.2 GB free − 2.0 GB reserve, 1.0 GB a record + 0.3 GB a worker; cores: 12 at 1.0 each)
+```
+
+A record larger than the free memory still builds, alone, with a warning ending `— not even one
+record fits the free memory; building one at a time`. The planner is `recordstream.resources`
+(`WorkerGovernor`); its plan is a `WorkerPlan` of plain numbers.
+
+### The memory guard
+
+Every run on workers — a fixed count or `auto` — keeps the reserve: a fixed count is a ceiling that
+the measured records may lower (`workers: 8 → 2 (memory: …)` in the log), and while free memory is
+under the reserve no record starts:
+
+```text
+Memory: 1.7 GB free, under the 2.0 GB reserve — holding record 57 until a worker finishes (3 building).
+```
+
+Under the reserve with at most one record building, waiting frees nothing, so the run stops — its
+worker ended — with `OutOfMemory` (a `MemoryError`):
+
+```text
+DatasetProcessor: the machine has 1.5 GB free, under the 2.0 GB reserve, while record 1 builds alone (records
+measured so far peak at 4.0 GB) — stopped before the machine swaps; free memory, or build smaller records
+```
+
+`workers: 1` builds in the running process, without the guard.
 
 `Stream.parallel(n)` and the `Parallel` op differ: they read the source in the running process and
 send each record to a worker for the ops — right when the ops are the work. `workers` sends the
 INDEX, so a source whose records are the expensive part (a generator, a decoder) runs in the
 workers too. Rationale: `docs/architecture.md` §28.
 
-Pins: `tests/test_processing_workers.py`.
+Pins: `tests/test_processing_workers.py`, `tests/test_resources.py`.
 
 ### Resuming a run: `start`
 
