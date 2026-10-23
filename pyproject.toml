@@ -39,6 +39,9 @@ dependencies = [
     # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
     # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
     "liquifai>=0.2.0",
+    # `recordstream.resources` reads the machine's free memory and each worker's (`DatasetProcessor(workers=auto)`
+    # and the memory guard of every multi-worker run); no stdlib call reads free memory on macOS.
+    "psutil>=7.2",
 ]
 requires-python = ">=3.12"
 
@@ -70,6 +73,8 @@ dev = [
     "flake8>=6.0.0,<8.0.0",
     "flake8-junit-report>=2.1.0",
     "mypy>=1.0.0,<2.0.0",
+    # psutil, a declared dependency, ships no type hints; without the stubs `import psutil` fails this project's mypy.
+    "types-psutil",
     "pytest>=7.0.0,<9.0.0",
     "pytest-cov>=4.0.0,<7.0.0",
     # CI installs `.[dev]` (unit-tests AND verify-examples), so torchvision here keeps the
