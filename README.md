@@ -483,6 +483,15 @@ Everything else works without either. A `Stream` is map-style (`__len__`/`__geti
 class-balance statistics return numpy, so a non-torch backend converts in one line. Reaching for
 `recordstream.ops.ToTensor` without the extra raises an `ImportError` naming it.
 
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `KERAS_BACKEND` | `torch` / `tensorflow` / `jax`: the Keras 3 backend; unset, `recordstream.keras` picks the first installed one |
+| `DATA_ROOT` | the datasets' folder; a config writes `$DATA_ROOT/...` |
+
+`env.complete` lists them.
+
 ## 📄 License
 
 MIT
