@@ -149,7 +149,7 @@ held out by its place in the tree:
 
 ```yaml
 source: !class:recordstream.sources.files.FilesSource
-  root: $DATA_ROOT/signal_detection/iq
+  root: $DATA_ROOT/Signal Detection/1.0
   pattern: "*/*/train/*.sigmf-meta"   # every set's training captures …
   exclude: "*/dvb*/*"                 # … but the folders dvb and dvb_rcs2, one level down
 ```
