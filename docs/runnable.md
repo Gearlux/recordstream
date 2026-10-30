@@ -296,8 +296,8 @@ runnable: !class:recordstream.processing.DatasetProcessor
 ```
 
 The source must be indexable; otherwise the run is refused before the first record:
-`DatasetProcessor: start=2 builds the records from source[2] on, and the source (OnlyIterable) cannot be indexed —
-give it len() and [i], or set start: 0`. A `start` past the end builds nothing. Pins: `tests/test_processing_start.py`.
+`DatasetProcessor: start=2 builds the records source[2:], and the source (OnlyIterable) cannot be indexed — give it
+len() and [i], or set start: 0 and no stop`. A `start` past the end builds nothing. Pins: `tests/test_processing_start.py`.
 
 `start: resume` asks the sink instead: its `resume_index()` says how many records, from record 0, it already holds
 whole, and the run builds the rest — so the config resumes on its own, whoever runs it. The sink is asked when the
@@ -316,6 +316,24 @@ class NumberedSink:
 A sink without `resume_index()`, or no sink, is refused before the first record: `DatasetProcessor: start: resume
 asks the sink where it stopped, and ListSink has no resume_index() — give it one (how many records from index 0 it
 holds whole) or set start: N`. Pins: `tests/test_processing_resume.py`.
+
+### Building part of a run: `stop`
+
+`stop: N` builds the records before index N only — `source[start:N]`, the records a whole run gives at those indices,
+in their order, one at a time or on workers. It is how a config offers a quick run of its first records:
+
+```yaml
+runnable: !class:recordstream.processing.DatasetProcessor
+  stop: 20                            # records 0-19 only
+  stream: !class:recordstream.core.stream.Stream
+    source: !class:my_package.TrafficSource {count: 7812, seed: 7}
+  sink: !class:my_package.NumberedSink {path: ./runs/traffic_quick}
+```
+
+`stop` with `start: resume` builds what the sink lacks up to N; a `stop` at or before the start builds nothing, and
+one past the end builds to the end. `null` (the default) builds to the source's end. The source must be indexable, as
+for `start`. The plan says it: `stop` beside `start`, and `to_build` counts only the records before it. Pins:
+`tests/test_processing_stop.py`.
 
 ### What a run would do: `plan()`
 

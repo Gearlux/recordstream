@@ -114,6 +114,8 @@ class DatasetProcessor(ProgressReporting):
         start: The first source index built — a run resumed where its sink stopped builds source[start:] and never
             the records before; 0 (default) builds every record; ``resume`` asks the sink how many records it
             already holds (its ``resume_index()``), when the run starts. The source must be indexable.
+        stop: The first source index NOT built — the run builds source[start:stop]; None (default) builds to the
+            source's end. A stop at or before the start builds nothing. The source must be indexable.
     """
 
     def __init__(
@@ -124,6 +126,7 @@ class DatasetProcessor(ProgressReporting):
         progress_desc: Optional[str] = None,
         workers: Workers = 1,
         start: Start = 0,
+        stop: Optional[Annotated[int, Interval(ge=0)]] = None,
     ) -> None:
         self.stream = stream
         self.sink = sink
@@ -131,6 +134,7 @@ class DatasetProcessor(ProgressReporting):
         self.progress_desc = progress_desc
         self.workers = workers
         self.start = start
+        self.stop = stop
 
     def run(self) -> None:
         logger.info("Starting DatasetProcessor...")
@@ -144,7 +148,7 @@ class DatasetProcessor(ProgressReporting):
 
         # Drive an executor's progress bar (a GUI canvas) per item — independent of the console
         # ``show_progress`` rich bar; a no-op when no progress callback was injected.
-        stream = _from_start(stream, _start_index(self.start, sink))
+        stream = _within(stream, _start_index(self.start, sink), self.stop)
         total = _stream_total(stream)
         desc = self.progress_desc or "DatasetProcessor"
         records: Iterable[Any] = stream if workers == 1 else _records_from_workers(stream, workers)
@@ -190,12 +194,15 @@ class DatasetProcessor(ProgressReporting):
             start = _start_index(self.start, sink)
         except ValueError as refused:
             return Plan(title=title, checks=[Check("the start can be found", False, str(refused))])
+        end = records if self.stop is None or records is None else min(records, self.stop)
         details: Dict[str, Any] = {
             "records": records,
             "start": start,
-            "to_build": None if records is None else max(records - start, 0),
+            "to_build": None if end is None else max(end - start, 0),
             "sink": None if sink is None else type(sink).__name__,
         }
+        if self.stop is not None:  # a run to the end plans as it always did
+            details["stop"] = self.stop
         return Plan(title=title, checks=[Check("the source can be read", True)], details=details)
 
     def _materialized(self) -> Tuple[Stream, Any]:
@@ -247,23 +254,30 @@ def _start_index(start: Start, sink: Any) -> int:
     return int(resume_index())
 
 
-def _from_start(stream: Stream, start: int) -> Stream:
-    """``stream`` building only ``source[start:]`` — a copy over a :class:`RangeSource`, the processor's own stream
-    left as it was — or ``stream`` itself when ``start`` is 0."""
-    if start == 0:
+def _within(stream: Stream, start: int, stop: Optional[int]) -> Stream:
+    """``stream`` building only ``source[start:stop]`` — a copy over a :class:`RangeSource`, the processor's own stream
+    left as it was — or ``stream`` itself when ``start`` is 0 and ``stop`` is None."""
+    if start == 0 and stop is None:
         return stream
     if start < 0:
         raise ValueError(f"DatasetProcessor: start must be >= 0; got {start}")
+    if stop is not None and stop < 0:
+        raise ValueError(f"DatasetProcessor: stop must be >= 0; got {stop}")
     source = stream.source
     if not (hasattr(source, "__len__") and hasattr(source, "__getitem__")):
+        setting = f"start={start}" if stop is None else f"stop={stop}" if start == 0 else f"start={start}, stop={stop}"
         raise ValueError(
-            f"DatasetProcessor: start={start} builds the records from source[{start}] on, and the source "
-            f"({type(source).__name__}) cannot be indexed — give it len() and [i], or set start: 0"
+            f"DatasetProcessor: {setting} builds the records source[{start}:{'' if stop is None else stop}], and the "
+            f"source ({type(source).__name__}) cannot be indexed — give it len() and [i], or set start: 0 and no stop"
         )
-    resumed = copy.copy(stream)
-    resumed.source = RangeSource(source, start=start)
-    logger.info(f"Starting at record {start} of {len(cast(Sized, source))}.")
-    return resumed
+    count = len(cast(Sized, source))
+    end = count if stop is None else min(count, stop)
+    sliced = copy.copy(stream)
+    sliced.source = RangeSource(source, start=start, stop=max(end, start))
+    logger.info(
+        f"Starting at record {start} of {count}." if stop is None else f"Building records {start} to {end} of {count}."
+    )
+    return sliced
 
 
 def _records_from_workers(stream: Stream, workers: Union[int, Literal["auto"]]) -> Iterator[Record]:

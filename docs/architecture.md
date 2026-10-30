@@ -2378,6 +2378,14 @@ untouched. Rejected: a skip predicate on the sink (the record is built before it
 What you may change: nothing about which records are built — `source[N:]`, in order. Pin:
 `tests/test_processing_start.py`.
 
+**Amendment (2026-10-30): `stop` ends the slice.** A consuming project wanted a quick run of a config's first records
+(20 replayed captures to look at) without a second source spelling or a count in each source. `stop: N` is the other
+end of the same `RangeSource`: `source[start:stop]`, `None` the source's end; a stop at or before the start builds
+nothing, past the end builds to the end. The plan names `stop` only when it is set, so a run to the end plans as before
+— a workflow comparing plans sees no change. Rejected: a `max_records` count (a resumed run's count would move with its
+start). Example: `DatasetProcessor(stream=Stream(source), sink=sink, stop=20)`. What you may change: nothing about
+which records are built. Pin: `tests/test_processing_stop.py`.
+
 **Amendment (2026-10-22): `workers: auto` and the memory guard.** A fixed count is sized for one machine: the
 signal-detection sets said 8 for a 64 GB machine (a record peaks at 4.1 GB in its worker), and on an 18 GB machine 8
 such workers beside another run drove it past 80 GB. The count is now measured on the records and held to while the
