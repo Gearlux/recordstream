@@ -7,6 +7,26 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A workflow's steps around its runs** (`recordstream.workflow`) — `Require(condition, message)` refuses before
+  anything runs; `ReplaceFolder(path, marker)` empties a folder once, a marker in it making a re-run resume;
+  `RunConfig(config, scopes, settings, …)` runs one config in its own process, a failed one stopping the workflow
+  with its exit status. The conditions `EnvSet`, `FreeSpace` and `HasFiles` join `PathExists` / `Not` / `AllOf` /
+  `AnyOf`, each saying what it checks (`docs/workflow.md`).
+- **`recordstream run <config> --dry-run`** runs nothing: it prints what each step would check, delete, create and
+  run, and exits 1 when a real run would stop; `--plan-format json` prints the plan as one line
+  (`recordstream.workflow.Plan`). A runnable says what it would do through `plan()`; `DatasetProcessor.plan()` gives
+  the records, the start, how many it builds and the sink, or why the source cannot be read.
+- **`Sequence(only=[...])`** runs the steps it names and every step without a name.
+- **`DatasetProcessor(start: resume)`** asks the sink where it stopped — its `resume_index()` — when the run starts
+  (`docs/runnable.md`).
+- A workflow refusal is one `Error:` line and exit 1 (`--debug` keeps the traceback).
+
+### Changed
+- **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
+  check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
+  `checked_first: false` (a `RunConfig`).
+- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
+  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - **`DatasetProcessor(workers: auto)` picks how many records to build at once** — it measures record 0 in one
   worker (peak memory, cores, GPU memory), then builds as many at once as the machine's free memory, cores and GPU
   hold, following the free memory while it runs; the log says what decided the count (`docs/runnable.md`). The
@@ -28,8 +48,6 @@ All notable changes to this project are documented here. The format follows
   each source's projection, once (`docs/sources.md`).
 
 ### Changed
-- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
-  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
   the machine has, `cpu` included, is used as written.

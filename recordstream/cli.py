@@ -18,10 +18,14 @@ Example::
     recordstream run convert.yaml
 """
 
+import json
+import sys
 from typing import Any
 
 from liquifai import LiquifyApp
 from loggair import get_logger
+
+from recordstream.workflow import Plan, PlanFormat, StepFailed, WorkflowError, plan_lines, plan_of
 
 logger = get_logger(__name__)
 
@@ -89,13 +93,21 @@ def materialize_runnable(runnable: Any) -> Any:
 
 
 @app.script_command(flow_mode="manual")
-def run(runnable: Any) -> None:
+def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") -> None:
     """Run any Confluid-instantiated object that exposes ``.run()``.
 
     The YAML config binds the object under the top-level ``runnable:`` key.
     ``flow_mode="manual"`` because :func:`materialize_runnable` does the building
     itself — liquifai's auto deep-flow would bare-flow the node and drop every
     broadcast top-level key (see that function's docstring).
+
+    A workflow's refusal or failed step is one ``Error:`` line on stderr, exit 1 — a failed step's own exit status
+    (``--debug`` keeps the traceback).
+
+    Args:
+        runnable: The object bound under ``runnable:``.
+        dry_run: Run nothing: print what a run would do (the runnable's plan) and exit 1 when a run would stop.
+        plan_format: How the dry run prints its plan: text (lines) | json (one line, for the step that asked).
     """
     if runnable is None:
         logger.error("'runnable' was not bound — provide one under 'runnable:' in your YAML.")
@@ -104,12 +116,44 @@ def run(runnable: Any) -> None:
     runnable = materialize_runnable(runnable)
 
     label = runnable.__class__.__name__
+    if dry_run:
+        _print_plan(plan_of(runnable), plan_format)
+        return
     run_method = getattr(runnable, "run", None)
     if not callable(run_method):
         logger.error(f"The injected runnable ({label}) does not implement 'run()'.")
         return
     logger.info(f"recordstream running: {label}")
-    run_method()
+    try:
+        run_method()
+    except WorkflowError as stopped:
+        if _debugging():
+            raise
+        print(f"Error: {stopped}", file=sys.stderr, flush=True)
+        raise SystemExit(stopped.returncode if isinstance(stopped, StepFailed) else 1) from stopped
+
+
+def _print_plan(plan: Plan, plan_format: PlanFormat) -> None:
+    """Print a dry run's plan; exit 1 when a real run would stop (the plan says so)."""
+    if plan_format == "json":
+        print(json.dumps(plan.to_dict()), flush=True)
+    else:
+        verdict = (
+            f"DRY RUN: a real run would stop — {plan.first_failure}"
+            if plan.would_stop
+            else "DRY RUN: every step would run"
+        )
+        print("\n".join(["DRY RUN: nothing is changed", *plan_lines(plan), verdict]), flush=True)
+    if plan.would_stop:
+        raise SystemExit(1)
+
+
+def _debugging() -> bool:
+    """Whether ``--debug`` is on the command line: then an error keeps its traceback."""
+    from liquifai.context import get_context
+
+    context = get_context()
+    return bool(context is not None and getattr(context, "debug", False))
 
 
 def main() -> None:

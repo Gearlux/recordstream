@@ -267,3 +267,28 @@ runnable: !class:recordstream.processing.DatasetProcessor
 The source must be indexable; otherwise the run is refused before the first record:
 `DatasetProcessor: start=2 builds the records from source[2] on, and the source (OnlyIterable) cannot be indexed —
 give it len() and [i], or set start: 0`. A `start` past the end builds nothing. Pins: `tests/test_processing_start.py`.
+
+`start: resume` asks the sink instead: its `resume_index()` says how many records, from record 0, it already holds
+whole, and the run builds the rest — so the config resumes on its own, whoever runs it. The sink is asked when the
+run starts, never when the config is loaded:
+
+```python
+class NumberedSink:
+    def resume_index(self) -> int:
+        """How many samples from sample 0 are written whole (the last file of each is written last)."""
+        count = 0
+        while (self.folder / f"sample_{count:06d}.json").is_file():
+            count += 1
+        return count
+```
+
+A sink without `resume_index()`, or no sink, is refused before the first record: `DatasetProcessor: start: resume
+asks the sink where it stopped, and ListSink has no resume_index() — give it one (how many records from index 0 it
+holds whole) or set start: N`. Pins: `tests/test_processing_resume.py`.
+
+### What a run would do: `plan()`
+
+`DatasetProcessor.plan()` builds no record: it answers the source's records, the first one built, how many it
+builds and the sink (`records: 1000, start: 312, to_build: 688, sink: NumberedSink`), or — when the source cannot be
+read, an empty folder say — why, as a failed check. `recordstream run <config> --dry-run` prints it
+([workflow.md](workflow.md#the-dry-run---dry-run)).
