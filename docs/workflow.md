@@ -97,7 +97,7 @@ runnable: !class:recordstream.workflow.Sequence
 recordstream run make_store.yaml                          # the whole store
 recordstream run make_store.yaml --scope quick            # the quick store
 recordstream run make_store.yaml store.sets=[labels]      # the checks, then the labels step only
-recordstream run make_store.yaml store.root=/elsewhere --dry-run
+recordstream run make_store.yaml store.root=/elsewhere --dry_run
 ```
 
 - **A config key read inside a string is dotted:** `"${store.root}/images"` reads the config's `store.root`; a
@@ -121,9 +121,9 @@ A `RunConfig` is planned by its own process's dry run, so its config's own check
 sink that cannot say where it stopped). A step whose inputs an EARLIER step writes — the check after a
 conversion — says `checked_first: false`, and is checked when its turn comes.
 
-### The dry run: `--dry-run`
+### The dry run: `--dry_run`
 
-`recordstream run <config> --dry-run` runs nothing: it prints what each step would check, delete, create and run,
+`recordstream run <config> --dry_run` runs nothing: it prints what each step would check, delete, create and run,
 goes on past a step that would stop, and exits 1 when a real run would stop:
 
 ```text
@@ -145,9 +145,19 @@ DRY RUN: nothing is changed
 DRY RUN: every step would run
 ```
 
-`--plan-format json` prints the same plan as one JSON line — what a `RunConfig` reads from its process, and what a
+`--plan_format json` prints the same plan as one JSON line — what a `RunConfig` reads from its process, and what a
 tool returns as is (`recordstream.workflow.Plan.from_dict`). A runnable says what it would do through a `plan()`
 method returning a `Plan`; one without it is planned as `run <Class>`.
+
+`--plan_format` only applies to a dry run. Without `--dry_run` it is refused and nothing runs, so asking for the plan
+never starts a real run; a format other than `text` or `json` is refused too:
+
+```text
+$ recordstream run make_store.yaml --plan_format json
+Error: --plan_format only applies with --dry_run; add --dry_run to print the plan (--plan_format json alone ran nothing)
+$ recordstream run make_store.yaml --dry_run --plan_format xml
+Error: recordstream run: --plan_format must be one of text, json; got 'xml'
+```
 
 A refusal is one `Error:` line and exit 1, a failed step's own exit status; `--debug` keeps the traceback.
 [`examples/workflow_steps.py`](../examples/workflow_steps.py) runs a two-step workflow, its dry run and a refusal.

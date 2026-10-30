@@ -16,7 +16,7 @@ recordstream run config.yaml                   # the same: `run` is the default 
 python -m recordstream.cli run config.yaml     # the same, without the console script
 ```
 
-Every flag and setting is the same with or without `run` (`recordstream config.yaml --dry-run`,
+Every flag and setting is the same with or without `run` (`recordstream config.yaml --dry_run`,
 `recordstream config.yaml max_epochs=3`). The command name wins over a config of the same name: a
 config called `run.yaml` is written with its suffix (`recordstream run.yaml`).
 
@@ -321,5 +321,5 @@ holds whole) or set start: N`. Pins: `tests/test_processing_resume.py`.
 
 `DatasetProcessor.plan()` builds no record: it answers the source's records, the first one built, how many it
 builds and the sink (`records: 1000, start: 312, to_build: 688, sink: NumberedSink`), or — when the source cannot be
-read, an empty folder say — why, as a failed check. `recordstream run <config> --dry-run` prints it
-([workflow.md](workflow.md#the-dry-run---dry-run)).
+read, an empty folder say — why, as a failed check. `recordstream run <config> --dry_run` prints it
+([workflow.md](workflow.md#the-dry-run---dry_run)).
