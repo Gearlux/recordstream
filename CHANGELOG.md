@@ -58,6 +58,12 @@ All notable changes to this project are documented here. The format follows
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
   the machine has, `cpu` included, is used as written.
 
+### Fixed
+- **The dry run of a workflow that cannot be planned is one `Error:` line** — `recordstream run <workflow> "only=[nope]"
+  --dry_run` printed a traceback; it now prints `Error: Sequence: only names nope — the steps are named: …` and exits 1,
+  as the real run does (`--debug` keeps the traceback).
+
+
 ## [0.1.0a3] — 2026-10-14
 
 ### Added
