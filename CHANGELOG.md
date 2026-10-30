@@ -22,13 +22,6 @@ All notable changes to this project are documented here. The format follows
 - **`DatasetProcessor(start: resume)`** asks the sink where it stopped — its `resume_index()` — when the run starts
   (`docs/runnable.md`).
 - A workflow refusal is one `Error:` line and exit 1 (`--debug` keeps the traceback).
-
-### Changed
-- **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
-  check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
-  `checked_first: false` (a `RunConfig`).
-- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
-  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - **`DatasetProcessor(workers: auto)` picks how many records to build at once** — it measures record 0 in one
   worker (peak memory, cores, GPU memory), then builds as many at once as the machine's free memory, cores and GPU
   hold, following the free memory while it runs; the log says what decided the count (`docs/runnable.md`). The
@@ -50,6 +43,11 @@ All notable changes to this project are documented here. The format follows
   each source's projection, once (`docs/sources.md`).
 
 ### Changed
+- **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
+  check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
+  `checked_first: false` (a `RunConfig`).
+- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
+  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
   the machine has, `cpu` included, is used as written.
