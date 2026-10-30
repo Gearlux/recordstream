@@ -18,6 +18,7 @@ is imported lazily inside :func:`_apply_colormap` — only non-``"gray"`` colorm
 need it, so the pure-greyscale path stays matplotlib-free.
 """
 
+import math
 from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, get_args
 
@@ -1349,9 +1350,130 @@ class PadImage(Transform):
         return out
 
 
+#: How :class:`StitchImages` lays its panels out.
+StitchLayout = Literal["row", "column", "grid"]
+STITCH_LAYOUTS: Tuple[str, ...] = get_args(StitchLayout)
+
+
+def _panel_rgb(value: Any, key: str) -> np.ndarray:
+    """An ``Image`` item's pixels as ``(H, W, 3)`` uint8 RGB — never rescaled (a grey panel stays its own grey)."""
+    if not isinstance(value, ImageItem):
+        raise ValueError(f"StitchImages: field {key!r} is {type(value).__name__}, not an Image")
+    pixels = np.asarray(value)
+    if getattr(value, "layout", "HWC") == "CHW" and pixels.ndim == 3:
+        pixels = np.transpose(pixels, (1, 2, 0))
+    if pixels.dtype != np.uint8:
+        pixels = np.clip(pixels, 0, 255).astype(np.uint8)
+    if pixels.ndim == 2:
+        pixels = pixels[..., None]
+    if pixels.shape[2] == 1:
+        pixels = np.repeat(pixels, 3, axis=2)
+    return np.ascontiguousarray(pixels[..., :3])
+
+
+@configurable(category="op", group="image")
+class StitchImages(Transform):
+    """Several ``Image`` entries of a record → ONE ``Image``: in a row, a column or a grid.
+
+    Each panel keeps its own pixels — never resampled. The panels are laid out in ``fields`` order, a row as tall as its
+    tallest panel and a column as wide as its widest, a smaller panel in its cell's top-left corner on ``background``,
+    ``gap`` pixels between cells.
+    ``grid`` is rows of ⌈√n⌉ cells filled row by row. With ``titles``, each panel gets a strip above it holding its
+    name. A field the record lacks is left out; a record holding none of them passes through without ``output``.
+
+    Args:
+        fields: The record keys of the pictures, in the order they are laid out; required to run.
+        layout: ``row`` (side by side), ``column`` (top to bottom) or ``grid`` (rows of ⌈√n⌉ cells).
+        titles: One name per field, drawn in a strip above its panel; ``None`` (default) draws no strips.
+        gap: Pixels of background between two panels.
+        background: The colour of the gaps and of what a smaller panel leaves of its cell (a PIL colour name).
+        title_color: The colour of the titles' lettering (a PIL colour name).
+        font_size: The titles' size in points.
+        output: Record key the stitched ``Image`` is written to (added if new).
+    """
+
+    handles = (ImageItem,)
+    consumes = (ImageItem,)
+    produces = (ImageItem,)
+
+    def __init__(
+        self,
+        fields: Optional[List[str]] = None,
+        layout: StitchLayout = "row",
+        titles: Optional[List[str]] = None,
+        gap: int = 4,
+        background: str = "black",
+        title_color: str = "white",
+        font_size: int = 14,
+        output: str = "image",
+    ) -> None:
+        super().__init__()
+        self.fields = None if fields is None else [str(field) for field in fields]
+        self.layout: StitchLayout = layout
+        self.titles = None if titles is None else [str(title) for title in titles]
+        self.gap = int(gap)
+        self.background = background
+        self.title_color = title_color
+        self.font_size = int(font_size)
+        self.output = output
+
+    def _check(self) -> List[str]:
+        """The fields to lay out — every setting refused here, when the op first runs (built as ``Cls()``)."""
+        if not self.fields:
+            raise ValueError("StitchImages: fields is empty — name the record entries holding the pictures")
+        if self.gap < 0:
+            raise ValueError(f"StitchImages: gap must be 0 or more; got {self.gap}")
+        if self.titles is not None and len(self.titles) != len(self.fields):
+            raise ValueError(
+                f"StitchImages: {len(self.titles)} title(s) for {len(self.fields)} field(s) — give one per field"
+            )
+        return self.fields
+
+    def _titled(self, pixels: np.ndarray, title: str) -> np.ndarray:
+        """``pixels`` under a strip holding ``title``, as wide as the panel."""
+        strip = draw_text(
+            title,
+            width=pixels.shape[1],
+            height=self.font_size + 6,
+            font_size=self.font_size,
+            color=self.title_color,
+            background=self.background,
+            margin=3,
+            wrap=False,
+        )
+        return np.concatenate([strip, pixels], axis=0)
+
+    def __call__(self, record: Record) -> Record:
+        fields = self._check()
+        panels: List[np.ndarray] = []
+        for position, key in enumerate(fields):
+            if key not in record:
+                continue
+            pixels = _panel_rgb(record[key], key)
+            panels.append(self._titled(pixels, self.titles[position]) if self.titles is not None else pixels)
+        if not panels:
+            return record
+        columns = {"row": len(panels), "column": 1}.get(self.layout) or math.ceil(math.sqrt(len(panels)))
+        rows = math.ceil(len(panels) / columns)
+        # A row is as tall as its tallest panel, a column as wide as its widest.
+        heights = [max(panel.shape[0] for panel in panels[row * columns : (row + 1) * columns]) for row in range(rows)]
+        widths = [max(panel.shape[1] for panel in panels[column::columns]) for column in range(columns)]
+        tops = [sum(heights[:row]) + row * self.gap for row in range(rows)]
+        lefts = [sum(widths[:column]) + column * self.gap for column in range(columns)]
+        canvas = np.empty((sum(heights) + (rows - 1) * self.gap, sum(widths) + (columns - 1) * self.gap, 3), np.uint8)
+        canvas[...] = Image.new("RGB", (1, 1), self.background).getpixel((0, 0))
+        for number, panel in enumerate(panels):
+            top, left = tops[number // columns], lefts[number % columns]
+            canvas[top : top + panel.shape[0], left : left + panel.shape[1]] = panel
+        return {**record, self.output: ImageItem(canvas, layout="HWC")}
+
+
 __all__ = [
     "Colormap",
     "COLORMAPS",
+    "StitchImages",
+    "StitchLayout",
+    "STITCH_LAYOUTS",
     "ConvertMode",
     "ImageMode",
     "IMAGE_MODES",
