@@ -2580,3 +2580,32 @@ run changes nothing and exits 1 exactly when a real run would stop; `RunConfig` 
 as written; `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}`, or a folder
 whose parent is missing. Pins: `tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`,
 `tests/test_processing_resume.py`; usage: [workflow.md](workflow.md), [runnable.md](runnable.md).
+
+## 33. Which files of a dataset a run reads is one selection (`FileSelection`, 2026-10-30)
+
+**Context.** Each config reading a dataset's files limited them its own way — a catalog's `max_cases_per_dir` inside
+a domain indexer, a glob here, an index range there — and a quick run of one meant a different knob in each. The user
+asked for one shared part "where we limit which records in the datasets are being processed or rendered", with
+`max_folders_per_set` (quick: 5) and the depth traversed.
+
+**Decision.** `FileSelection` is a source over several folders (`sets`): each listed by `pattern` (the `FilesSource`
+glob and exclude rules, lifted into `glob_files` / `excluded_by` so the two share them), hidden folders and consumed
+companions left out, then limited by `max_depth`, `max_folders_per_set`, `max_files_per_folder` and `max_files`, in
+that order. A set is any `os.PathLike`, asked when first listed. The listing is memoised on the settings and the sets'
+folders (a dataset of thousands of files is not listed per record — unlike `FilesSource`, whose root is re-listed per
+access by its own rule). `select(sets)` answers `(file, set)` pairs of other folders under the same limits, for a run
+that reads a copy of its sets. A domain's runnable takes the selection, never a limit knob of its own.
+
+**Consequences.** `FilesSource` keeps its rule (no filter knob); the selection is the place for limits. The settings
+are the selection's own parameters, so a config naming them as top-level keys hands a command line's
+`max_files_per_folder=3` to it by name.
+
+**Example.**
+
+```python
+FileSelection(sets=["/data/A/1.0", "/data/B/2.0"], pattern="**/*.json", max_folders_per_set=5, max_files_per_folder=20)
+```
+
+**What you may change.** Add a limit (a parameter, its place in `_limited`, a test). Not a limit on `FilesSource`, and
+not a re-listing per record.
+

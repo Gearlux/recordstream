@@ -16,6 +16,7 @@ Submodules:
     - recordstream.sources.concat: ConcatSource (several indexable sources end to end)
     - recordstream.sources.difference: DifferenceSource (one source less the records another carries)
     - recordstream.sources.draw: DrawSource (a generator's settings drawn anew per record)
+    - recordstream.sources.selection: FileSelection (the files of several folders, limited the same way everywhere)
 
 ``__all__`` below is load-bearing, not decoration: a visual editor's node bridge scans this
 module in two passes, and the first (``recordstream.discovery.scan_module``) filters on
@@ -29,6 +30,7 @@ from recordstream.sources.draw import DrawSource
 from recordstream.sources.files import FilesSource
 from recordstream.sources.huggingface import METADATA_ALL_FEATURES, HuggingFaceSource
 from recordstream.sources.range import RangeSource
+from recordstream.sources.selection import FileSelection
 from recordstream.sources.split import DatasetSplit, SplitName
 
 __all__ = [
@@ -37,6 +39,7 @@ __all__ = [
     "DatasetSplit",
     "DifferenceSource",
     "DrawSource",
+    "FileSelection",
     "HuggingFaceSource",
     "FilesSource",
     "METADATA_ALL_FEATURES",
