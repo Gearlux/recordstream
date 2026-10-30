@@ -305,6 +305,9 @@ Gotchas:
   unindexable source is refused. §28 amendment (`tests/test_processing_start.py`). `start: resume` reads the sink's
   `resume_index()` when the run starts, never when the processor is built; no sink or no `resume_index()` is
   refused before the first record (`tests/test_processing_resume.py`).
+- `DatasetProcessor(stop=N)` ends the same slice (`source[start:stop]`, one `RangeSource` over the copy; `None` builds to
+  the end) — never a count of records to skip or to stop after once built; a plan carries `stop` only when it is set,
+  so a run to the end plans byte for byte as before (`tests/test_processing_stop.py`).
 - A workflow is planned before it runs (§32): a step that can say what it would do answers `plan() -> Plan`
   (JSON-safe, round-trips); `Sequence` makes every step's checks before its first step runs, except a plan with
   `checked_first: false`; `recordstream run --dry_run` changes nothing and exits 1 exactly when a real run would

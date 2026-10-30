@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`DatasetProcessor(stop=N)`** builds only `source[start:N]` — a quick run of a config's first records, or a
+  resumed run that ends at N; `null` (the default) builds to the end, and a plan without it is as before
+  (`docs/runnable.md`).
 - **`FileSelection`** (`recordstream.sources.selection`) — the files of several folders ("sets") as records
   (`{file, set, relative}`), chosen by `pattern` (one glob or several), `exclude`, `max_depth`,
   `max_folders_per_set`, `max_files_per_folder` and `max_files`, so every config reading a dataset's files limits
