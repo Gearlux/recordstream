@@ -20,6 +20,31 @@ Every flag and setting is the same with or without `run` (`recordstream config.y
 `recordstream config.yaml max_epochs=3`). The command name wins over a config of the same name: a
 config called `run.yaml` is written with its suffix (`recordstream run.yaml`).
 
+### Every setting a run would use: `--dump-config`
+
+`--dump-config` prints the configuration the run resolves to and runs nothing: every object of the document built
+(without `solidify()`, so no data or model loads) and listed with each constructor parameter, the defaults the file
+leaves out included, after its includes, scopes and command-line keys. `--dump-config=resolved.yaml` writes it to a
+file; `--save-config resolved.yaml` writes it and then runs. Classes are named by their importable path, so the file
+runs again as written (`recordstream resolved.yaml`).
+
+```bash
+recordstream config.yaml --max_epochs 2 --dump-config
+```
+
+```yaml
+runnable:
+  _target_: mypkg.Classifier
+  task: fit
+  max_epochs: 2          # the command-line key
+  batch_size: 32         # a default the file leaves out
+  num_workers: 0
+  ...
+```
+
+The flags are liquifai's global flags
+([global flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md)).
+
 ### Top-level keys reach the runnable
 
 The runnable is built **against the whole document**, so a *flat* config works: a top-level
