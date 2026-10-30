@@ -130,7 +130,14 @@ def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") 
 
     label = runnable.__class__.__name__
     if dry_run:
-        _print_plan(plan_of(runnable), plan_format)
+        try:
+            plan = plan_of(runnable)
+        except WorkflowError as refused:  # a workflow that cannot be planned is refused as a real run is
+            if _debugging():
+                raise
+            print(f"Error: {refused}", file=sys.stderr, flush=True)
+            raise SystemExit(1) from refused
+        _print_plan(plan, plan_format)
         return
     run_method = getattr(runnable, "run", None)
     if not callable(run_method):

@@ -174,3 +174,21 @@ def test_a_plan_format_outside_text_and_json_is_refused(folder: Path) -> None:
     # liquifai prints its refusals on stdout
     said = " ".join((finished.stdout + finished.stderr).split())
     assert "Error: recordstream run: --plan_format must be one of text, json; got 'xml'" in said
+
+
+@pytest.mark.parametrize("plan_format", ["text", "json"])
+def test_the_dry_run_of_a_step_name_the_workflow_lacks_is_one_error_line(folder: Path, plan_format: str) -> None:
+    """A workflow that cannot even be planned (``only:`` names a step it does not have) is refused as a real run is:
+    one ``Error:`` line, exit 1, no traceback — never a planning traceback."""
+    finished = _run(folder, "workflow.yaml", "runnable.only=[nope]", "--dry_run", "--plan_format", plan_format)
+    assert finished.returncode == 1
+    errors = [line for line in finished.stderr.splitlines() if line.startswith("Error:")]
+    assert errors == ["Error: Sequence: only names nope — the steps are named: a, b"], finished.stderr
+    assert "Traceback" not in finished.stderr
+    assert finished.stdout == ""
+
+
+def test_with_debug_the_dry_run_of_a_step_name_the_workflow_lacks_keeps_its_traceback(folder: Path) -> None:
+    finished = _run(folder, "workflow.yaml", "runnable.only=[nope]", "--dry_run", "--debug")
+    assert finished.returncode == 1
+    assert "Traceback" in finished.stderr and "WorkflowError" in finished.stderr
