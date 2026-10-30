@@ -278,6 +278,9 @@ Gotchas:
   standard set is `RunnableTask`. §7. (`tests/test_entrypoint.py`)
 - The autograd flag is `__needs_autograd__`; its one reader fails open, so the flag and its reader
   change together or not at all. §8a.
+- `run` is the CLI's default command (`@app.script_command(default=True)`): `recordstream <config>` is
+  `recordstream run <config>`. Keep `run` — `RunConfig`, navigaitor and the domain steps spawn `recordstream run`
+  (`tests/test_cli_default_command.py`).
 - A runner builds the bound node with `cli.materialize_runnable()` (`flow_mode="manual"`), never a
   bare `flow()`, and a consumer's own CLI calls the same helper (`tests/test_cli_materialize.py`).
 - `DatasetProcessor(workers=N)` sends each record's INDEX to a spawn worker (`source[i]` through the

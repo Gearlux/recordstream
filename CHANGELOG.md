@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`recordstream <config>` runs a config** — `run` is the default command, so `recordstream config.yaml` is
+  `recordstream run config.yaml`, with every flag and setting (`docs/runnable.md`).
 - **A workflow's steps around its runs** (`recordstream.workflow`) — `Require(condition, message)` refuses before
   anything runs; `ReplaceFolder(path, marker)` empties a folder once, a marker in it making a re-run resume;
   `RunConfig(config, scopes, settings, …)` runs one config in its own process, a failed one stopping the workflow
