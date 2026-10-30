@@ -28,6 +28,8 @@ All notable changes to this project are documented here. The format follows
   each source's projection, once (`docs/sources.md`).
 
 ### Changed
+- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
+  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
   the machine has, `cpu` included, is used as written.
