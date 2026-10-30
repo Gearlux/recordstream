@@ -149,3 +149,28 @@ runnable: !class:recordstream.processing.DatasetProcessor
     finished = _run(folder, "process.yaml", "--dry-run")
     assert finished.returncode == 1
     assert "recordings" in finished.stdout and "FAILED" in finished.stdout
+
+
+@pytest.mark.parametrize("spelling", [["--plan_format", "json"], ["--plan-format", "json"]])
+def test_a_plan_format_without_a_dry_run_is_refused_and_runs_nothing(folder: Path, spelling: List[str]) -> None:
+    (folder / "needed.txt").write_text("")
+    finished = _run(folder, "workflow.yaml", *spelling)
+    assert finished.returncode == 1
+    assert "Error: --plan_format only applies with --dry_run; add --dry_run to print the plan" in finished.stderr
+    assert not (folder / "a.done").exists(), "the workflow ran"
+
+
+def test_the_default_plan_format_without_a_dry_run_still_runs(folder: Path) -> None:
+    (folder / "needed.txt").write_text("")
+    finished = _run(folder, "workflow.yaml", "--plan_format", "text")
+    assert finished.returncode == 0, finished.stderr
+    assert (folder / "a.done").exists() and (folder / "b.done").exists()
+
+
+def test_a_plan_format_outside_text_and_json_is_refused(folder: Path) -> None:
+    (folder / "needed.txt").write_text("")
+    finished = _run(folder, "workflow.yaml", "--dry_run", "--plan_format", "xml")
+    assert finished.returncode == 1
+    # liquifai prints its refusals on stdout
+    said = " ".join((finished.stdout + finished.stderr).split())
+    assert "Error: recordstream run: --plan_format must be one of text, json; got 'xml'" in said
