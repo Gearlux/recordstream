@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`FileSelection`** (`recordstream.sources.selection`) — the files of several folders ("sets") as records
+  (`{file, set, relative}`), chosen by `pattern` (one glob or several), `exclude`, `max_depth`,
+  `max_folders_per_set`, `max_files_per_folder` and `max_files`, so every config reading a dataset's files limits
+  them the same way (`docs/sources.md`).
 - **`recordstream <config>` runs a config** — `run` is the default command, so `recordstream config.yaml` is
   `recordstream run config.yaml`, with every flag and setting (`docs/runnable.md`).
 - **A workflow's steps around its runs** (`recordstream.workflow`) — `Require(condition, message)` refuses before
