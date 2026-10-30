@@ -3,7 +3,7 @@
 The shell script it replaces: refuse when an input folder is empty, delete the output folder unless it holds this
 layout's marker, then run two conversions. As ONE document run by ``recordstream run``:
 
-1. ``recordstream run workflow.yaml --dry-run`` prints every step, changes nothing, exits 0 (every step would run);
+1. ``recordstream run workflow.yaml --dry_run`` prints every step, changes nothing, exits 0 (every step would run);
 2. ``recordstream run workflow.yaml`` runs them: the output folder made with its marker, both conversions done;
 3. with the second input emptied, the dry run exits 1 naming the folder and the command that fills it, and a real
    run refuses before its first step — the first conversion does not run again.
@@ -67,7 +67,7 @@ def main() -> None:
             for index in range(3):
                 (folder / name / f"{name}_{index}.json").write_text("{}")
 
-        planned = recordstream_run(folder, "workflow.yaml", "--dry-run")
+        planned = recordstream_run(folder, "workflow.yaml", "--dry_run")
         print(planned.stdout)
         assert planned.returncode == 0, planned.stdout + planned.stderr
         assert "records: 3, start: 0, to_build: 3, sink: HDF5Sink" in planned.stdout
@@ -81,7 +81,7 @@ def main() -> None:
 
         for emptied in (folder / "labels").iterdir():
             emptied.unlink()
-        refused = recordstream_run(folder, "workflow.yaml", "--dry-run")
+        refused = recordstream_run(folder, "workflow.yaml", "--dry_run")
         print(refused.stdout)
         assert refused.returncode == 1
         assert "matched no files under 'labels'" in refused.stdout and "run: fetch the labels first" in refused.stdout

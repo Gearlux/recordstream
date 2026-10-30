@@ -14,10 +14,12 @@ All notable changes to this project are documented here. The format follows
   `RunConfig(config, scopes, settings, …)` runs one config in its own process, a failed one stopping the workflow
   with its exit status. The conditions `EnvSet`, `FreeSpace` and `HasFiles` join `PathExists` / `Not` / `AllOf` /
   `AnyOf`, each saying what it checks (`docs/workflow.md`).
-- **`recordstream run <config> --dry-run`** runs nothing: it prints what each step would check, delete, create and
-  run, and exits 1 when a real run would stop; `--plan-format json` prints the plan as one line
+- **`recordstream run <config> --dry_run`** runs nothing: it prints what each step would check, delete, create and
+  run, and exits 1 when a real run would stop; `--plan_format json` prints the plan as one line
   (`recordstream.workflow.Plan`). A runnable says what it would do through `plan()`; `DatasetProcessor.plan()` gives
-  the records, the start, how many it builds and the sink, or why the source cannot be read.
+  the records, the start, how many it builds and the sink, or why the source cannot be read. `--plan_format json`
+  without `--dry_run` is refused (`Error: --plan_format only applies with --dry_run; …`, exit 1), running nothing,
+  and a format other than `text` or `json` is refused naming both.
 - **`Sequence(only=[...])`** runs the steps it names and every step without a name.
 - **`DatasetProcessor(start: resume)`** asks the sink where it stopped — its `resume_index()` — when the run starts
   (`docs/runnable.md`).

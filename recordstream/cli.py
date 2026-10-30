@@ -93,24 +93,35 @@ def materialize_runnable(runnable: Any) -> Any:
     return flow(runnable)
 
 
+# flow_mode="manual" because materialize_runnable() does the building itself: liquifai's auto deep-flow would
+# bare-flow the node and drop every broadcast top-level key (see that function's docstring).
 @app.script_command(flow_mode="manual", default=True)
 def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") -> None:
-    """Run any Confluid-instantiated object that exposes ``.run()``.
+    """Run the object a config binds under its top-level `runnable:` key.
 
-    The YAML config binds the object under the top-level ``runnable:`` key.
-    ``run`` is the default command: ``recordstream config.yaml`` is ``recordstream run config.yaml``.
-    ``flow_mode="manual"`` because :func:`materialize_runnable` does the building
-    itself — liquifai's auto deep-flow would bare-flow the node and drop every
-    broadcast top-level key (see that function's docstring).
+        recordstream run <config.yaml> [key=value ...]
+        recordstream run <config.yaml> --dry_run                      # what a run would do, nothing changed
+        recordstream run <config.yaml> --dry_run --plan_format json   # the same plan as one JSON line
 
-    A workflow's refusal or failed step is one ``Error:`` line on stderr, exit 1 — a failed step's own exit status
-    (``--debug`` keeps the traceback).
+    `run` is the default command: `recordstream <config.yaml>` is the same run. A step that refuses or fails prints
+    one `Error:` line and exits 1, or with the failed step's own status (`--debug` keeps the traceback).
 
     Args:
-        runnable: The object bound under ``runnable:``.
-        dry_run: Run nothing: print what a run would do (the runnable's plan) and exit 1 when a run would stop.
-        plan_format: How the dry run prints its plan: text (lines) | json (one line, for the step that asked).
+        runnable: The object bound under `runnable:`.
+        dry_run: Run nothing; print each step's checks, what it would delete or create, and the commands it would
+            start. Exits 1 when a real run would stop.
+        plan_format: How --dry_run prints the plan: text (readable lines) or json (one line, for a script or a
+            parent step). Only used with --dry_run: `--plan_format json` alone is refused, so asking for the
+            plan never starts a real run.
     """
+    if plan_format != "text" and not dry_run:
+        print(
+            f"Error: --plan_format only applies with --dry_run; add --dry_run to print the plan "
+            f"(--plan_format {plan_format} alone ran nothing)",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(1)
     if runnable is None:
         logger.error("'runnable' was not bound — provide one under 'runnable:' in your YAML.")
         return

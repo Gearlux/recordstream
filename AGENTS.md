@@ -302,7 +302,7 @@ Gotchas:
   refused before the first record (`tests/test_processing_resume.py`).
 - A workflow is planned before it runs (§32): a step that can say what it would do answers `plan() -> Plan`
   (JSON-safe, round-trips); `Sequence` makes every step's checks before its first step runs, except a plan with
-  `checked_first: false`; `recordstream run --dry-run` changes nothing and exits 1 exactly when a real run would
+  `checked_first: false`; `recordstream run --dry_run` changes nothing and exits 1 exactly when a real run would
   stop. `RunConfig` runs `config` as written in its own process and is planned by that process's
   `--dry-run --plan-format json` — never in-process. Never add a loop or template step: one `RunConfig` per run,
   written out. `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}` or a folder
