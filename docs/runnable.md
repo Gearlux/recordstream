@@ -11,8 +11,14 @@ runnable: !class:mypkg.Classifier
 ```
 
 ```bash
-python -m recordstream.cli run config.yaml     # builds `runnable:`, calls .run()
+recordstream config.yaml                       # builds `runnable:`, calls .run()
+recordstream run config.yaml                   # the same: `run` is the default command
+python -m recordstream.cli run config.yaml     # the same, without the console script
 ```
+
+Every flag and setting is the same with or without `run` (`recordstream config.yaml --dry-run`,
+`recordstream config.yaml max_epochs=3`). The command name wins over a config of the same name: a
+config called `run.yaml` is written with its suffix (`recordstream run.yaml`).
 
 ### Top-level keys reach the runnable
 

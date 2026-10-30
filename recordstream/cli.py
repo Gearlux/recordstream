@@ -15,7 +15,8 @@ Example::
       stream: !class:recordstream.Stream { source: !class:my.Source(), ops: [...] }
       sink: !class:recordstream.storage.HDF5Sink { path: out.h5 }
 
-    recordstream run convert.yaml
+    recordstream convert.yaml        # run is the default command
+    recordstream run convert.yaml    # the same run, the command named
 """
 
 import json
@@ -92,11 +93,12 @@ def materialize_runnable(runnable: Any) -> Any:
     return flow(runnable)
 
 
-@app.script_command(flow_mode="manual")
+@app.script_command(flow_mode="manual", default=True)
 def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") -> None:
     """Run any Confluid-instantiated object that exposes ``.run()``.
 
     The YAML config binds the object under the top-level ``runnable:`` key.
+    ``run`` is the default command: ``recordstream config.yaml`` is ``recordstream run config.yaml``.
     ``flow_mode="manual"`` because :func:`materialize_runnable` does the building
     itself — liquifai's auto deep-flow would bare-flow the node and drop every
     broadcast top-level key (see that function's docstring).
