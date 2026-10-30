@@ -294,7 +294,17 @@ Gotchas:
   amendment 2026-10-22. (`tests/test_resources.py`, `tests/test_processing_workers.py::TestTheMemoryGuard`)
 - `DatasetProcessor(start=N)` resumes a run by building `source[N:]` through a `RangeSource` over a COPY of the
   stream (the processor's own stream keeps its source); never by skipping records after building them. An
-  unindexable source is refused. §28 amendment (`tests/test_processing_start.py`).
+  unindexable source is refused. §28 amendment (`tests/test_processing_start.py`). `start: resume` reads the sink's
+  `resume_index()` when the run starts, never when the processor is built; no sink or no `resume_index()` is
+  refused before the first record (`tests/test_processing_resume.py`).
+- A workflow is planned before it runs (§32): a step that can say what it would do answers `plan() -> Plan`
+  (JSON-safe, round-trips); `Sequence` makes every step's checks before its first step runs, except a plan with
+  `checked_first: false`; `recordstream run --dry-run` changes nothing and exits 1 exactly when a real run would
+  stop. `RunConfig` runs `config` as written in its own process and is planned by that process's
+  `--dry-run --plan-format json` — never in-process. Never add a loop or template step: one `RunConfig` per run,
+  written out. `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}` or a folder
+  whose parent is missing. A workflow refusal is one `Error:` line, exit 1 (a failed step: its own status).
+  (`tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`)
 
 ## Storage
 

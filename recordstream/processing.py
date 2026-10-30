@@ -18,7 +18,10 @@ cores and GPU hold; with any count, no record starts while free memory is under 
 run leaves the machine (:mod:`recordstream.resources`).
 
 With ``start`` the run builds only ``source[start:]`` (a :class:`~recordstream.sources.range.RangeSource` over the
-source): a run resumed where its sink stopped, the records before ``start`` never built again.
+source): a run resumed where its sink stopped, the records before ``start`` never built again. ``start: resume``
+asks the sink where it stopped — its ``resume_index()`` — so the config resumes on its own, whoever runs it.
+
+:meth:`DatasetProcessor.plan` says what a run would do without building a record (``recordstream run --dry-run``).
 """
 
 import copy
@@ -44,14 +47,15 @@ from recordstream.resources import OutOfMemory, RecordCost, WorkerGovernor, giga
 from recordstream.runnable import ProgressReporting
 from recordstream.sources.range import RangeSource
 from recordstream.storage.base import Storage
+from recordstream.workflow import Check, Plan
 
 logger = get_logger(__name__)
 
 #: How many processes build records at once; 1 builds them in the running process, one at a time; ``auto`` measures a
 #: record and builds as many at once as the machine holds.
 Workers = Union[Annotated[int, Interval(ge=1)], Literal["auto"]]
-#: The first source index a run builds; 0 builds every record.
-Start = Annotated[int, Interval(ge=0)]
+#: The first source index a run builds; 0 builds every record; ``resume`` asks the sink how many it already holds.
+Start = Union[Annotated[int, Interval(ge=0)], Literal["resume"]]
 
 #: How many records per worker may be in flight — being built, or built and waiting for the sink in index order.
 _WINDOW_PER_WORKER = 2
@@ -108,7 +112,8 @@ class DatasetProcessor(ProgressReporting):
             measure it, then as many as the machine's memory, cores and GPU hold. Above 1 no record starts while
             free memory is under the reserve the run leaves the machine.
         start: The first source index built — a run resumed where its sink stopped builds source[start:] and never
-            the records before; 0 (default) builds every record. The source must be indexable.
+            the records before; 0 (default) builds every record; ``resume`` asks the sink how many records it
+            already holds (its ``resume_index()``), when the run starts. The source must be indexable.
     """
 
     def __init__(
@@ -135,23 +140,11 @@ class DatasetProcessor(ProgressReporting):
         # confluid refuses a value under 1 when the processor is BUILT; this catches one set later.
         if workers != "auto" and workers < 1:
             raise ValueError(f"DatasetProcessor: workers must be >= 1; got {self.workers}")
-        # Confluid keeps Class kwargs deferred (post-construction paradigm) so
-        # when the processor was loaded from YAML, ``self.stream``, its source,
-        # its ops, and ``self.sink`` may all be Fluid stubs. Materialize them
-        # here so callers don't need to know.
-        from confluid import flow
-        from confluid.fluid import Fluid
-
-        stream = flow(self.stream) if isinstance(self.stream, Fluid) else self.stream
-        if isinstance(stream.source, Fluid):
-            stream.source = flow(stream.source)
-        stream.ops = [flow(op) if isinstance(op, Fluid) else op for op in stream.ops]
-        self.stream = stream
-        sink = flow(self.sink) if isinstance(self.sink, Fluid) else self.sink
+        stream, sink = self._materialized()
 
         # Drive an executor's progress bar (a GUI canvas) per item — independent of the console
         # ``show_progress`` rich bar; a no-op when no progress callback was injected.
-        stream = _from_start(stream, int(self.start))
+        stream = _from_start(stream, _start_index(self.start, sink))
         total = _stream_total(stream)
         desc = self.progress_desc or "DatasetProcessor"
         records: Iterable[Any] = stream if workers == 1 else _records_from_workers(stream, workers)
@@ -180,6 +173,51 @@ class DatasetProcessor(ProgressReporting):
 
         logger.info("Processing complete.")
 
+    def plan(self) -> Plan:
+        """What :meth:`run` would do, no record built: the source's records, the first one built, how many are
+        built, the sink — or, when the source cannot be read or the start cannot be found, why, as a failed check."""
+        title = type(self).__name__
+        if self.stream is None:
+            return Plan(title=title, checks=[Check("a stream is set", False, "DatasetProcessor needs a 'stream'")])
+        stream, sink = self._materialized()
+        try:
+            records = len(stream.source) if hasattr(stream.source, "__len__") else None  # type: ignore[arg-type]
+        except Exception as unreadable:  # noqa: BLE001 - whatever stops the listing is what the plan reports
+            said, name = str(unreadable), type(stream.source).__name__
+            detail = said if said.startswith(name) else f"{name}: {said}"
+            return Plan(title=title, checks=[Check("the source can be read", False, detail)])
+        try:
+            start = _start_index(self.start, sink)
+        except ValueError as refused:
+            return Plan(title=title, checks=[Check("the start can be found", False, str(refused))])
+        details: Dict[str, Any] = {
+            "records": records,
+            "start": start,
+            "to_build": None if records is None else max(records - start, 0),
+            "sink": None if sink is None else type(sink).__name__,
+        }
+        return Plan(title=title, checks=[Check("the source can be read", True)], details=details)
+
+    def _materialized(self) -> Tuple[Stream, Any]:
+        """The stream (its source and ops) and the sink built from the deferred markers a YAML load leaves.
+
+        Confluid keeps Class kwargs deferred (post-construction paradigm) so when the processor was loaded from
+        YAML, ``self.stream``, its source, its ops, and ``self.sink`` may all be Fluid stubs; callers need not know.
+        """
+        from confluid import flow
+        from confluid.fluid import Fluid
+
+        stream = flow(self.stream) if isinstance(self.stream, Fluid) else self.stream
+        if stream is None:
+            raise ValueError("DatasetProcessor requires a 'stream' — none was configured.")
+        if isinstance(stream.source, Fluid):
+            stream.source = flow(stream.source)
+        stream.ops = [flow(op) if isinstance(op, Fluid) else op for op in stream.ops]
+        self.stream = stream
+        if isinstance(self.sink, Fluid):
+            self.sink = flow(self.sink)
+        return stream, self.sink
+
     def _wrap_progress(self, records: Iterable[Any], total: Optional[int]) -> Iterable[Any]:
         """Wrap the records in rich.progress when ``show_progress`` is enabled.
 
@@ -191,6 +229,22 @@ class DatasetProcessor(ProgressReporting):
             return records
         desc = self.progress_desc or "DatasetProcessor"
         return _ProgressIter(records, total=total, desc=desc)
+
+
+def _start_index(start: Start, sink: Any) -> int:
+    """The first source index a run builds: ``start`` itself, or — for ``resume`` — how many records the sink already
+    holds, asked when the run starts (an earlier step of a workflow may have emptied its folder)."""
+    if start != "resume":
+        return int(start)
+    if sink is None:
+        raise ValueError("DatasetProcessor: start: resume asks the sink where it stopped, and there is no sink")
+    resume_index = getattr(sink, "resume_index", None)
+    if not callable(resume_index):
+        raise ValueError(
+            f"DatasetProcessor: start: resume asks the sink where it stopped, and {type(sink).__name__} has no "
+            "resume_index() — give it one (how many records from index 0 it holds whole) or set start: N"
+        )
+    return int(resume_index())
 
 
 def _from_start(stream: Stream, start: int) -> Stream:

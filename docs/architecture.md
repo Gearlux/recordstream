@@ -2525,3 +2525,58 @@ test = [{"file": "/test/tier1/x.json"}]
 **What you may change.** The refusal wording; another way of reading the kept records. What must hold: one key,
 the closed `compare`, both sides read through their projections, a record without the key refused by its index, and
 the kept records in `source`'s order. Pins: `tests/test_difference_source.py`.
+
+## 32. A workflow is planned before it runs; its steps run configs in processes of their own (2026-10-29)
+
+**Context.** The multi-step jobs a consuming project runs — refuse when an input folder is empty or the disk is too
+small, delete an output folder unless it holds this layout's marker, then run a dozen configs in turn — lived in
+shell scripts: environment knobs, `set -e`, a `DRY_RUN=1` branch per step, and a Python steps module per project
+repeating the same subprocess runner, settings parser and dry-run planner. The combinators (`Sequence`,
+`Conditional`, `Switch`) could chain runnables but not refuse early, empty a folder safely, run a config the way a
+person does, or say what they would do.
+
+**Decision.** The steps are runnables of the one document. `Require` refuses, `ReplaceFolder` empties once behind a
+marker, `RunConfig` runs `recordstream run <config> --scope s key=value` in a process of its own — its memory freed
+when it ends, its exit status the workflow's, its command one a person could type. Every runnable MAY answer
+`plan() -> Plan`, a JSON-safe description (checks, actions, commands, numbers, nested plans); `Sequence` plans every
+step and makes every check before its first step runs, and `recordstream run --dry-run` prints the plan instead of
+running. A `RunConfig` is planned by its own process's dry run (`--plan-format json`, the last JSON line of what it
+printed), so the checks of the config it runs — an empty folder, a sink that cannot say where it stopped — count
+before anything starts. Resume moved into the run: `DatasetProcessor(start="resume")` asks the sink's
+`resume_index()` when the run starts, so a config resumes whoever runs it. Rejected: running a config in-process
+(its overrides would need liquifai's private override machinery, and a plan read one way and run another drifts);
+a `dry_run` setting broadcast into every class (every runnable would need the parameter); a loop or template step
+for "one RunConfig per set" (a language inside the config — the configuration-utility ruling); a planned-once cache
+(a nested workflow is planned again by its own process when it runs).
+
+**Consequences.** A whole multi-step job is one config, its dry run exact. Each `RunConfig` costs one extra process
+before the workflow starts (its dry run, about a second or two), and a nested workflow is planned by its parent and
+again by itself. A step whose inputs an earlier step writes must say `checked_first: false`. Every step is built
+before the first runs — construction is cheap by the lazy-construction rule, so only a class breaking it notices.
+
+**Example.**
+
+```yaml
+paths:
+  output: out/converted
+runnable: !class:recordstream.workflow.Sequence
+  steps:
+    - !class:recordstream.workflow.ReplaceFolder { path: "${paths.output}", marker: .converted_v1 }
+    - !class:recordstream.workflow.RunConfig
+      name: labels
+      config: convert.yaml
+      settings: { input: labels, output: "${paths.output}/labels.h5" }
+      hint: fetch the labels first
+```
+
+```text
+$ recordstream run workflow.yaml        # labels/ is empty
+Error: [2/2] labels: FilesSource: pattern '*.json' matched no files under 'labels' (…) — run: fetch the labels first
+```
+
+**What you may change.** The plan's line layout and wording; which conditions exist. What must hold: a `Plan` stays
+JSON-safe and round-trips; every check is made before the first step runs (unless `checked_first: false`); a dry
+run changes nothing and exits 1 exactly when a real run would stop; `RunConfig` hands `config` to `recordstream run`
+as written; `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}`, or a folder
+whose parent is missing. Pins: `tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`,
+`tests/test_processing_resume.py`; usage: [workflow.md](workflow.md), [runnable.md](runnable.md).
