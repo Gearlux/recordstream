@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`RecordstreamError`**, the root of every error recordstream raises (`from recordstream import RecordstreamError`):
+  `except RecordstreamError` catches them all, and each still is the builtin it was (`DrawSpecError` a `ValueError`,
+  `WorkflowError` a `RuntimeError`, `OutOfMemory` a `MemoryError`), so an existing `except` keeps working.
 - **`DatasetProcessor(stop=N)`** builds only `source[start:N]` — a quick run of a config's first records, or a
   resumed run that ends at N; `null` (the default) builds to the end, and a plan without it is as before
   (`docs/runnable.md`).
@@ -27,7 +30,11 @@ All notable changes to this project are documented here. The format follows
   the records, the start, how many it builds and the sink, or why the source cannot be read. `--plan_format json`
   without `--dry_run` is refused (`Error: --plan_format only applies with --dry_run; …`, exit 1), running nothing,
   and a format other than `text` or `json` is refused naming both.
-- **`Sequence(only=[...])`** runs the steps it names and every step without a name.
+- **`Sequence(only=[...])`** runs the steps it names and every step without a name; a `Sequence` with a `name` is
+  one step of the sequence around it, picked by that name, and its `title` names it in a plan.
+- **`RunConfig(environment={NAME: value})`** runs its process with the variables a machine's run needs, each set
+  only where the running environment leaves it unset; the dry run is asked in the same environment and its plan
+  names what is set.
 - **`DatasetProcessor(start: resume)`** asks the sink where it stopped — its `resume_index()` — when the run starts
   (`docs/runnable.md`).
 - A workflow refusal is one `Error:` line and exit 1 (`--debug` keeps the traceback).

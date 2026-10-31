@@ -63,6 +63,7 @@ callback to whichever branch is running (:func:`_run`).
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -77,6 +78,7 @@ from confluid.fluid import Fluid
 from loggair import get_logger
 from typing_extensions import Annotated
 
+from recordstream.exceptions import RecordstreamError
 from recordstream.runnable import ProgressReporting, TorchRunner
 
 logger = get_logger(__name__)
@@ -90,11 +92,16 @@ PlanFormat = Literal["text", "json"]
 #: one, so ``pkg://`` and every import resolve wherever the workflow is started.
 _RUNNER = [sys.executable, "-P", "-m", "recordstream.cli", "run"]
 
+#: A text a setting's list or mapping holds plain: a name or a path, which YAML reads back as that text.
+_PLAIN_ITEM = re.compile(r"[A-Za-z_/][\w./-]*")
+#: The plain words YAML reads as something else than text.
+_YAML_WORDS = frozenset({"true", "false", "null", "yes", "no", "on", "off", "y", "n"})
+
 #: The flags a :class:`RunConfig` adds to plan its config instead of running it.
 _PLAN_FLAGS = ["--dry-run", "--plan-format", "json"]
 
 
-class WorkflowError(RuntimeError):
+class WorkflowError(RecordstreamError, RuntimeError):
     """A workflow refused to go on: what it checks is not there, a step failed, a step is wrongly set up."""
 
 
@@ -311,14 +318,22 @@ class Sequence(TorchRunner, ProgressReporting):
     Args:
         steps: Runnables (or deferred ``!lazy:`` / ``!class:`` markers) to run in
             order. A ``None`` entry is skipped. An empty list is a no-op.
-        only: The names of the steps to run (a step's ``name``, as :class:`RunConfig` has); a step without a name
-            always runs. Empty (default) runs every step. A name no step has is refused, listing the names there are.
+        only: The names of the steps to run (a step's ``name``, as :class:`RunConfig` and a named inner
+            :class:`Sequence` have); a step without a name always runs. Empty (default) runs every step. A name no step
+            has is refused, listing the names there are.
+        name: The name a :class:`Sequence` around this one picks it by (``only``) — several runs that make one
+            option (its train and val runs, then a check) are one inner sequence; empty: always run.
+        title: Its name in a plan; empty: ``name``, else ``Sequence``.
     """
 
-    def __init__(self, steps: Optional[List[Any]] = None, only: Optional[List[str]] = None) -> None:
+    def __init__(
+        self, steps: Optional[List[Any]] = None, only: Optional[List[str]] = None, name: str = "", title: str = ""
+    ) -> None:
         # Partial / zero-arg: store config only; branches are flowed in run().
         self.steps: List[Any] = list(steps) if steps else []
         self.only: List[str] = list(only) if only else []
+        self.name = name
+        self.title = title
 
     def run(self) -> None:
         selected = self._selected()
@@ -333,7 +348,9 @@ class Sequence(TorchRunner, ProgressReporting):
 
     def plan(self) -> Plan:
         """Every selected step's plan, nothing run — what ``recordstream run <workflow> --dry-run`` prints."""
-        return Plan(title=type(self).__name__, steps=[plan_of(step) for step in self._selected()])
+        return Plan(
+            title=self.title or self.name or type(self).__name__, steps=[plan_of(step) for step in self._selected()]
+        )
 
     def _selected(self) -> List[Any]:
         """The steps that run, flowed once and cached: every step but ``None`` entries and those ``only`` leaves out."""
@@ -695,13 +712,16 @@ def _size(folder: Path) -> str:
     return f"{total:.1f}T"
 
 
-def _execute(argv: List[str], capture: bool) -> Tuple[int, str]:
-    """Run ``argv`` in the running folder and environment: its exit status, and — when ``capture`` — what it printed
-    (stdout and stderr together, so a plan's refusal reaches the step that asked); otherwise it prints as it goes."""
+def _execute(argv: List[str], capture: bool, env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
+    """Run ``argv`` in the running folder and ``env`` (``None``: the running environment): its exit status, and — when
+    ``capture`` — what it printed (stdout and stderr together, so a plan's refusal reaches the step that asked);
+    otherwise it prints as it goes."""
     if capture:
-        finished = subprocess.run(argv, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        finished = subprocess.run(
+            argv, check=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
+        )
         return finished.returncode, finished.stdout or ""
-    return subprocess.run(argv, check=False).returncode, ""
+    return subprocess.run(argv, check=False, env=env).returncode, ""
 
 
 def _setting_text(value: Any) -> str:
@@ -711,10 +731,21 @@ def _setting_text(value: Any) -> str:
     if value is None:
         return "null"
     if isinstance(value, (list, tuple)):
-        return "[" + ", ".join(_setting_text(item) for item in value) + "]"
+        return "[" + ", ".join(_item_text(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{" + ", ".join(f"{key}: {_setting_text(item)}" for key, item in value.items()) + "}"
+        return "{" + ", ".join(f"{_item_text(key)}: {_item_text(item)}" for key, item in value.items()) + "}"
     return str(value)
+
+
+def _item_text(value: Any) -> str:
+    """A value inside a list or a mapping setting: as :func:`_setting_text`, a text written plain only when YAML reads
+    it back as that text inside ``[...]`` (a name, a path), else quoted — a glob's ``*`` is an alias there, a comma ends
+    the item, an empty text is null, ``true`` a bool."""
+    if not isinstance(value, str):
+        return _setting_text(value)
+    if _PLAIN_ITEM.fullmatch(value) and value.lower() not in _YAML_WORDS:
+        return value
+    return json.dumps(value)
 
 
 def _what_went_wrong(output: str) -> str:
@@ -758,9 +789,14 @@ class RunConfig:
         settings: Values it runs with, ``key: value`` each (``store_root: /elsewhere``, ``runnable.workers: auto``).
         name: The name ``Sequence(only=...)`` picks it by; empty: always run.
         title: Its name in a plan; empty: ``name``, else ``config``.
-        hint: The command that writes its inputs, added to a refusal (``signal-detection iq val wlan``).
+        hint: The command that writes its inputs, added to a refusal (``recordstream run make_sets.yaml --scope
+            val``).
         checked_first: Whether its inputs are checked before the workflow's first step; false for a step whose
             inputs an earlier step writes.
+        environment: Variables its process runs with, ``NAME: value`` each — what one machine's run needs and
+            another's does not (``PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True``); each is set only where the
+            environment the workflow runs in leaves it unset, so a machine's own value wins. The dry run is asked in
+            the same environment, and its plan names what is set.
     """
 
     def __init__(
@@ -772,6 +808,7 @@ class RunConfig:
         title: str = "",
         hint: str = "",
         checked_first: bool = True,
+        environment: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.config = config
         self.scopes = scopes
@@ -780,6 +817,7 @@ class RunConfig:
         self.title = title
         self.hint = hint
         self.checked_first = checked_first
+        self.environment = environment
 
     @property
     def command(self) -> List[str]:
@@ -792,13 +830,30 @@ class RunConfig:
     def label(self) -> str:
         return self.title or self.name or self.config
 
+    @property
+    def environment_set(self) -> Dict[str, str]:
+        """The variables of ``environment`` this step sets: those the running environment leaves unset (or empty),
+        read when asked."""
+        return {
+            name: _setting_text(value) for name, value in (self.environment or {}).items() if not os.environ.get(name)
+        }
+
+    def _env(self) -> Optional[Dict[str, str]]:
+        """The environment its process runs in: the running one with :attr:`environment_set` added; ``None`` (the
+        running one as it is) without ``environment``."""
+        if not self.environment:
+            return None
+        return {**os.environ, **self.environment_set}
+
     def plan(self) -> Plan:
         if not self.config:
             return Plan(title=self.label or "RunConfig", checks=[Check("a config is set", False, "set config")])
         command = self.command
-        returncode, output = _execute([*command, *_PLAN_FLAGS], capture=True)
+        returncode, output = _execute([*command, *_PLAN_FLAGS], capture=True, env=self._env())
         child = _plan_in(output)
         plan = Plan(title=self.label, commands=[command], checked_first=self.checked_first)
+        if self.environment_set:
+            plan.details["environment"] = ", ".join(f"{name}={value}" for name, value in self.environment_set.items())
         if child is None:
             said = _what_went_wrong(output)
             detail = f"its dry run ended with exit {returncode}{': ' + said if said else ''}"
@@ -816,7 +871,7 @@ class RunConfig:
         if not self.config:
             raise WorkflowError("RunConfig: no config to run — set config")
         command = self.command
-        returncode, _ = _execute(command, capture=False)
+        returncode, _ = _execute(command, capture=False, env=self._env())
         if returncode:
             raise StepFailed(f"{self.label}: {display_command(command)} ended with exit {returncode}", returncode)
 

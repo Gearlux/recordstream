@@ -12,11 +12,13 @@ processes themselves are ``tests/test_cli_dry_run.py``'s.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import pytest
+import yaml
 from confluid import configurable
 
 from recordstream import workflow
@@ -66,12 +68,14 @@ class _FakeProcesses:
 
     def __init__(self) -> None:
         self.commands: List[List[str]] = []
+        self.environments: List[Optional[Dict[str, str]]] = []
         self.returncode = 0
         self.plan: Optional[Plan] = Plan(title="DatasetProcessor", details={"records": 3})
         self.output_without_plan = "no plan here\n"
 
-    def __call__(self, argv: List[str], capture: bool) -> Tuple[int, str]:
+    def __call__(self, argv: List[str], capture: bool, env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
         self.commands.append(list(argv))
+        self.environments.append(None if env is None else dict(env))
         if capture:
             if self.plan is None:
                 return 1, self.output_without_plan
@@ -260,6 +264,22 @@ def test_run_config_runs_the_config_in_its_own_process(processes: _FakeProcesses
     ]
 
 
+def test_a_text_inside_a_list_or_mapping_setting_reaches_the_process_as_written(processes: _FakeProcesses) -> None:
+    """A text YAML would read otherwise inside ``[...]`` / ``{...}`` — a glob's ``*`` (an alias), a comma, an empty
+    text — is quoted, so the process reads back the value the workflow holds."""
+    settings = {
+        "source": {"pattern": "*/*/val/*.sigmf-meta", "names": "a, b", "empty": "", "plain": "x"},
+        "sets": ["wlan", "*x"],
+    }
+    RunConfig(config="a.yaml", settings=settings).run()
+    words = processes.commands[0][processes.commands[0].index("a.yaml") + 1 :]
+    assert words == [
+        'source={pattern: "*/*/val/*.sigmf-meta", names: "a, b", empty: "", plain: x}',
+        'sets=[wlan, "*x"]',
+    ]
+    assert [yaml.safe_load(word.split("=", 1)[1]) for word in words] == [settings["source"], settings["sets"]]
+
+
 def test_a_failed_run_stops_with_its_exit_status(processes: _FakeProcesses) -> None:
     processes.returncode = 3
     with pytest.raises(StepFailed, match="sets/wlan.yaml .*exit 3") as failed:
@@ -278,10 +298,10 @@ def test_a_run_config_plans_through_the_dry_run_of_its_own_process(processes: _F
 
 def test_a_run_config_whose_inputs_are_missing_names_the_command_that_makes_them(processes: _FakeProcesses) -> None:
     processes.plan = Plan(title="DatasetProcessor", checks=[Check("the source can be read", False, "no files in /r")])
-    plan = RunConfig(config="sets/wlan.yaml", hint="signal-detection iq val wlan").plan()
+    plan = RunConfig(config="sets/wlan.yaml", hint="recordstream run make_sets.yaml --scope val").plan()
     assert plan.would_stop is True
     (failed,) = [check for check in plan.checks if not check.ok]
-    assert failed.detail == "no files in /r — run: signal-detection iq val wlan"
+    assert failed.detail == "no files in /r — run: recordstream run make_sets.yaml --scope val"
 
 
 def test_a_process_that_answers_no_plan_is_a_failed_check(processes: _FakeProcesses) -> None:
@@ -332,6 +352,44 @@ def test_a_run_config_reads_a_relative_config_from_the_folder_the_workflow_runs_
     assert _config_of(processes.commands[0]) == "pkg://some-project/config/a.yaml"
 
 
+def test_a_run_config_without_an_environment_hands_its_process_the_workflows_own(processes: _FakeProcesses) -> None:
+    RunConfig(config="a.yaml").plan()
+    RunConfig(config="a.yaml").run()
+    assert processes.environments == [None, None]
+
+
+def test_a_run_config_sets_its_environment_where_the_machine_leaves_it_unset(
+    processes: _FakeProcesses, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A machine's own value wins: the step sets a variable only for its process, and only where the environment the
+    workflow runs in leaves it unset."""
+    monkeypatch.delenv("WORKFLOW_ALLOC", raising=False)
+    monkeypatch.setenv("WORKFLOW_RATIO", "0.7")
+    step = RunConfig(
+        config="train.yaml", environment={"WORKFLOW_ALLOC": "expandable_segments:True", "WORKFLOW_RATIO": 0.5}
+    )
+    step.run()
+    (env,) = processes.environments
+    assert env is not None
+    assert env["WORKFLOW_ALLOC"] == "expandable_segments:True" and env["WORKFLOW_RATIO"] == "0.7"
+    assert env["PATH"] == os.environ["PATH"]
+    assert "WORKFLOW_ALLOC" not in os.environ  # the workflow's own environment is untouched
+
+
+def test_a_run_config_plans_in_the_environment_it_runs_in_and_says_what_it_sets(
+    processes: _FakeProcesses, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("WORKFLOW_ALLOC", raising=False)
+    monkeypatch.setenv("WORKFLOW_RATIO", "0.7")
+    plan = RunConfig(
+        config="train.yaml", environment={"WORKFLOW_ALLOC": "expandable_segments:True", "WORKFLOW_RATIO": 0.5}
+    ).plan()
+    (env,) = processes.environments
+    assert env is not None and env["WORKFLOW_ALLOC"] == "expandable_segments:True"
+    assert plan.details == {"environment": "WORKFLOW_ALLOC=expandable_segments:True"}
+    assert "      environment: WORKFLOW_ALLOC=expandable_segments:True" in plan_lines(Plan(title="s", steps=[plan]))
+
+
 # --------------------------------------------------------------------------- #
 # Sequence: checks first, only, plan
 # --------------------------------------------------------------------------- #
@@ -366,6 +424,45 @@ def test_only_runs_the_named_steps_and_every_step_without_a_name(tmp_path: Path)
 def test_an_empty_only_runs_every_step() -> None:
     Sequence(steps=[_Step("a", name="a"), _Step("b", name="b")], only=[]).run()
     assert _RUN_LOG == ["a", "b"]
+
+
+def test_a_named_sequence_is_one_step_the_sequence_around_it_picks_by_name() -> None:
+    """A workflow's option made of several runs (its train and val runs, then a check) is one named inner sequence."""
+    Sequence(
+        steps=[
+            Sequence(name="a", steps=[_Step("a train"), _Step("a val")]),
+            Sequence(name="c", steps=[_Step("c1 train"), _Step("c2 train"), _Step("c check")]),
+        ],
+        only=["c"],
+    ).run()
+    assert _RUN_LOG == ["c1 train", "c2 train", "c check"]
+
+
+def test_a_failed_check_inside_a_named_sequence_stops_the_workflow_before_its_first_step(tmp_path: Path) -> None:
+    sequence = Sequence(
+        steps=[
+            _Step("first"),
+            Sequence(name="c", steps=[Require(condition=PathExists(path=str(tmp_path / "x")), message="make x")]),
+        ]
+    )
+    with pytest.raises(RequirementNotMet, match=r"\[2/2\] c: make x"):
+        sequence.run()
+    assert _RUN_LOG == []
+
+
+@pytest.mark.parametrize(
+    ("name", "title", "shown"),
+    [("", "", "Sequence"), ("c", "", "c"), ("c", "option C: c1, c2, c3", "option C: c1, c2, c3")],
+)
+def test_a_sequences_plan_is_titled_by_its_title_else_its_name(name: str, title: str, shown: str) -> None:
+    plan = Sequence(name=name, title=title, steps=[_Step("x")]).plan()
+    assert plan.title == shown
+    assert [step.title for step in plan.steps] == ["_Step"]
+
+
+def test_the_plan_lines_show_an_inner_sequences_steps_beneath_its_title() -> None:
+    lines = plan_lines(Sequence(steps=[Sequence(name="a", steps=[_Step("x"), _Step("y")])]).plan())
+    assert lines == ["[1/1] a", "      _Step:", "        run _Step", "      _Step:", "        run _Step"]
 
 
 def test_only_naming_no_step_is_refused_with_the_names_there_are() -> None:

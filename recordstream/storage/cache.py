@@ -13,10 +13,12 @@ from typing import Callable, List, Tuple, Union
 
 from loggair import get_logger
 
+from recordstream.exceptions import RecordstreamError
+
 logger = get_logger(__name__)
 
 
-class CacheBudgetExceeded(Exception):
+class CacheBudgetExceeded(RecordstreamError):
     """Raised when a single entry would exceed the entire cache budget on its own."""
 
 

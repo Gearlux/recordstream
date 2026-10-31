@@ -67,6 +67,8 @@ from annotated_types import Ge, Gt, Interval, Le, Lt
 from confluid import configurable
 from typing_extensions import Annotated
 
+from recordstream.exceptions import RecordstreamError
+
 #: How many values a :class:`Uniform` tries before it gives up.
 TRIES = 100
 #: The largest integer range a :class:`Choice` without values draws from, or a :class:`Span` tests value by value.
@@ -95,11 +97,11 @@ Step = Union[str, Tuple[str, int]]
 Path = Tuple[Step, ...]
 
 
-class DrawSpecError(ValueError):
+class DrawSpecError(RecordstreamError, ValueError):
     """The list of draws cannot be read: a setting that does not exist, a draw that does not fit its setting."""
 
 
-class DrawRefused(ValueError):
+class DrawRefused(RecordstreamError, ValueError):
     """No value of a draw is accepted by the generator, given the draws before it."""
 
 
