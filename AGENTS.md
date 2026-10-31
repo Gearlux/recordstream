@@ -200,9 +200,10 @@ Gotchas:
   `root` folder per access (a new file appears at once); `paths()` is the one-listing answer for every record's file —
   never cache the folder listing to make the index fast (`tests/test_files_source_root.py::TestEveryPathAtOnce`).
 - `FileSelection` is THE way a run limits a dataset's files (§33, user request 2026-10-30): `sets` (any `os.PathLike`,
-  asked when listed), `pattern` (one glob or several), `exclude`, then `max_depth`, `max_folders_per_set`,
-  `max_files_per_folder`, `max_files` in that order; hidden folders and consumed companions never listed; the listing
-  memoised on its settings and the sets' folders; an empty selection or an empty set refused. A domain runnable takes
+  asked when listed), `pattern` (one glob or several), `exclude`, then `max_depth`, `max_subfolders_per_folder`
+  (each folder's first subfolders, at every level), `max_folders_per_set`, `max_files_per_folder`, `max_files` in that
+  order; hidden folders and consumed companions never listed; the listing memoised on its settings and the sets'
+  folders; an empty selection or an empty set refused. A domain runnable takes
   the selection (or its `select(sets)` pairs), never a limit knob of its own (`tests/test_file_selection.py`).
 - `DifferenceSource` compares ONE entry (`key`) by a closed `compare` (`value`/`name`/`stem`); a domain's notion of
   "the same record" is an entry a domain source writes, never a new `compare` spelling or a per-key predicate. It

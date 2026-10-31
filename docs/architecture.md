@@ -2645,3 +2645,16 @@ FileSelection(sets=["/data/A/1.0", "/data/B/2.0"], pattern="**/*.json", max_fold
 **What you may change.** Add a limit (a parameter, its place in `_limited`, a test). Not a limit on `FilesSource`, and
 not a re-listing per record.
 
+**Amendment 2026-10-31: `max_subfolders_per_folder`.** A quick run (`max_folders_per_set: 5`) of a dataset of three
+families of folders read the first five folders in name order — every one of the first two families, none of the
+third — because the folder limit counts the folders holding a file, at any depth, in one list. The user read "5" as
+five at each level. `max_subfolders_per_folder` is that reading, beside the folder limit rather than replacing it (a
+config that meant the first five folders keeps them): each folder, from the set down, keeps its own files and its
+first N subfolders with a selected file below them, applied after `max_depth` and before `max_folders_per_set`. On
+that dataset a quick run read 11 folders of the three families instead of 5 of two; on datasets of one level of
+folders it reads what the folder limit read.
+
+```python
+FileSelection(sets=["/data/A/1.0"], pattern="**/*.json", max_subfolders_per_folder=5, max_files_per_folder=20)
+```
+

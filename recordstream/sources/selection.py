@@ -1,14 +1,15 @@
 """``FileSelection`` — the files of several folders ("sets") as records, limited the same way wherever they are read.
 
 A run over a dataset's files says WHICH of them it reads in one place: the globs it lists, the files it leaves out,
-how deep below each set it looks, how many folders of each set and how many files of each folder it keeps, and how
-many in all. A quick run is the same selection with smaller limits (``max_folders_per_set: 5``,
-``max_files_per_folder: 20``), so every tool that reads the dataset shares one spelling of "a few of them".
+how deep below each set it looks, how many subfolders of each folder, how many folders of each set and how many files
+of each folder it keeps, and how many in all. A quick run is the same selection with smaller limits
+(``max_subfolders_per_folder: 5``, ``max_files_per_folder: 20``), so every tool that reads the dataset shares one
+spelling of "a few of them".
 """
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
 
 from annotated_types import Interval
 from confluid import configurable
@@ -27,7 +28,7 @@ Limit = Annotated[int, Interval(ge=0)]
 #: set a download fills is fetched then, never when the config is built).
 SetFolder = Union[str, "os.PathLike[str]"]
 
-_LIMITS = ("max_depth", "max_folders_per_set", "max_files_per_folder", "max_files")
+_LIMITS = ("max_depth", "max_subfolders_per_folder", "max_folders_per_set", "max_files_per_folder", "max_files")
 
 
 @configurable(category="source")
@@ -38,11 +39,13 @@ class FileSelection:
     dotfile and everything inside a hidden folder (``.sync/``) are never listed, a file ``exclude`` matches is left
     out (a glob without a slash by the file's name, one with by its place under the set, ``*`` crossing folders),
     and so is a companion half a registered format consumes (the data file of a pair: a pair counts once). Then, in
-    this order: a file more than ``max_depth`` folders below its set is left out; each set keeps the files of its
-    first ``max_folders_per_set`` folders (the folders holding a listed file, in name order); each folder keeps its
-    first ``max_files_per_folder`` files; and the whole selection its first ``max_files``. A limit of 0 keeps every
-    one. ``relative`` is the file's place under ``relative_to`` (the set's parent folder when empty, or when the file
-    lies outside it) less its extension — what a run names what it writes per record by.
+    this order: a file more than ``max_depth`` folders below its set is left out; each folder, the set's own and every
+    one below it, keeps its own files and its first ``max_subfolders_per_folder`` subfolders (those with a listed file
+    somewhere below them, in name order), so a quick run reaches every branch of a dataset; each set keeps the files
+    of its first ``max_folders_per_set`` folders (the folders holding a listed file, in name order, at any depth); each
+    folder keeps its first ``max_files_per_folder`` files; and the whole selection its first ``max_files``. A limit
+    of 0 keeps every one. ``relative`` is the file's place under ``relative_to`` (the set's parent folder when empty,
+    or when the file lies outside it) less its extension — what a run names what it writes per record by.
 
     The listing is made on first use and kept while the settings and the sets are the same: a dataset of thousands
     of files is never listed once per record. An empty selection is refused naming the sets and the globs.
@@ -52,6 +55,8 @@ class FileSelection:
         pattern: The glob listing each set's files, or a list of globs (``["**/*.json", "**/*.mat"]``).
         exclude: A glob of the files left out: by name without a slash (``*.tmp``), by place under the set with one.
         max_depth: The most folders between a set and a file read (0: the set's own files); None reads every depth.
+        max_subfolders_per_folder: The subfolders of each folder read, at every level, the first in name order (0:
+            every one).
         max_folders_per_set: The folders of each set read, the first in name order (0: every one).
         max_files_per_folder: The files of each folder read, the first in name order (0: every one).
         max_files: The files read in all, the first of the selection (0: every one).
@@ -68,6 +73,7 @@ class FileSelection:
         pattern: Union[str, List[str]] = "**/*",
         exclude: str = "",
         max_depth: Optional[Limit] = None,
+        max_subfolders_per_folder: Limit = 0,
         max_folders_per_set: Limit = 0,
         max_files_per_folder: Limit = 0,
         max_files: Limit = 0,
@@ -79,6 +85,7 @@ class FileSelection:
         self.pattern = pattern
         self.exclude = exclude
         self.max_depth = max_depth
+        self.max_subfolders_per_folder = max_subfolders_per_folder
         self.max_folders_per_set = max_folders_per_set
         self.max_files_per_folder = max_files_per_folder
         self.max_files = max_files
@@ -115,9 +122,11 @@ class FileSelection:
         return files
 
     def _limited(self, root: Path, files: List[Path]) -> List[Path]:
-        """One set's files after its depth, folder and per-folder limits."""
+        """One set's files after its depth, subfolder, folder and per-folder limits."""
         if self.max_depth is not None:
             files = [path for path in files if len(path.relative_to(root).parts) - 1 <= int(self.max_depth)]
+        if self.max_subfolders_per_folder:
+            files = self._within_subfolder_limit(root, files)
         if self.max_folders_per_set:
             folders = sorted({path.parent for path in files})[: int(self.max_folders_per_set)]
             kept = set(folders)
@@ -131,6 +140,21 @@ class FileSelection:
                     limited.append(path)
             files = limited
         return files
+
+    def _within_subfolder_limit(self, root: Path, files: List[Path]) -> List[Path]:
+        """The files whose every folder, from the set down, is among its parent's first subfolders."""
+        places = [path.relative_to(root).parent.parts for path in files]
+        children: Dict[Tuple[str, ...], Set[str]] = {}
+        for folders in places:
+            for level, name in enumerate(folders):
+                children.setdefault(folders[:level], set()).add(name)
+        limit = int(self.max_subfolders_per_folder)
+        kept = {parent: set(sorted(names)[:limit]) for parent, names in children.items()}
+        return [
+            path
+            for path, folders in zip(files, places)
+            if all(name in kept[folders[:level]] for level, name in enumerate(folders))
+        ]
 
     def _relative(self, path: Path, root: Path) -> str:
         start = self._folder(self.relative_to) if self.relative_to else root.parent
