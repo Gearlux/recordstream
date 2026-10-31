@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from confluid import configurable, input_specs, output
 
+from recordstream.exceptions import RecordstreamError
 from recordstream.items import Record, get_item_type, item_type_names
 
 #: Declared-type sentinel meaning "the entry must be PRESENT, any type" — for a boundary
@@ -25,12 +26,12 @@ from recordstream.items import Record, get_item_type, item_type_names
 ANY_TYPE = "*"
 
 
-class ContractError(ValueError):
+class ContractError(RecordstreamError, ValueError):
     """A record violated a :class:`RecordContract` — the message names the boundary,
     the record ordinal, the offending entry, and what the record does carry."""
 
 
-class ChainContractError(ValueError):
+class ChainContractError(RecordstreamError, ValueError):
     """An op chain cannot hold together — checked by :func:`check_chain` BEFORE it runs.
 
     The failure this exists to prevent is a SILENT one: an op that reads a record entry an

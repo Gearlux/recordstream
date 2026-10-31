@@ -2589,6 +2589,34 @@ as written; `ReplaceFolder` never empties a root, the home folder, a path holdin
 whose parent is missing. Pins: `tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`,
 `tests/test_processing_resume.py`; usage: [workflow.md](workflow.md), [runnable.md](runnable.md).
 
+**Amendment (2026-10-30): a named inner sequence, and the environment a run needs.** *Context:* a consuming
+project's step-by-step command was replaced by workflow configs. One of its choices was made of several runs (an
+option's three picture runs, their val runs, then a check of the folder they wrote), and `only` picked single steps
+by name; its training needed a CUDA allocator setting in the process's environment, which a config cannot write.
+*Decision:* `Sequence` takes a `name` (and a `title`), so a whole inner sequence is ONE step an outer `only` picks;
+`RunConfig` takes `environment`, each variable set for its process only where the running environment leaves it
+unset — a machine's own value wins — and the dry run is asked in that same environment, its plan naming what is set.
+*Consequences:* the process environment of a run is part of the document and shows in `--dry_run`; a variable the
+machine sets already is never overridden, so a per-machine `.env` stays the last word.
+
+```yaml
+runnable: !class:recordstream.workflow.Sequence
+  only: !ref:options
+  steps:
+    - !class:recordstream.workflow.Sequence
+      name: c
+      steps:
+        - !class:recordstream.workflow.RunConfig {config: pictures/c1.yaml}
+        - !class:recordstream.workflow.RunConfig {config: pictures/c2.yaml}
+    - !class:recordstream.workflow.RunConfig
+      name: train
+      config: train.yaml
+      environment: {PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"}
+```
+
+*What you may change:* how the plan shows the environment. What must hold: a variable already set is never replaced;
+the plan and the run see one environment.
+
 ## 33. Which files of a dataset a run reads is one selection (`FileSelection`, 2026-10-30)
 
 **Context.** Each config reading a dataset's files limited them its own way — a catalog's `max_cases_per_dir` inside

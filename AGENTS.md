@@ -315,7 +315,10 @@ Gotchas:
   `--dry-run --plan-format json` — never in-process. Never add a loop or template step: one `RunConfig` per run,
   written out. `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}` or a folder
   whose parent is missing. A workflow refusal is one `Error:` line, exit 1 (a failed step: its own status).
-  (`tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`)
+  Several runs that make one choice (an option's train and val runs, then its check) are a NAMED inner `Sequence`
+  that an outer `only` picks — never a name prefix the user types per run. `RunConfig.environment` sets a variable
+  for its process only where the running environment leaves it unset (a machine's own value wins), and plans in the
+  same environment it runs in. (`tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`)
 
 ## Storage
 
@@ -327,6 +330,13 @@ Gotchas:
   `create_dataset`. `read_record_group(group, slices=…)` is the one HDF5 row decoder
   (`tests/test_typed_storage.py::TestReadRecordGroupSlices`).
 - A metadata scan never loads an array; `SupportsMetadataScan` is structural.
+
+## Errors
+
+- Every exception recordstream defines derives from `recordstream.exceptions.RecordstreamError` (a leaf module) AND
+  from the builtin it stands for (`class DrawSpecError(RecordstreamError, ValueError)`); a private control-flow signal
+  that never leaves its module (`draws._NoFingerprint`, `flow.trace._Breakpoint`) is not an error and stays outside.
+  The classes are found by walking the package, never listed (`tests/test_exceptions.py`).
 
 ## Testing
 

@@ -7,7 +7,7 @@ composing ops: they HOLD other runnables and orchestrate them, so a multi-stage 
 
 | Combinator | Runs |
 |---|---|
-| `Sequence(steps=[...], only=[...])` | every step in order — the workflow itself (`None` steps skip), each checked before the first runs |
+| `Sequence(steps=[...], only=[...], name, title)` | every step in order — the workflow itself (`None` steps skip), each checked before the first runs; a named inner `Sequence` is ONE step an outer `only` picks (an option made of several runs) |
 | `Conditional(condition, if_true, if_false)` | one of two branches, by a condition (`None` branch = do nothing, the sequence continues) |
 | `Switch(select, cases, default)` | one of several branches, keyed by the select's value (coerced to `str`) |
 
@@ -55,7 +55,7 @@ steps of the document too:
 |---|---|
 | `Require(condition, message)` | refuses unless `condition` holds; `message` says what to do |
 | `ReplaceFolder(path, marker, parents)` | a folder without `marker` is deleted and made again with the marker in it; a folder holding it is kept, so a re-run after an interruption resumes into it. A filesystem root, the home folder and a folder whose parent is missing are refused — `parents: true` makes the missing parents instead |
-| `RunConfig(config, scopes, settings, name, hint, checked_first)` | runs `recordstream run <config> --scope <s> key=value` in its own process; a failed run stops the workflow with its exit status |
+| `RunConfig(config, scopes, settings, name, hint, checked_first, environment)` | runs `recordstream run <config> --scope <s> key=value` in its own process; a failed run stops the workflow with its exit status. `environment: {NAME: value}` sets a variable for that process where the machine leaves it unset (a machine's own value wins); the dry run names what it sets |
 
 The conditions say what they check: `EnvSet(name)` (an environment variable is set), `FreeSpace(path, gigabytes)`
 (measured on the nearest folder that exists, so `path` may be the folder a run will make), `HasFiles(path,

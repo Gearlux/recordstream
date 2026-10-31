@@ -29,6 +29,8 @@ from typing import Callable, Iterable, Literal, Optional, Tuple, TypeVar
 
 import psutil
 
+from recordstream.exceptions import RecordstreamError
+
 if sys.platform != "win32":
     import resource
 
@@ -47,7 +49,7 @@ Limit = Literal["measuring", "ceiling", "memory", "cores", "gpu"]
 T = TypeVar("T")
 
 
-class OutOfMemory(MemoryError):
+class OutOfMemory(RecordstreamError, MemoryError):
     """The machine's free memory fell under the run's reserve with no other record to wait for."""
 
 
