@@ -151,6 +151,67 @@ class TestTheLimits:
             "2.0/g2/deep/x",
         ]
 
+    def test_max_subfolders_per_folder_keeps_each_folders_first_subfolders_at_every_level(
+        self, two_sets: List[str]
+    ) -> None:
+        """A folder's own files are always kept; of its subfolders holding a listed file below them, the first in name
+        order — and the same again inside each one kept."""
+        selection = FileSelection(sets=two_sets, pattern="**/*.json", max_subfolders_per_folder=2)
+        assert _names(selection) == [
+            "1.0/f1/x",
+            "1.0/f1/y",
+            "1.0/f1/z",
+            "1.0/f2/x",
+            "1.0/top",
+            "2.0/g1/x",
+            "2.0/g1/y",
+            "2.0/g2/deep/x",
+        ]
+        selection = FileSelection(sets=two_sets, pattern="**/*.json", max_subfolders_per_folder=1)
+        assert _names(selection) == ["1.0/f1/x", "1.0/f1/y", "1.0/f1/z", "1.0/top", "2.0/g1/x", "2.0/g1/y"]
+
+    def test_a_subfolder_holding_no_listed_file_takes_no_place(self, tmp_path: Path) -> None:
+        root = _tree(tmp_path / "set", "a/notes.txt", "b/x.json", "c/x.json", "d/x.json")
+        selection = FileSelection(sets=[str(root)], pattern="**/*.json", max_subfolders_per_folder=2)
+        assert _names(selection) == ["set/b/x", "set/c/x"]
+
+    def test_max_subfolders_per_folder_reaches_every_branch_where_max_folders_per_set_stops_at_the_first(
+        self, tmp_path: Path
+    ) -> None:
+        """A dataset of three families, each a few folders: the folder limit of the set takes its first five folders,
+        all of the first two families; the subfolder limit takes folders of every family."""
+        root = _tree(
+            tmp_path / "1.3",
+            "BTE_training_data/BTE/a.json",
+            "BTE_training_data/BTE_2/a.json",
+            "BTE_training_data/BTE_Long/Bluetooth/a.json",
+            "LTE_training_data/LTE/LTE/a.json",
+            "LTE_training_data/LTE_MIMO_Dataset/a.json",
+            "LTE_training_data/LTE_MIMO_Dataset_2/a.json",
+            "WLAN_training_data/WLAN/a.json",
+            "WLAN_training_data/WLAN_2/a.json",
+        )
+        per_set = FileSelection(sets=[str(root)], pattern="**/*.json", max_folders_per_set=5)
+        assert [name.split("/")[1] for name in _names(per_set)] == ["BTE_training_data"] * 3 + ["LTE_training_data"] * 2
+        per_folder = FileSelection(sets=[str(root)], pattern="**/*.json", max_subfolders_per_folder=2)
+        assert _names(per_folder) == [
+            "1.3/BTE_training_data/BTE/a",
+            "1.3/BTE_training_data/BTE_2/a",
+            "1.3/LTE_training_data/LTE/LTE/a",
+            "1.3/LTE_training_data/LTE_MIMO_Dataset/a",
+        ], "the set's own folder keeps its first two subfolders too"
+        per_folder = FileSelection(sets=[str(root)], pattern="**/*.json", max_subfolders_per_folder=3)
+        assert [name.split("/")[1] for name in _names(per_folder)] == [
+            "BTE_training_data",
+            "BTE_training_data",
+            "BTE_training_data",
+            "LTE_training_data",
+            "LTE_training_data",
+            "LTE_training_data",
+            "WLAN_training_data",
+            "WLAN_training_data",
+        ]
+
     def test_max_files_per_folder_keeps_each_folders_first_files(self, two_sets: List[str]) -> None:
         selection = FileSelection(sets=two_sets, pattern="**/*.json", max_files_per_folder=1)
         assert _names(selection) == ["1.0/f1/x", "1.0/f2/x", "1.0/f3/x", "1.0/top", "2.0/g1/x", "2.0/g2/deep/x"]
@@ -163,7 +224,14 @@ class TestTheLimits:
             "1.0/f2/x",
         ]
 
-    def test_the_limits_apply_folders_then_files_per_folder_then_the_total(self, two_sets: List[str]) -> None:
+    def test_the_limits_apply_subfolders_then_folders_then_files_per_folder_then_the_total(
+        self, two_sets: List[str]
+    ) -> None:
+        # subfolders first: f1 and top's folder stay in the first set, so the folder limit of 2 then keeps both
+        selection = FileSelection(
+            sets=two_sets, pattern="**/*.json", max_subfolders_per_folder=1, max_folders_per_set=2
+        )
+        assert _names(selection) == ["1.0/f1/x", "1.0/f1/y", "1.0/f1/z", "1.0/top", "2.0/g1/x", "2.0/g1/y"]
         selection = FileSelection(
             sets=two_sets,
             pattern="**/*.json",
@@ -225,7 +293,10 @@ class TestRefusals:
         with pytest.raises(ValueError, match=r"FileSelection: \['\*\*/\*\.mat'\] matched no files under \["):
             len(FileSelection(sets=two_sets, pattern="**/*.mat"))
 
-    @pytest.mark.parametrize("setting", ["max_depth", "max_folders_per_set", "max_files_per_folder", "max_files"])
+    @pytest.mark.parametrize(
+        "setting",
+        ["max_depth", "max_subfolders_per_folder", "max_folders_per_set", "max_files_per_folder", "max_files"],
+    )
     def test_a_negative_limit_is_refused_by_its_range_mark(self, setting: str) -> None:
         with pytest.raises(ValueError, match=rf"{setting}\n  Input should be greater than or equal to 0"):
             FileSelection(**{setting: -1})  # type: ignore[arg-type]  # the value refused
@@ -250,6 +321,9 @@ def test_the_listing_is_made_once_for_its_settings(two_sets: List[str], monkeypa
     assert len(calls) == 2, "one glob a set"
     selection.max_files = 2
     assert len(selection) == 2 and len(calls) == 4, "a changed setting lists again"
+    selection.max_files = 0
+    selection.max_subfolders_per_folder = 1
+    assert len(selection) == 6 and len(calls) == 6, "the subfolder limit is one of the settings the listing follows"
 
 
 def test_a_path_is_given_back_as_the_operating_system_writes_it(two_sets: List[str]) -> None:

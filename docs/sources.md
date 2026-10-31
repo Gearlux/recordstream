@@ -256,6 +256,7 @@ recordings: !class:recordstream.sources.selection.FileSelection
   pattern: ["**/*.json", "**/*.mat"]   # one glob, or several joined
   exclude: "*/train/*"                 # by name without a slash, by place under the set with one
   max_depth: 2                         # at most 2 folders below a set (0: its own files)
+  max_subfolders_per_folder: 5         # each folder's first 5 subfolders, at every level, in name order
   max_folders_per_set: 5               # each set's first 5 folders holding a file, in name order
   max_files_per_folder: 20             # each folder's first 20 files
   max_files: 0                         # 0: no limit on the whole
@@ -263,18 +264,37 @@ recordings: !class:recordstream.sources.selection.FileSelection
 
 Each record is `{"file", "set", "relative"}`: the path, its set, and its place under `relative_to` (the set's parent
 folder by default) less its extension — what a run names its outputs by. The limits apply in that order: depth,
-folders of each set (the set's own folder is one of them, first), files of each folder, then the total. A dotfile and
-everything in a hidden folder (`.sync/`) are never listed, and a companion half a registered format consumes is left
-out, so a pair counts once. A set may be any object naming a folder (`os.PathLike`): it is asked when the selection is
-first listed, so a download fills it then. The listing is made once for its settings, and an empty selection is
+subfolders of each folder, folders of each set (the set's own folder is one of them, first), files of each folder,
+then the total. A dotfile and everything in a hidden folder (`.sync/`) are never listed, and a companion half a
+registered format consumes is left out, so a pair counts once. A set may be any object naming a folder
+(`os.PathLike`): it is asked when the selection is first listed, so a download fills it then. The listing is made once for its settings, and an empty selection is
 refused naming the sets and globs:
 
 ```
 ValueError: FileSelection: ['**/*.mat'] matched no files under ['/data/Captures/1.0'] (exclude '', max_depth None)
 ```
 
+The two folder limits differ on a dataset of several branches. `max_subfolders_per_folder` keeps a folder's own files
+and its first subfolders (those with a selected file below them), then the same inside each one kept, so it reaches
+every branch; `max_folders_per_set` counts every folder holding a file, at any depth, in one list, so it stops at the
+first branches in name order. With a limit of 3:
+
+| folder of the set | `max_subfolders_per_folder: 3` | `max_folders_per_set: 3` |
+|---|---|---|
+| `birds/1/` | kept | kept |
+| `birds/2/` | kept | kept |
+| `birds/3/` | kept | kept |
+| `birds/4/` | — | — |
+| `cats/1/` | kept | — |
+| `cats/2/` | kept | — |
+| `dogs/1/` | kept | — |
+| `dogs/2/` | kept | — |
+
+The set's own folder is a folder too: of `birds/`, `cats/`, `dogs/` and a fourth, `max_subfolders_per_folder: 3` keeps
+the first three.
+
 Named as top-level keys of a config, the settings reach the selection by their names, so a command line writes
-`max_folders_per_set=5 max_files_per_folder=20` — a quick run of the same config.
+`max_subfolders_per_folder=5 max_files_per_folder=20` — a quick run of the same config.
 
 ## Train / val / test splitting (`DatasetSplit`)
 

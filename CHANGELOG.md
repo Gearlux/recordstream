@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows
   (`docs/runnable.md`).
 - **`FileSelection`** (`recordstream.sources.selection`) — the files of several folders ("sets") as records
   (`{file, set, relative}`), chosen by `pattern` (one glob or several), `exclude`, `max_depth`,
+  `max_subfolders_per_folder` (each folder's first subfolders, at every level, so a few folders of every branch),
   `max_folders_per_set`, `max_files_per_folder` and `max_files`, so every config reading a dataset's files limits
   them the same way (`docs/sources.md`).
 - **`recordstream <config>` runs a config** — `run` is the default command, so `recordstream config.yaml` is
