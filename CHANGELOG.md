@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`Mask.classes`** — a mask may name its values (`Mask(cells, classes=["road"])`: a cell holding `v` is
+  `classes[v]`, a negative one background), as `Label.classes` and `Boxes.classes` do; it survives numpy operations,
+  pickling and the item codec. `None` (the default) names nothing.
 - **`RecordstreamError`**, the root of every error recordstream raises (`from recordstream import RecordstreamError`):
   `except RecordstreamError` catches them all, and each still is the builtin it was (`DrawSpecError` a `ValueError`,
   `WorkflowError` a `RuntimeError`, `OutOfMemory` a `MemoryError`), so an existing `except` keeps working.
