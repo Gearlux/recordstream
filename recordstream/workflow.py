@@ -284,6 +284,15 @@ def _evaluate_condition(condition: Any) -> bool:
     return bool(condition)
 
 
+def _forward(step: Any, flags: Dict[str, Any]) -> Any:
+    """Flow ``step`` (if deferred), hand it ``flags`` when it takes them (``forward_flags``), and return it."""
+    step = _resolve(step)
+    forwarder = getattr(step, "forward_flags", None)
+    if callable(forwarder):
+        forwarder(flags)
+    return step
+
+
 def _run(runnable: Any, progress_callback: Any = None) -> None:
     """Flow ``runnable`` (if deferred) and call its ``run()``; ``None`` is a no-op.
 
@@ -346,6 +355,10 @@ class Sequence(TorchRunner, ProgressReporting):
             logger.info(f"Sequence step {index}/{total}: {plans[index - 1].title}")
             _run(step, self._progress_callback)
 
+    def forward_flags(self, flags: Dict[str, Any]) -> None:
+        """Hand ``flags`` — command-line keys the workflow does not use itself — to every step that starts a run."""
+        self.steps = [_forward(step, flags) for step in self.steps]
+
     def plan(self) -> Plan:
         """Every selected step's plan, nothing run — what ``recordstream run <workflow> --dry-run`` prints."""
         return Plan(
@@ -390,6 +403,11 @@ class Conditional(TorchRunner, ProgressReporting):
         self.if_true = if_true
         self.if_false = if_false
 
+    def forward_flags(self, flags: Dict[str, Any]) -> None:
+        """Hand ``flags`` to both branches (see :meth:`Sequence.forward_flags`)."""
+        self.if_true = _forward(self.if_true, flags)
+        self.if_false = _forward(self.if_false, flags)
+
     def run(self) -> None:
         chosen = self.if_true if _evaluate_condition(self.condition) else self.if_false
         branch = _resolve(chosen)
@@ -422,6 +440,11 @@ class Switch(TorchRunner, ProgressReporting):
         self.select = select
         self.cases: Dict[str, Any] = dict(cases) if cases else {}
         self.default = default
+
+    def forward_flags(self, flags: Dict[str, Any]) -> None:
+        """Hand ``flags`` to every case and the default (see :meth:`Sequence.forward_flags`)."""
+        self.cases = {key: _forward(case, flags) for key, case in self.cases.items()}
+        self.default = _forward(self.default, flags)
 
     def run(self) -> None:
         key = self._select()
@@ -797,6 +820,8 @@ class RunConfig:
             another's does not (``PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True``); each is set only where the
             environment the workflow runs in leaves it unset, so a machine's own value wins. The dry run is asked in
             the same environment, and its plan names what is set.
+        forward: Whether the command-line keys the workflow does not use itself (``--show_progress``) are handed to
+            this run, after ``settings`` so a typed one wins; false: the run gets its ``settings`` only.
     """
 
     def __init__(
@@ -809,6 +834,7 @@ class RunConfig:
         hint: str = "",
         checked_first: bool = True,
         environment: Optional[Dict[str, Any]] = None,
+        forward: bool = True,
     ) -> None:
         self.config = config
         self.scopes = scopes
@@ -818,13 +844,21 @@ class RunConfig:
         self.hint = hint
         self.checked_first = checked_first
         self.environment = environment
+        self.forward = forward
+        self.forwarded: Dict[str, Any] = {}
+
+    def forward_flags(self, flags: Dict[str, Any]) -> None:
+        """Take the command-line keys the workflow does not use itself, to run with them (unless ``forward`` is off)."""
+        if self.forward:
+            self.forwarded = dict(flags)
 
     @property
     def command(self) -> List[str]:
-        """The command this step runs."""
+        """The command this step runs: its ``settings``, then the keys forwarded to it, in the order typed."""
         scopes = [word for scope in (self.scopes or []) for word in ("--scope", str(scope))]
         settings = [f"{key}={_setting_text(value)}" for key, value in (self.settings or {}).items()]
-        return [*_RUNNER, self.config, *scopes, *settings]
+        forwarded = [f"{key}={_setting_text(value)}" for key, value in self.forwarded.items()]
+        return [*_RUNNER, self.config, *scopes, *settings, *forwarded]
 
     @property
     def label(self) -> str:

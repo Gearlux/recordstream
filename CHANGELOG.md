@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A key typed on a workflow's command line reaches its runs** — `recordstream run workflow.yaml --show_progress`
+  hands every key the workflow does not use itself to each `RunConfig` it starts, after that run's `settings` and in the
+  order typed; `--dry_run` shows the same commands. A key a workflow object takes, a key its document declares and the
+  command's own options stay the workflow's. `RunConfig(forward=False)` keeps a run to its `settings`. `--help` and TAB
+  list the runs' options after the workflow's own (the `liquifai.config_refs` entry point for `RunConfig.config`).
 - **`Mask.classes`** — a mask may name its values (`Mask(cells, classes=["road"])`: a cell holding `v` is
   `classes[v]`, a negative one background), as `Label.classes` and `Boxes.classes` do; it survives numpy operations,
   pickling and the item codec. `None` (the default) names nothing.

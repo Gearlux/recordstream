@@ -55,7 +55,7 @@ steps of the document too:
 |---|---|
 | `Require(condition, message)` | refuses unless `condition` holds; `message` says what to do |
 | `ReplaceFolder(path, marker, parents)` | a folder without `marker` is deleted and made again with the marker in it; a folder holding it is kept, so a re-run after an interruption resumes into it. A filesystem root, the home folder and a folder whose parent is missing are refused — `parents: true` makes the missing parents instead |
-| `RunConfig(config, scopes, settings, name, hint, checked_first, environment)` | runs `recordstream run <config> --scope <s> key=value` in its own process; a failed run stops the workflow with its exit status. `environment: {NAME: value}` sets a variable for that process where the machine leaves it unset (a machine's own value wins); the dry run names what it sets |
+| `RunConfig(config, scopes, settings, name, hint, checked_first, environment, forward)` | runs `recordstream run <config> --scope <s> key=value` in its own process; a failed run stops the workflow with its exit status. `environment: {NAME: value}` sets a variable for that process where the machine leaves it unset (a machine's own value wins); the dry run names what it sets. `forward: false` keeps the keys typed on the workflow's command line (below) from reaching it |
 
 The conditions say what they check: `EnvSet(name)` (an environment variable is set), `FreeSpace(path, gigabytes)`
 (measured on the nearest folder that exists, so `path` may be the folder a run will make), `HasFiles(path,
@@ -107,6 +107,29 @@ recordstream run make_store.yaml store.root=/elsewhere --dry_run
   `pkg://<distribution>/<path>` is the file a package ships.
 - **`only`** runs the steps it names and every step without a name; a name no step has is refused, listing the
   names there are.
+
+### A key typed on the workflow's command line reaches its runs
+
+`recordstream run make_store.yaml --show_progress` types a setting of the processor each run builds, not of the
+workflow: the workflow's own objects take no `show_progress`. A key the workflow does not use is **handed to every run
+it starts**, after that run's `settings` (so the typed key wins), in the order typed:
+
+```text
+$ recordstream run make_store.yaml --show_progress --workers 3 --dry_run
+[3/6] images
+      recordstream run images.yaml output=/data/Store/2.0/images show_progress=true workers=3
+```
+
+"Does not use" is the question `recordstream run` asks confluid after it builds the workflow: a key a workflow object
+takes (`--only`, `--name`), a key the workflow's document declares (`--store.root` — the workflow's own knob, which its
+`settings` pass on as they choose) and the command's own options (`--dry_run`) stay the workflow's; everything else goes
+on. The run applies it by its own rule, so a typo reaches every run, and each run's own rule decides (a run that takes
+no such key ignores it as a run does when typed alone). Limits: `--scope` stays explicit (the workflow's `scopes:` knob);
+`+key` and `~key` are not handed on; a list item cannot be addressed (`runnable.steps[2]…`); a dotted key under
+`runnable` addresses the workflow's own runnable, so a run's setting is typed bare (`--workers`, not
+`--runnable.workers`). `RunConfig(forward: false)` keeps a run to its `settings`. `--help` and TAB list the runs'
+options after the workflow's own (liquifai `docs/shell-completion.md`), registered by `recordstream`'s
+`liquifai.config_refs` entry point.
 
 ### Every step is checked before the first runs
 
