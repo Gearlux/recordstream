@@ -159,33 +159,45 @@ def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") 
 
 
 def _forward_unused_flags(runnable: Any, report: ConfigurationReport) -> None:
-    """Hand a workflow the command-line keys it does not use itself, for the runs it starts.
+    """Say what became of the command-line keys the runnable did not take: hand them on, or warn.
 
     ``recordstream run workflow.yaml --show_progress`` types a key of the processor a step runs, not of the workflow:
     the workflow's own objects take none of it, so confluid's report (:func:`liquifai.overrides.unused_overrides`)
     says it matched nothing. A runnable with ``forward_flags`` (:class:`~recordstream.workflow.Sequence` and its
     kin) hands those keys to its steps, each run applying them with its own rule — a typo gets that run's own
-    warning. A key whose head the workflow's document declares (``--standardize.workers``) is the workflow's own
-    knob, whatever the report says, and so is this command's own option (``--dry_run``): neither is handed on. A
-    runnable without ``forward_flags`` is left as it was.
+    warning. Any other runnable has no run to hand them to: each is warned about, as liquifai warns for a command
+    that builds its objects in its own body (``Override 'zzz' matched nothing and was ignored``).
+
+    Two kinds of key are never judged. One whose head the document declares (``--standardize.workers``,
+    ``--max_files`` beside a ``max_files:`` line) is the document's own knob, whatever the report says. One that is an
+    option of this command (``--dry_run``) is the command's. A liquifai older than the verdict leaves every key as it
+    was.
     """
     from liquifai.context import get_context
-    from liquifai.overrides import unused_overrides
 
-    forward = getattr(runnable, "forward_flags", None)
-    context = get_context()
-    if not callable(forward) or context is None or not context.cli_overrides:
+    try:
+        from liquifai.overrides import unused_overrides, warn_unused_overrides
+    except ImportError:  # a liquifai older than the verdict: nothing is handed on, nothing warned
         return
-    # the keys that are not the workflow's to hand on: its document's own, and this command's own (`--dry_run`)
+
+    context = get_context()
+    if context is None or not context.cli_overrides:
+        return
+    # the keys that are not judged: the document's own, and this command's own (`--dry_run`)
     own = {
         *(context.raw_document if isinstance(context.raw_document, dict) else {}),
         *inspect.signature(run).parameters,
     }
     typed = context.cli_overrides
     flags = {key: typed[key] for key in unused_overrides(typed, report) if key.partition(".")[0] not in own}
-    if flags:
+    if not flags:
+        return
+    forward = getattr(runnable, "forward_flags", None)
+    if callable(forward):
         logger.debug(f"Handing the runs of {runnable.__class__.__name__} the keys it does not use: {', '.join(flags)}")
         forward(flags)
+    else:
+        warn_unused_overrides(flags, report, context.config_path)
 
 
 def _print_plan(plan: Plan, plan_format: PlanFormat) -> None:

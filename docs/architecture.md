@@ -2627,8 +2627,12 @@ and TAB, accepting the second spelling the configuration-utility ruling would ot
   own check sees is empty in a `flow_mode="manual"` command, which builds in its body) and asks
   `liquifai.overrides.unused_overrides`: a key no object of the workflow took. A key whose head the workflow's
   document declares (`standardize.*`), and the command's own parameters (`dry_run`, `plan_format`), are the
-  workflow's, whatever the report says. A runnable without `forward_flags` is left exactly as before (a plain
-  `recordstream run` still drops a key nothing takes without a word — not touched here).
+  workflow's, whatever the report says. A runnable without `forward_flags` has no run to hand a key to: each key
+  nothing took is WARNED about (`Override 'zzz' matched nothing and was ignored`, liquifai's own message) — a plain
+  `recordstream run` used to drop it without a word, because the runnable is built in the command's body, after
+  liquifai's own check ran on an empty report. A key the document declares is never judged, so overriding a line of
+  the file nothing reads is no typo; a key a `!lazy:` object takes counts as taken (checked on a real training config:
+  `--max_epochs`, `--lr` silent, `--zzz` warned). A liquifai older than the verdict leaves every key as it was.
 * *The delivery is the run's own rule.* `Sequence`, `Conditional` and `Switch` pass the keys to their steps
   (`forward_flags`, flowing a deferred step once); a `RunConfig` appends them, `key=value`, AFTER its `settings` in the
   command it plans and runs — the same command, so `--dry_run` shows what runs. The child process applies them
