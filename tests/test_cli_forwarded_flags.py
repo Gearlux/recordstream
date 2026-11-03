@@ -12,7 +12,11 @@ import sys
 from pathlib import Path
 from typing import List
 
+import liquifai.overrides
 import pytest
+from confluid.report import ConfigurationReport
+
+from recordstream import cli
 
 #: A process that hangs fails the test this long after it starts, naming the command.
 _DEADLINE_S = 120
@@ -116,3 +120,56 @@ def test_several_keys_are_handed_on_in_the_order_typed(folder: Path) -> None:
     finished = _run(folder, "workflow.yaml", "--path", "p.done", "--zzz", "1", "--aaa", "2", "--dry-run")
     # the folder step takes none of `zzz` and `aaa`: they ride along, in order, for the run to judge
     assert _commands(finished.stdout)[0] == "recordstream run touch_a.yaml path=p.done zzz=1 aaa=2"
+
+
+def _said(finished: "subprocess.CompletedProcess[str]") -> str:
+    """Everything the process wrote: loggair writes the warning to the stream it chooses."""
+    return finished.stdout + finished.stderr
+
+
+def test_a_key_nothing_takes_is_warned_about_on_a_run_that_starts_no_run(folder: Path) -> None:
+    finished = _run(folder, "touch_a.yaml", "--zzz", "1", "--dry-run")
+    assert finished.returncode == 0, finished.stderr
+    assert "Override 'zzz' matched nothing and was ignored" in _said(finished)
+
+
+def test_a_key_the_run_takes_is_not_warned_about(folder: Path) -> None:
+    finished = _run(folder, "touch_a.yaml", "--path", "elsewhere.done", "--dry-run")
+    assert "matched nothing" not in _said(finished)
+    assert "replace elsewhere.done" in finished.stdout  # it reached the folder step
+
+
+def test_a_key_the_document_declares_and_the_commands_own_options_are_never_judged(folder: Path) -> None:
+    """``label`` is a line of the file nothing reads: overriding it is no typo. ``--dry_run`` is the command's."""
+    (folder / "declared.yaml").write_text(
+        "label: first\nrunnable: !class:recordstream.workflow.ReplaceFolder { path: a.done }\n"
+    )
+    finished = _run(folder, "declared.yaml", "--label", "second", "--dry_run")
+    assert finished.returncode == 0, finished.stderr
+    assert "matched nothing" not in _said(finished)
+
+
+def test_a_key_a_deferred_object_takes_is_not_warned_about(folder: Path) -> None:
+    """``--path`` reaches the ``!lazy:`` folder step the conditional holds: built later, it is still a taker."""
+    (folder / "lazy.yaml").write_text(
+        "runnable: !class:recordstream.workflow.Conditional\n"
+        "  condition: true\n"
+        "  if_true: !lazy:recordstream.workflow.ReplaceFolder { path: a.done }\n"
+    )
+    finished = _run(folder, "lazy.yaml", "--path", "elsewhere.done", "--dry_run")
+    assert finished.returncode == 0, finished.stderr
+    assert "matched nothing" not in _said(finished)
+
+
+def test_a_workflow_hands_a_typo_on_and_leaves_the_warning_to_the_run(folder: Path) -> None:
+    """The workflow does not warn for a key it hands to its runs: each run judges it by its own rule."""
+    finished = _run(folder, "workflow.yaml", "--zzz", "1", "--dry-run")
+    assert finished.returncode == 0, finished.stderr
+    assert "zzz=1" in finished.stdout
+    assert "matched nothing" not in _said(finished)  # the runs' own output is captured by the plan
+
+
+def test_a_liquifai_without_the_verdict_leaves_every_key_as_it_was(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A liquifai older than ``unused_overrides`` must not make ``recordstream run`` fail: nothing is handed on."""
+    monkeypatch.delattr(liquifai.overrides, "unused_overrides")
+    cli._forward_unused_flags(object(), ConfigurationReport())

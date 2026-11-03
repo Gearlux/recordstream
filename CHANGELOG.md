@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`recordstream run` warns about a key nothing takes** — `recordstream run train.yaml --lrr 0.1` printed nothing and
+  ran with the default; it now says `Override 'lrr' matched nothing and was ignored`, before the run, as liquifai does
+  for a command that builds its objects itself. A key the config declares (`--max_files` beside a `max_files:` line)
+  is never judged, and a key an object built later (`!lazy:`) takes counts as taken. A run started by a workflow
+  warns the same way for a key the workflow handed it.
 - **A key typed on a workflow's command line reaches its runs** — `recordstream run workflow.yaml --show_progress`
   hands every key the workflow does not use itself to each `RunConfig` it starts, after that run's `settings` and in the
   order typed; `--dry_run` shows the same commands. A key a workflow object takes, a key its document declares and the

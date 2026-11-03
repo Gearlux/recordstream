@@ -123,8 +123,8 @@ $ recordstream run make_store.yaml --show_progress --workers 3 --dry_run
 "Does not use" is the question `recordstream run` asks confluid after it builds the workflow: a key a workflow object
 takes (`--only`, `--name`), a key the workflow's document declares (`--store.root` — the workflow's own knob, which its
 `settings` pass on as they choose) and the command's own options (`--dry_run`) stay the workflow's; everything else goes
-on. The run applies it by its own rule, so a typo reaches every run, and each run's own rule decides (a run that takes
-no such key ignores it as a run does when typed alone). Limits: `--scope` stays explicit (the workflow's `scopes:` knob);
+on. The run applies it by its own rule, so a typo reaches every run, and each run warns about it as `recordstream run`
+does for any key nothing takes (`Override 'zzz' matched nothing and was ignored`). Limits: `--scope` stays explicit (the workflow's `scopes:` knob);
 `+key` and `~key` are not handed on; a list item cannot be addressed (`runnable.steps[2]…`); a dotted key under
 `runnable` addresses the workflow's own runnable, so a run's setting is typed bare (`--workers`, not
 `--runnable.workers`). `RunConfig(forward: false)` keeps a run to its `settings`. `--help` and TAB list the runs'
