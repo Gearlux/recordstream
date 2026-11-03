@@ -19,10 +19,13 @@ Example::
     recordstream run convert.yaml    # the same run, the command named
 """
 
+import inspect
 import json
 import sys
 from typing import Any
 
+from confluid import collect_report
+from confluid.report import ConfigurationReport
 from liquifai import LiquifyApp
 from loggair import get_logger
 
@@ -126,7 +129,9 @@ def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") 
         logger.error("'runnable' was not bound — provide one under 'runnable:' in your YAML.")
         return
 
-    runnable = materialize_runnable(runnable)
+    with collect_report() as report:
+        runnable = materialize_runnable(runnable)
+    _forward_unused_flags(runnable, report)
 
     label = runnable.__class__.__name__
     if dry_run:
@@ -151,6 +156,36 @@ def run(runnable: Any, dry_run: bool = False, plan_format: PlanFormat = "text") 
             raise
         print(f"Error: {stopped}", file=sys.stderr, flush=True)
         raise SystemExit(stopped.returncode if isinstance(stopped, StepFailed) else 1) from stopped
+
+
+def _forward_unused_flags(runnable: Any, report: ConfigurationReport) -> None:
+    """Hand a workflow the command-line keys it does not use itself, for the runs it starts.
+
+    ``recordstream run workflow.yaml --show_progress`` types a key of the processor a step runs, not of the workflow:
+    the workflow's own objects take none of it, so confluid's report (:func:`liquifai.overrides.unused_overrides`)
+    says it matched nothing. A runnable with ``forward_flags`` (:class:`~recordstream.workflow.Sequence` and its
+    kin) hands those keys to its steps, each run applying them with its own rule — a typo gets that run's own
+    warning. A key whose head the workflow's document declares (``--standardize.workers``) is the workflow's own
+    knob, whatever the report says, and so is this command's own option (``--dry_run``): neither is handed on. A
+    runnable without ``forward_flags`` is left as it was.
+    """
+    from liquifai.context import get_context
+    from liquifai.overrides import unused_overrides
+
+    forward = getattr(runnable, "forward_flags", None)
+    context = get_context()
+    if not callable(forward) or context is None or not context.cli_overrides:
+        return
+    # the keys that are not the workflow's to hand on: its document's own, and this command's own (`--dry_run`)
+    own = {
+        *(context.raw_document if isinstance(context.raw_document, dict) else {}),
+        *inspect.signature(run).parameters,
+    }
+    typed = context.cli_overrides
+    flags = {key: typed[key] for key in unused_overrides(typed, report) if key.partition(".")[0] not in own}
+    if flags:
+        logger.debug(f"Handing the runs of {runnable.__class__.__name__} the keys it does not use: {', '.join(flags)}")
+        forward(flags)
 
 
 def _print_plan(plan: Plan, plan_format: PlanFormat) -> None:

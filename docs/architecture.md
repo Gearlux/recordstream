@@ -2617,6 +2617,31 @@ runnable: !class:recordstream.workflow.Sequence
 *What you may change:* how the plan shows the environment. What must hold: a variable already set is never replaced;
 the plan and the run see one environment.
 
+**Amendment (2026-11-03): a key the workflow does not use reaches its runs.** `recordstream run standardize.yaml
+--show_progress` was dropped without a word: only a key the workflow's author wired in (`settings: {runnable.workers:
+"${standardize.workers}"}`) reached a step, and a workflow listing a knob per setting of its runs limits the options
+of every run to the ones its author remembered. The user asked for the typed key to reach the runs and to show in `--help`
+and TAB, accepting the second spelling the configuration-utility ruling would otherwise bar. It stays ONE rule:
+
+* *The verdict is confluid's.* `cli.run` builds the runnable inside `confluid.collect_report()` (the report liquifai's
+  own check sees is empty in a `flow_mode="manual"` command, which builds in its body) and asks
+  `liquifai.overrides.unused_overrides`: a key no object of the workflow took. A key whose head the workflow's
+  document declares (`standardize.*`), and the command's own parameters (`dry_run`, `plan_format`), are the
+  workflow's, whatever the report says. A runnable without `forward_flags` is left exactly as before (a plain
+  `recordstream run` still drops a key nothing takes without a word — not touched here).
+* *The delivery is the run's own rule.* `Sequence`, `Conditional` and `Switch` pass the keys to their steps
+  (`forward_flags`, flowing a deferred step once); a `RunConfig` appends them, `key=value`, AFTER its `settings` in the
+  command it plans and runs — the same command, so `--dry_run` shows what runs. The child process applies them
+  by its one rule, unchanged: a bare `workers=3` reaches the processor's `workers` and beats the author's
+  `runnable.workers=auto` before it (measured: a bare key beats an addressed one for the same parameter, in either
+  typed order).
+* *Limits, documented.* A key a workflow object takes is its own; `--scope` stays the author's `scopes:` knob;
+  `+key`/`~key` are not handed on; a dotted key under `runnable` addresses the workflow; a typo goes to every run.
+
+`RunConfig` gains `forward: bool = True` (a run held to its `settings`). `--help` and TAB list the runs' options after the
+workflow's own through the `liquifai.config_refs` entry point recordstream registers for `RunConfig.config` (liquifai
+`docs/architecture.md` §13). Pins: `tests/test_workflow_steps.py` (the forwarding group), `tests/test_cli_forwarded_flags.py`.
+
 ## 33. Which files of a dataset a run reads is one selection (`FileSelection`, 2026-10-30)
 
 **Context.** Each config reading a dataset's files limited them its own way — a catalog's `max_cases_per_dir` inside

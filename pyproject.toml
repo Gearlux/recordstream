@@ -177,6 +177,11 @@ recordstream = "recordstream.cli:main"
 [project.entry-points."liquifai.apps"]
 recordstream = "recordstream.cli:app"
 
+# A parameter that names a config another run reads: --help and TAB of a workflow list the options of the runs its
+# RunConfig steps start (liquifai.completion.config_refs). Name = <class>.<parameter>; no class is imported.
+[project.entry-points."liquifai.config_refs"]
+"recordstream.workflow.RunConfig.config" = "recordstream.workflow:RunConfig"
+
 # Which of this project's extras are ML FRAMEWORKS, for aisland's `framework` selection. Choosing a name
 # is what makes `aisland setup` add the matching extra to this project's install.
 #

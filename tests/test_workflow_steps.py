@@ -24,6 +24,7 @@ from confluid import configurable
 from recordstream import workflow
 from recordstream.workflow import (
     Check,
+    Conditional,
     EnvSet,
     FreeSpace,
     HasFiles,
@@ -36,6 +37,7 @@ from recordstream.workflow import (
     RunConfig,
     Sequence,
     StepFailed,
+    Switch,
     WorkflowError,
     plan_lines,
     plan_of,
@@ -509,6 +511,71 @@ def test_a_step_checked_at_its_turn_does_not_make_the_dry_run_stop(processes: _F
 
 def test_plan_of_a_runnable_without_a_plan_says_it_would_run_it() -> None:
     assert plan_of(_Step("x")) == Plan(title="_Step", actions=["run _Step"])
+
+
+# --------------------------------------------------------------------------- #
+# Flags the workflow does not use: handed to the runs it starts
+# --------------------------------------------------------------------------- #
+def test_a_forwarded_flag_comes_after_the_settings_so_the_typed_one_wins(processes: _FakeProcesses) -> None:
+    step = RunConfig(config="a.yaml", scopes=["val"], settings={"workers": "auto", "folder": "/x"})
+    step.forward_flags({"show_progress": True, "workers": 3, "tags": ["a", "b"]})
+    step.run()
+    assert processes.commands[0][processes.commands[0].index("a.yaml") + 1 :] == [
+        "--scope",
+        "val",
+        "workers=auto",
+        "folder=/x",
+        "show_progress=true",
+        "workers=3",
+        "tags=[a, b]",
+    ]
+
+
+def test_a_run_with_forward_off_gets_its_settings_only(processes: _FakeProcesses) -> None:
+    step = RunConfig(config="a.yaml", settings={"workers": "auto"}, forward=False)
+    step.forward_flags({"show_progress": True})
+    step.run()
+    assert processes.commands[0][processes.commands[0].index("a.yaml") + 1 :] == ["workers=auto"]
+
+
+def test_a_run_forwarded_nothing_starts_the_command_it_always_did(processes: _FakeProcesses) -> None:
+    step = RunConfig(config="a.yaml", settings={"workers": "auto"})
+    before = step.command
+    step.forward_flags({})
+    assert step.command == before
+
+
+def test_a_sequence_hands_the_flags_to_every_run_in_it_and_the_plan_shows_what_runs(
+    processes: _FakeProcesses,
+) -> None:
+    inner = Sequence(steps=[RunConfig(config="inner.yaml", name="inner")], name="group")
+    flowing = Sequence(steps=[_Step("x"), RunConfig(config="first.yaml", name="first"), inner])
+    flowing.forward_flags({"show_progress": True})
+    flowing.plan()
+    planned = [command[:-3] for command in processes.commands if command[-3:] == ["--dry-run", "--plan-format", "json"]]
+    processes.commands.clear()
+    flowing.run()
+    assert [command[-2:] for command in planned] == [
+        ["first.yaml", "show_progress=true"],
+        ["inner.yaml", "show_progress=true"],
+    ]
+    assert [command for command in processes.commands if "--dry-run" not in command] == planned
+
+
+def test_a_conditional_and_a_switch_hand_the_flags_to_all_their_branches(processes: _FakeProcesses) -> None:
+    if_ = Conditional(condition=True, if_true=RunConfig(config="yes.yaml"), if_false=RunConfig(config="no.yaml"))
+    case = Switch(
+        select="k", cases={"k": RunConfig(config="k.yaml"), "m": RunConfig(config="m.yaml")}, default=_Step("d")
+    )
+    Sequence(steps=[if_, case]).forward_flags({"workers": 2})
+    commands = [if_.if_true.command, if_.if_false.command, case.cases["k"].command, case.cases["m"].command]
+    assert [command[-1] for command in commands] == ["workers=2"] * 4
+
+
+def test_a_step_that_starts_no_run_is_left_alone() -> None:
+    step = _Step("x")
+    Sequence(steps=[step]).forward_flags({"workers": 2})
+    assert not hasattr(step, "forwarded")
 
 
 # --------------------------------------------------------------------------- #
