@@ -375,6 +375,25 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 > `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
 > loaded source.
 
+## A stream another config defines (`ConfigStreamSource`)
+
+A training config already says what its data is — `train_set: !class:recordstream.Stream` with a source and the
+preprocessing a model needs. `ConfigStreamSource` reads that stream from the config file, so another graph (an
+analysis, a comparison) walks the same records without copying the dataset's definition:
+
+```yaml
+pictures: !class:recordstream.sources.config.ConfigStreamSource
+  config: pkg://<project>/examples/train.yaml   # a path, or a config a package ships
+  key: train_set                                # train_set, val_set, test_set, stream, …
+  scopes: [framework=lightning]                 # as on the config's command line
+  apply_ops: false                              # false: the records as stored; true: with the stream's ops
+```
+
+By default it reads the stream's source alone — a training stream usually ends in resizing, normalising and
+`ToTensor`, which a reader of the records does not want; `apply_ops: true` reads the stream as the config defines it. The
+config is loaded on first use, never when the source is built; `len`, `source[i]` and `dataset_uri` answer what the
+config's stream answers. A key the config does not hold is refused naming the keys it does.
+
 ## Leaving out another dataset's records (`DifferenceSource`)
 
 `DifferenceSource(source, remove, key, compare)` is `source` without every record whose `key` some record of

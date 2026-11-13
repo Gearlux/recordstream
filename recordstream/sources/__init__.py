@@ -25,6 +25,7 @@ second pass — the one that surfaces these nodes — walks exactly this ``__all
 """
 
 from recordstream.sources.concat import ConcatSource
+from recordstream.sources.config import ConfigStreamSource
 from recordstream.sources.difference import CompareBy, DifferenceSource
 from recordstream.sources.draw import DrawSource
 from recordstream.sources.files import FilesSource
@@ -36,6 +37,7 @@ from recordstream.sources.split import DatasetSplit, SplitName
 __all__ = [
     "CompareBy",
     "ConcatSource",
+    "ConfigStreamSource",
     "DatasetSplit",
     "DifferenceSource",
     "DrawSource",

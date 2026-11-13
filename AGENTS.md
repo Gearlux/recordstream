@@ -19,7 +19,7 @@ document); storage sinks write them. On top sits the runnable layer: `recordstre
 | data model | `items.py`, `io.py` (codec), `dispatch.py`, `transform.py` (`Transform`, `Pipeline`), `algorithm.py` |
 | engine | `core/` (`families` → `mapstyle` → `wrappers` → `stream`), `flow/` (`steps` → `parse` → `execute` → `graph`, plus `subgraph`, `trace`) |
 | ops | `ops/`: `numpy`, `image`, `torch`, `target`, `structure`, `formula`, `formats` (`ReadFile`), `contract`, `predict`, `sink`, `debug`, the compose ops |
-| sources | `sources/`: `huggingface`, `files`, `selection`, `split`, `range`, `concat`, `difference`, `draw`; `draws.py`; `formats.py` (file-format registry) |
+| sources | `sources/`: `huggingface`, `files`, `selection`, `split`, `range`, `concat`, `config`, `difference`, `draw`; `draws.py`; `formats.py` (file-format registry) |
 | storage | `storage/`: `hdf5`, `zarr`, `directory`, `query`, `cache` |
 | batching | `collate.py`, `batch.py` (read-back), `keras.py`, `loaders.py` |
 | boundaries | `projection.py`, `uri.py`, `labels.py`, `outputs.py`, `predictions.py` |
