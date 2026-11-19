@@ -585,7 +585,7 @@ class Stream:
         expensive read happens for that record alone. Partial: a generator.
         """
         from recordstream.flow import _result_readers, run_steps_multi
-        from recordstream.formats import answers
+        from recordstream.formats import Absent, answers
 
         source = self._guard_live_source()
         if source is None:
@@ -609,7 +609,8 @@ class Stream:
                 real = item if cheap_source is None else source[position]
                 produced = run_steps_multi(real, full_steps, full_outputs, full_readers)
             for record in produced:
-                yield {k: v for k, v in record.items() if k in want}
+                # an entry the cheap answer knows is ABSENT is left out, as the full read leaves it
+                yield {k: v for k, v in record.items() if k in want and not isinstance(v, Absent)}
 
 
 def ensure_materialized(source: RecordSource) -> RecordSource:

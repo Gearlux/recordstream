@@ -267,6 +267,53 @@ class TestASourceCanOfferACheapTwin:
         with pytest.raises(ContractError, match="is a StandIn, expected Image"):
             real({"payload": STAND_IN})  # the contract a full read runs is unchanged
 
+    class _Annotated(_Archive):
+        """An archive whose index knows which records carry a `boxes` entry and which carry none."""
+
+        def __init__(self, boxes: List[Optional[str]]) -> None:
+            super().__init__([f"r{i}" for i in range(len(boxes))])
+            self.boxes = boxes
+
+        def __getitem__(self, index: int) -> Record:
+            record = super().__getitem__(index)
+            if self.boxes[index] is not None:
+                record["boxes"] = self.boxes[index]
+            return record
+
+        def for_projection(self) -> List[Record]:
+            from recordstream.formats import ABSENT
+
+            twin = super().for_projection()
+            for record, boxes in zip(twin, self.boxes):
+                record["boxes"] = ABSENT if boxes is None else boxes
+            return twin
+
+    def test_an_entry_the_twin_knows_is_absent_is_answered_without_a_read_and_left_out(self) -> None:
+        """Most records carry no `boxes`; a missing key would send each back to a full read to learn that."""
+        from recordstream import Stream
+        from recordstream.formats import ABSENT
+        from recordstream.ops.contract import RecordContract
+
+        source = self._Annotated(["two boxes", None, None])
+        contract = RecordContract(fields={"payload": "*", "boxes": "*"}, name="host interface")
+        stream = Stream(source=source, ops=[self._stream(source).ops[0]])
+        assert list(stream.project(("boxes", "label"))) == [
+            {"boxes": "two boxes", "label": "r0"},
+            {"label": "r1"},
+            {"label": "r2"},
+        ]
+        assert source.reads == []
+        # the same answer through a host's contract, which lets ABSENT through as it lets a stand-in through
+        assert contract.for_projection()({"payload": "x", "boxes": ABSENT})
+
+    def test_a_stand_in_may_carry_what_is_known_of_the_value_and_is_still_no_answer(self) -> None:
+        from recordstream.formats import ABSENT, StandIn, answers
+
+        known = StandIn(samplerate=1e6)
+        assert known.samplerate == 1e6
+        assert not answers({"signal": known}, ("signal",))
+        assert answers({"boxes": ABSENT}, ("boxes",))
+
 
 class TestTheViewSourcesForwardProjection:
     """A wrapper that only SLICES must not throw away its source's efficient path.

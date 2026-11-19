@@ -184,7 +184,10 @@ Gotchas:
   workers, a `chunk_size` or a stream-level op (`::TestAChainWithOpsCanAnswerCheaply`).
 - An INDEXABLE source may offer `for_projection()` too (a twin: the same records, order and count, the payload
   `STAND_IN`): the cheap chain then runs over the twin and a record falling short is read as `source[i]`, never by
-  walking the source; a twin of another length is not used (`::TestASourceCanOfferACheapTwin`).
+  walking the source; a twin of another length is not used (`::TestASourceCanOfferACheapTwin`). A stand-in may carry
+  what the twin knows of the value (`StandIn(samplerate=…)`) and is still never an answer; an entry the full record
+  does NOT carry is `ABSENT` in the twin — an answer, left out of what the walk yields — never a missing key, which
+  sends the record to a full read. `RecordContract.for_projection()` lets both through, nothing else.
 - Every view source forwards a key-restricted walk through `project_indices`; never "simplify"
   it to a `list()` of the view. §18. (`::TestTheViewSourcesForwardProjection`)
 - `HuggingFaceSource.project` narrows with `select_columns`; never `select_columns([])` (zero

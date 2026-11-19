@@ -22,7 +22,7 @@ is self-describing simply matches and reads it standalone.
 import re
 from importlib import metadata
 from pathlib import Path
-from typing import Collection, Iterable, List, Optional, Protocol, Sequence, Tuple, cast, runtime_checkable
+from typing import Any, Collection, Iterable, List, Optional, Protocol, Sequence, Tuple, cast, runtime_checkable
 
 from loggair import get_logger
 
@@ -162,14 +162,43 @@ def scan_file(path: Path, formats: Optional[Sequence[FileFormat]] = None) -> Opt
 
 
 class StandIn:
-    """The value a cheap answer puts where the real thing would be. A singleton: :data:`STAND_IN`."""
+    """The value a cheap answer puts where the real thing would be. :data:`STAND_IN` is the bare one.
+
+    A cheap answer that knows some ATTRIBUTES of the value it could not read hands them on as
+    ``StandIn(samplerate=...)`` — an archive's index knows each window's sample rate without
+    opening the window. Still never an answer (:func:`answers`); an op that reads only those
+    attributes can work from it (a window's start in seconds is its start sample over the rate).
+    """
+
+    def __init__(self, **known: Any) -> None:
+        self.__dict__.update(known)
 
     def __repr__(self) -> str:  # pragma: no cover - a leak into real data is what this makes readable
-        return "<recordstream STAND_IN: this entry was never read>"
+        known = ", ".join(f"{key}={value!r}" for key, value in vars(self).items())
+        return f"<recordstream STAND_IN: this entry was never read{'; ' + known if known else ''}>"
 
 
 #: Marks an entry a cheap answer could not really supply — see :func:`scan_answered`.
 STAND_IN = StandIn()
+
+
+class Absent:
+    """The value a cheap answer puts where it KNOWS a full read has no entry. A singleton: :data:`ABSENT`.
+
+    A missing key means "not answered", so a walk reads the record in full to learn that the
+    entry is not there — measured 2026-11-18: an archive's windows carry boxes only where a
+    store annotates them, so a filter on a box column read every other window's chunk to find
+    none. ``ABSENT`` rides the value like :data:`STAND_IN` (so a chain renaming the entry keeps
+    it), counts as an answer (:func:`answers`), and the walk leaves the entry out of what it
+    yields — the record a full read gives.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - a leak into real data is what this makes readable
+        return "<recordstream ABSENT: a full read has no such entry>"
+
+
+#: Marks an entry a cheap answer knows the full record does not carry.
+ABSENT = Absent()
 
 
 def scan_answered(path: Path, formats: Optional[Sequence[FileFormat]] = None) -> Optional[Record]:
@@ -207,12 +236,12 @@ def scan_answered(path: Path, formats: Optional[Sequence[FileFormat]] = None) ->
 
 
 def answers(record: Record, keys: Collection[str]) -> bool:
-    """Whether ``record`` really carries every one of ``keys`` — no missing, no placeholders.
+    """Whether ``record`` really answers every one of ``keys`` — no missing, no stand-ins.
 
     The one test behind every cheap-then-verify walk, so a source and a chain cannot disagree
-    about what counts as an answer.
+    about what counts as an answer. :data:`ABSENT` is an answer: the full record has no entry.
     """
-    return all(key in record and record[key] is not STAND_IN for key in keys)
+    return all(key in record and not isinstance(record[key], StandIn) for key in keys)
 
 
 def bare_name(name: str) -> str:

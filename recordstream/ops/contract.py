@@ -67,7 +67,7 @@ class RecordContract:
         self._stand_ins_pass = False  # set on the copy `for_projection` hands out, never config
 
     def for_projection(self) -> "RecordContract":
-        """The contract a key-restricted walk runs: the same check, a :data:`~recordstream.formats.STAND_IN` let through.
+        """The contract a key-restricted walk runs: the same check, a stand-in or ``ABSENT`` let through.
 
         The op side of :class:`recordstream.projection.SupportsCheapProjection`. A cheap answer
         puts the stand-in where a value would need the expensive read (an archive's samples), and
@@ -83,7 +83,7 @@ class RecordContract:
         return cheap
 
     def __call__(self, record: Record) -> Record:
-        from recordstream.formats import STAND_IN
+        from recordstream.formats import Absent, StandIn
 
         label = self.name or "record contract"
         for key, type_name in self.fields.items():
@@ -96,7 +96,7 @@ class RecordContract:
             except KeyError as error:
                 self._fail(f"{label}: entry {key!r} declares {error.args[0]}", record)
             value = record[key]
-            if self._stand_ins_pass and value is STAND_IN:
+            if self._stand_ins_pass and isinstance(value, (StandIn, Absent)):
                 continue
             if not isinstance(value, expected):
                 self._fail(
