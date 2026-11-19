@@ -64,8 +64,27 @@ class RecordContract:
         self.fields = fields or {}
         self.name = name
         self._count = 0  # runtime record counter for error messages — NOT config (per-instance)
+        self._stand_ins_pass = False  # set on the copy `for_projection` hands out, never config
+
+    def for_projection(self) -> "RecordContract":
+        """The contract a key-restricted walk runs: the same check, a :data:`~recordstream.formats.STAND_IN` let through.
+
+        The op side of :class:`recordstream.projection.SupportsCheapProjection`. A cheap answer
+        puts the stand-in where a value would need the expensive read (an archive's samples), and
+        this contract refused it as the wrong type, so the cheap chain raised on every record and
+        the walk read each one in full — measured 2026-11-18: a filter on a window's file name
+        over a 3544-window archive source extracted chunk after chunk for minutes. The stand-in
+        is never an answer (:func:`~recordstream.formats.answers`), so passing it here cannot
+        make a filter wrong: a question about that entry still reads the record. A MISSING entry
+        and a value of the wrong type are refused as before.
+        """
+        cheap = RecordContract(dict(self.fields), self.name)
+        cheap._stand_ins_pass = True
+        return cheap
 
     def __call__(self, record: Record) -> Record:
+        from recordstream.formats import STAND_IN
+
         label = self.name or "record contract"
         for key, type_name in self.fields.items():
             if key not in record:
@@ -77,6 +96,8 @@ class RecordContract:
             except KeyError as error:
                 self._fail(f"{label}: entry {key!r} declares {error.args[0]}", record)
             value = record[key]
+            if self._stand_ins_pass and value is STAND_IN:
+                continue
             if not isinstance(value, expected):
                 self._fail(
                     f"{label}: record #{self._count} entry {key!r} is a {type(value).__name__}, expected {type_name}",

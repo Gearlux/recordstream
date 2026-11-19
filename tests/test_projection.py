@@ -5,8 +5,10 @@ what it skips, what it costs, and that it inherits ``iter_key``'s three properti
 (projection-aware sources, deferred sources, laziness).
 """
 
+import itertools
 from typing import Any, Collection, Dict, Iterator, List, Optional, cast
 
+import pytest
 from confluid import PartialClass
 
 from recordstream import Label, MultiLabel, first_value, is_class_id
@@ -219,6 +221,51 @@ class TestASourceCanOfferACheapTwin:
         source = self._Archive(["a", "b", "c"], twin_length=2)
         assert [r["label"] for r in self._stream(source).project(("label",))] == ["a", "b", "c"]
         assert source.reads == [0, 1, 2]
+
+    class _ImageArchive(_Archive):
+        """The archive whose full read decodes an IMAGE, as a workspace's contract declares."""
+
+        def __getitem__(self, index: int) -> Record:
+            import numpy as np
+
+            from recordstream import Image
+
+            self.reads.append(index)
+            return {"payload": Image(np.zeros((2, 2), dtype=np.uint8)), "name": self.names[index]}
+
+    def test_a_record_contract_on_the_chain_lets_the_twins_stand_in_through(self) -> None:
+        """A host puts its interface last in the chain (`payload: Image`); the twin's STAND_IN is not one.
+
+        Measured 2026-11-18: the contract refused every stand-in as the wrong type, the cheap chain
+        raised on each record and the walk read them all — a filter on a window's file name over a
+        3544-window archive source extracted chunk after chunk for minutes.
+        """
+        from recordstream import Stream
+        from recordstream.ops.contract import RecordContract
+        from recordstream.ops.structure import RenameField
+
+        source = self._ImageArchive(["a", "b", "c"])
+        contract = RecordContract(fields={"payload": "Image", "label": "*"}, name="host interface")
+        stream = Stream(source=source, ops=[RenameField(src="name", dst="label"), contract])
+        assert [r["label"] for r in stream.project(("label",))] == ["a", "b", "c"]
+        assert source.reads == [], "the contract sent every record back to the archive"
+        # a question about the payload itself still reads the record, and gets the real one
+        (record,) = list(itertools.islice(stream.project(("payload",)), 1))
+        assert source.reads == [0] and record["payload"].data.shape == (2, 2)
+
+    def test_the_projection_contract_still_refuses_a_missing_entry_and_a_wrong_type(self) -> None:
+        from recordstream.formats import STAND_IN
+        from recordstream.ops.contract import ContractError, RecordContract
+
+        real = RecordContract(fields={"payload": "Image"}, name="host interface")
+        cheap = real.for_projection()
+        assert cheap({"payload": STAND_IN}) == {"payload": STAND_IN}
+        with pytest.raises(ContractError, match="has no entry 'payload'"):
+            cheap({})
+        with pytest.raises(ContractError, match="is a str, expected Image"):
+            cheap({"payload": "not an image"})
+        with pytest.raises(ContractError, match="is a StandIn, expected Image"):
+            real({"payload": STAND_IN})  # the contract a full read runs is unchanged
 
 
 class TestTheViewSourcesForwardProjection:
