@@ -586,6 +586,7 @@ class Stream:
         """
         from recordstream.flow import _result_readers, run_steps_multi
         from recordstream.formats import Absent, answers
+        from recordstream.projection import spend_full_read
 
         source = self._guard_live_source()
         if source is None:
@@ -606,6 +607,7 @@ class Stream:
                 enough = False
                 produced = []
             if not enough:
+                spend_full_read()  # a caller's budget of full reads (projection.full_read_budget) raises here
                 real = item if cheap_source is None else source[position]
                 produced = run_steps_multi(real, full_steps, full_outputs, full_readers)
             for record in produced:

@@ -187,7 +187,9 @@ Gotchas:
   walking the source; a twin of another length is not used (`::TestASourceCanOfferACheapTwin`). A stand-in may carry
   what the twin knows of the value (`StandIn(samplerate=…)`) and is still never an answer; an entry the full record
   does NOT carry is `ABSENT` in the twin — an answer, left out of what the walk yields — never a missing key, which
-  sends the record to a full read. `RecordContract.for_projection()` lets both through, nothing else.
+  sends the record to a full read. `RecordContract.for_projection()` lets both through, nothing else. A caller that
+  must answer at once walks under `projection.full_read_budget(n)`: the cheap walk's fallback spends it
+  (`spend_full_read`, never a cheap answer) and raises `FullReadsExceeded` past it (`::TestAFullReadBudget`).
 - Every view source forwards a key-restricted walk through `project_indices`; never "simplify"
   it to a `list()` of the view. §18. (`::TestTheViewSourcesForwardProjection`)
 - `HuggingFaceSource.project` narrows with `select_columns`; never `select_columns([])` (zero

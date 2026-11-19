@@ -315,6 +315,32 @@ class TestASourceCanOfferACheapTwin:
         assert answers({"boxes": ABSENT}, ("boxes",))
 
 
+class TestAFullReadBudget:
+    """A caller that must answer at once runs its walk under a budget of full reads (a list page's filter)."""
+
+    def _stream(self, archive: Any) -> Any:
+        from recordstream import Stream
+        from recordstream.ops.structure import RenameField
+
+        return Stream(source=archive, ops=[RenameField(src="name", dst="label")])
+
+    def test_a_walk_the_twin_answers_spends_nothing(self) -> None:
+        from recordstream.projection import full_read_budget
+
+        archive = TestASourceCanOfferACheapTwin._Archive(["a", "b", "c"])
+        with full_read_budget(0):
+            assert [r["label"] for r in self._stream(archive).project(("label",))] == ["a", "b", "c"]
+
+    def test_the_walk_raises_once_it_would_read_more_records_in_full_than_allowed(self) -> None:
+        from recordstream.projection import FullReadsExceeded, full_read_budget
+
+        archive = TestASourceCanOfferACheapTwin._Archive(["a", "b", "c"])
+        with full_read_budget(2), pytest.raises(FullReadsExceeded):
+            list(self._stream(archive).project(("payload",)))
+        assert archive.reads == [0, 1], "the third record was read past the budget"
+        assert len(list(self._stream(archive).project(("payload",)))) == 3, "outside a budget nothing is limited"
+
+
 class TestTheViewSourcesForwardProjection:
     """A wrapper that only SLICES must not throw away its source's efficient path.
 
