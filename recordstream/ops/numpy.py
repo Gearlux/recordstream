@@ -238,6 +238,90 @@ def connected_component_boxes(
     return bboxes
 
 
+def small_component_cells(mask: np.ndarray, min_area_bins: int, connectivity: int = 4) -> np.ndarray:
+    """The ``True`` cells of a 2-D bool mask whose connected component holds fewer than ``min_area_bins`` cells —
+    exactly the components :func:`connected_component_boxes` drops, grouped as it groups them (``connectivity`` 4 or
+    8). All ``False`` when ``min_area_bins`` is 1 or less: no component is that small."""
+    cells = np.asarray(mask, dtype=bool)
+    if int(min_area_bins) <= 1 or not cells.any():
+        return np.zeros(cells.shape, dtype=bool)
+    if connectivity not in (4, 8):
+        raise ValueError(f"connectivity must be 4 or 8; got {connectivity!r}")
+    from scipy.ndimage import generate_binary_structure, label
+
+    labels, count = label(cells, structure=generate_binary_structure(2, 1 if connectivity == 4 else 2))
+    sizes = np.bincount(labels.ravel(), minlength=count + 1)
+    small = sizes < int(min_area_bins)
+    small[0] = False  # the background
+    return np.asarray(small[labels])
+
+
+def open_cells(mask: np.ndarray, rows: int, cols: int) -> np.ndarray:
+    """A 2-D bool ``mask`` eroded and then dilated by a ``rows`` x ``cols`` rectangle — a morphological OPENING.
+
+    What survives is every place the rectangle fits wholly inside the ``True`` cells: a speck or a stripe thinner than
+    it is gone, a ``True`` rectangle at least as big comes back exactly, any other shape loses only the corners and
+    spurs the rectangle does not fit. Outside the array counts as ``False``, so a mask shorter than the rectangle keeps
+    nothing. A size of 0 or 1 leaves that axis alone; both answer ``mask`` itself.
+    """
+    rows, cols = max(1, int(rows)), max(1, int(cols))
+    if rows == 1 and cols == 1:
+        return np.asarray(mask, dtype=bool)
+    from scipy.ndimage import grey_opening
+
+    opened = grey_opening(np.asarray(mask, dtype=np.uint8), size=(rows, cols), mode="constant", cval=0)
+    return np.asarray(opened, dtype=bool)
+
+
+@configurable(category="op", group="numpy")
+class OpenMask(Transform):
+    """A 2-D boolean ``Mask`` → the same mask OPENED by a ``rows`` x ``cols`` rectangle (:func:`open_cells`).
+
+    Erosion then dilation: the ``True`` cells a rectangle of that size does not fit inside are dropped — a lone cell a
+    threshold lit, a one-pixel stripe — and every shape it does fit keeps its size. ``rows`` runs down the array's first
+    axis, ``cols`` along its second. Requires ``scipy`` (``pip install recordstream[vision]``).
+
+    Args:
+        rows: The rectangle's height in cells (the array's first axis); 0 or 1 leaves that axis alone.
+        cols: The rectangle's width in cells (the second axis); 0 or 1 leaves that axis alone — both skip the step.
+        field: The record key of the ``Mask`` to open; blank picks the first ``Mask``.
+        output: The record key the opened ``Mask`` is written to; blank (default) replaces ``field``.
+    """
+
+    handles = (Mask,)
+
+    def __init__(self, rows: int = 3, cols: int = 3, field: str = "", output: str = "") -> None:
+        super().__init__()
+        self.rows = int(rows)
+        self.cols = int(cols)
+        self.field = field
+        self.output = output
+
+    @property
+    def consumes(self) -> Any:  # type: ignore[override]  # a Transform's attribute, per instance: by name when named
+        """The mask it opens — by NAME when ``field`` names it, so a chain declaring its entries by name checks it."""
+        return {self.field: "Mask"} if self.field else (Mask,)
+
+    @property
+    def produces(self) -> Any:  # type: ignore[override]  # the same shape as consumes
+        """The opened mask, under ``output`` (blank: over ``field``)."""
+        return {self.output or self.field: "Mask"} if self.field else (Mask,)
+
+    def __call__(self, record: Record) -> Record:
+        if self.rows < 0 or self.cols < 0:
+            raise ValueError(f"OpenMask: rows and cols must be at least 0; got {self.rows} and {self.cols}")
+        key = self.field or next((name for name, item in record.items() if isinstance(item, Mask)), "")
+        if not key or key not in record:
+            raise ValueError(f"OpenMask: no Mask {self.field!r} in the record (keys: {list(record)})")
+        item = record[key]
+        cells = item_data(item)
+        if not isinstance(cells, np.ndarray) or cells.ndim != 2:
+            raise ValueError(f"OpenMask: {key!r} is no 2-D mask (shape {getattr(cells, 'shape', None)})")
+        opened = open_cells(cells, self.rows, self.cols)
+        out = with_data(item, opened) if isinstance(item, Mask) else Mask(opened)
+        return {**record, (self.output or key): out}
+
+
 @configurable(category="op", group="numpy")
 class ConnectedComponents(Transform):
     """A boolean ``Mask`` → a ``Boxes`` item.
@@ -256,11 +340,14 @@ class ConnectedComponents(Transform):
         connectivity: Pixel neighborhood — ``4`` (orthogonal only) or ``8`` (orthogonal + diagonal).
         field: Name of the ``Mask`` field to label; blank (default) picks the first ``Mask`` (else first array).
         output: Name of the key the ``Boxes`` item is written to (added if new).
+        dropped_output: Name of the key a ``Mask`` of the cells of the DROPPED components (smaller than
+            ``min_area_bins``, :func:`small_component_cells`) is written to — what a viewer shows as "too small".
+            Blank (default) writes none.
     """
 
     handles = (Mask,)
     consumes = (Mask,)
-    produces = (Boxes,)
+    produces = (Boxes, Mask)
 
     def __init__(
         self,
@@ -268,12 +355,14 @@ class ConnectedComponents(Transform):
         connectivity: int = 4,
         field: str = "",
         output: str = "boxes",
+        dropped_output: str = "",
     ) -> None:
         super().__init__()
         self.min_area_bins = int(min_area_bins)
         self.connectivity = int(connectivity)
         self.field = field
         self.output = output
+        self.dropped_output = dropped_output
 
     def _find_mask(self, record: Record) -> np.ndarray:
         """Resolve the mask to label (``self.field``, else the first ``Mask``, else the first array)."""
@@ -308,7 +397,10 @@ class ConnectedComponents(Transform):
         boxes = connected_component_boxes(mask, self.min_area_bins, self.connectivity)
         # canvas is filled in even for an EMPTY box set — a frame check that silently skips
         # exactly the records with nothing to check reports a clean bill for the wrong reason.
-        return {**record, self.output: Boxes(boxes=list(boxes), canvas=(mask.shape[0], mask.shape[1]))}
+        out = {**record, self.output: Boxes(boxes=list(boxes), canvas=(mask.shape[0], mask.shape[1]))}
+        if self.dropped_output:
+            out[self.dropped_output] = Mask(small_component_cells(mask, self.min_area_bins, self.connectivity))
+        return out
 
 
 def entries_to_change(op_name: str, record: Record, field: Optional[str]) -> List[str]:
@@ -475,6 +567,8 @@ __all__ = [
     "resolve_expression",
     "threshold_array",
     "connected_component_boxes",
+    "open_cells",
+    "small_component_cells",
     "entries_to_change",
     "ElementType",
     "ELEMENT_TYPES",
@@ -482,6 +576,7 @@ __all__ = [
     "HighComparison",
     "Threshold",
     "ConnectedComponents",
+    "OpenMask",
     "Scale",
     "ToType",
 ]

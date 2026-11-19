@@ -21,7 +21,7 @@ from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
 from recordstream.ops.image import ConvertMode, ConvertToImage
-from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
+from recordstream.ops.numpy import ConnectedComponents, OpenMask, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.structure import CopyField, DropField, RenameField, SelectFields
@@ -45,6 +45,7 @@ _NODE_CLASSES = [
     Subgraph,
     Threshold,
     ConnectedComponents,
+    OpenMask,
     ConvertToImage,
     ConvertMode,
     Scale,

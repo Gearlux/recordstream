@@ -18,8 +18,17 @@ import pytest
 from confluid.registry import get_registry, resolve_class
 
 from recordstream import Boxes, Image, Mask
+from recordstream.items import item_data
 from recordstream.ops.image import ConvertToImage, _bound_longest_side, _render_rgb
-from recordstream.ops.numpy import ConnectedComponents, Threshold, connected_component_boxes, threshold_array
+from recordstream.ops.numpy import (
+    ConnectedComponents,
+    OpenMask,
+    Threshold,
+    connected_component_boxes,
+    open_cells,
+    small_component_cells,
+    threshold_array,
+)
 
 
 def _ramp_2d() -> np.ndarray:
@@ -279,6 +288,58 @@ class TestConnectedComponents:
             ConnectedComponents()({"reg": Boxes(boxes=[])})
 
 
+class TestTheDroppedComponents:
+    """``dropped_output``: the cells of the components ``min_area_bins`` drops, grouped as the boxes are."""
+
+    def test_the_dropped_cells_are_exactly_the_components_left_without_a_box(self) -> None:
+        mask = np.zeros((6, 8), dtype=bool)
+        mask[0:3, 0:3] = True  # 9 cells: a box
+        mask[4, 6] = mask[5, 7] = True  # a diagonal pair: one component under 8-connectivity, two under 4
+        out = ConnectedComponents(min_area_bins=3, connectivity=8, dropped_output="small")({"m": Mask(mask)})
+        assert out["boxes"].boxes == [(0, 0, 3, 3)]
+        small = np.asarray(item_data(out["small"]))
+        assert small.tolist() == small_component_cells(mask, 3, 8).tolist()
+        assert small.sum() == 2 and small[4, 6] and small[5, 7]
+        assert small_component_cells(mask, 2, 4).sum() == 2, "4-connected, the pair is two lone cells"
+
+    def test_nothing_is_dropped_at_a_smallest_component_of_one_and_no_entry_is_written_unasked(self) -> None:
+        mask = np.eye(4, dtype=bool)
+        assert not small_component_cells(mask, 1, 8).any()
+        assert set(ConnectedComponents()({"m": Mask(mask)})) == {"m", "boxes"}
+
+
+class TestOpenMask:
+    """A morphological OPENING by a ``rows`` x ``cols`` rectangle: what the rectangle fits inside stays."""
+
+    @pytest.mark.parametrize(("shape", "size"), [((60, 80), (10, 5)), ((33, 41), (7, 2)), ((30, 30), (1, 5))])
+    def test_it_is_scipys_binary_opening(self, shape: Tuple[int, int], size: Tuple[int, int]) -> None:
+        from scipy.ndimage import binary_opening
+
+        mask = np.random.default_rng(25).random(shape) > 0.35
+        assert (open_cells(mask, *size) == binary_opening(mask, structure=np.ones(size, dtype=bool))).all()
+
+    def test_a_speck_and_a_thin_stripe_go_and_a_rectangle_it_fits_comes_back(self) -> None:
+        mask = np.zeros((40, 50), dtype=bool)
+        mask[5:25, 10:30] = True
+        mask[2, 2] = True
+        mask[30:32, 5:40] = True
+        out = OpenMask(rows=10, cols=5, field="m", output="o")({"m": Mask(mask)})
+        expected = np.zeros_like(mask)
+        expected[5:25, 10:30] = True
+        assert isinstance(out["o"], Mask) and (np.asarray(item_data(out["o"])) == expected).all()
+        assert out["m"] is not out["o"], "the input stays under its own key"
+
+    def test_a_size_of_zero_or_one_leaves_the_mask_and_a_blank_output_replaces_the_input(self) -> None:
+        mask = np.eye(5, dtype=bool)
+        assert open_cells(mask, 0, 1) is mask
+        out = OpenMask(rows=1, cols=1, field="m")({"m": Mask(mask)})
+        assert set(out) == {"m"} and (np.asarray(item_data(out["m"])) == mask).all()
+
+    def test_a_negative_size_is_refused_naming_both_sizes(self) -> None:
+        with pytest.raises(ValueError, match="rows and cols"):
+            OpenMask(rows=-1, field="m")({"m": Mask(np.eye(3, dtype=bool))})
+
+
 # --------------------------------------------------------------------------- #
 # End-to-end chain: array -> Image -> Mask -> Boxes, all on one record dict.
 # --------------------------------------------------------------------------- #
@@ -316,6 +377,7 @@ def test_zero_arg_constructible() -> None:
         ("ConvertToImage", ConvertToImage, "image"),
         ("Threshold", Threshold, "numpy"),
         ("ConnectedComponents", ConnectedComponents, "numpy"),
+        ("OpenMask", OpenMask, "numpy"),
     ],
 )
 def test_discovery_tags(name: str, cls: type, group: str) -> None:

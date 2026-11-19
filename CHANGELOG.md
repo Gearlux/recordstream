@@ -7,6 +7,16 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`OpenMask`** — a 2-D boolean `Mask` opened by a `rows` × `cols` rectangle (erosion then dilation, `open_cells`):
+  a speck or a stripe thinner than the rectangle goes, every shape the rectangle fits keeps its size. Its entries are
+  declared by name when `field` names the mask.
+- **`ConnectedComponents(dropped_output=...)`** — the cells of the components `min_area_bins` drops, as a `Mask`
+  (`small_component_cells`, grouped as the boxes are); blank, the default, writes none.
+- **An indexable source may answer a key-restricted walk through the ops after it** — a `Stream` with ops never
+  reached its source's own `project`, so a question an archive's index could answer (which capture a window comes
+  from) read every record whole. A source now offers `for_projection()` as an op does: a twin of the same records in the
+  same order, `STAND_IN` where the payload would be. `Stream.project` runs the chain over the twin and reads `source[i]`
+  for a record whose answer falls short. A twin of another length is not used.
 - **`recordstream run` warns about a key nothing takes** — `recordstream run train.yaml --lrr 0.1` printed nothing and
   ran with the default; it now says `Override 'lrr' matched nothing and was ignored`, before the run, as liquifai does
   for a command that builds its objects itself. A key the config declares (`--max_files` beside a `max_files:` line)

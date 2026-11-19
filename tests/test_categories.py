@@ -18,7 +18,7 @@ from recordstream.ops.debug import PrintRecordOp
 from recordstream.ops.enable import Enable
 from recordstream.ops.formula import FormulaOp
 from recordstream.ops.image import ConvertMode, ConvertToImage, ConvertToMask
-from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
+from recordstream.ops.numpy import ConnectedComponents, OpenMask, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.sink import RecordSinkOp
@@ -55,6 +55,7 @@ def test_op_classes_tagged() -> None:
     for cls in (
         Threshold,
         ConnectedComponents,
+        OpenMask,
         Scale,
         ToType,
         ConvertMode,

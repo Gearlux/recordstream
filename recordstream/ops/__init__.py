@@ -2,7 +2,7 @@
 RecordStream operations (record-dict ops).
 
 Submodules:
-    - recordstream.ops.numpy: Threshold, ConnectedComponents, Scale (value range), ToType (element
+    - recordstream.ops.numpy: Threshold, ConnectedComponents, OpenMask, Scale (value range), ToType (element
       type) (+ threshold_array / connected_component_boxes / resolve_expression helpers)
     - recordstream.ops.torch: ToTensor — array -> CHW tensor, nothing else (+ to_tensor helper)
     - recordstream.ops.image: ConvertToImage, ConvertToMask, ConvertMode (channel layout), PadImage
@@ -35,7 +35,7 @@ from recordstream.ops.enable import Enable
 from recordstream.ops.formats import ReadFile
 from recordstream.ops.formula import FormulaOp
 from recordstream.ops.image import ConvertMode, ConvertToImage, ConvertToMask, PadImage
-from recordstream.ops.numpy import ConnectedComponents, Scale, Threshold, ToType
+from recordstream.ops.numpy import ConnectedComponents, OpenMask, Scale, Threshold, ToType
 from recordstream.ops.parallel import Parallel
 from recordstream.ops.random_apply import RandomApply
 from recordstream.ops.sink import RecordSinkOp
@@ -46,6 +46,7 @@ __all__ = [
     "CocoToTorchVisionDetection",
     "ConfigureOp",
     "ConnectedComponents",
+    "OpenMask",
     "ContractError",
     "ConvertMode",
     "ConvertToImage",
