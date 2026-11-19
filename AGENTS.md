@@ -182,6 +182,9 @@ Gotchas:
   short (§19): a scan placeholder is MARKED (`STAND_IN`) on the value, never removed; a cheap
   chain that raises counts as falling short; a dropped record is not re-run; no cheap path with
   workers, a `chunk_size` or a stream-level op (`::TestAChainWithOpsCanAnswerCheaply`).
+- An INDEXABLE source may offer `for_projection()` too (a twin: the same records, order and count, the payload
+  `STAND_IN`): the cheap chain then runs over the twin and a record falling short is read as `source[i]`, never by
+  walking the source; a twin of another length is not used (`::TestASourceCanOfferACheapTwin`).
 - Every view source forwards a key-restricted walk through `project_indices`; never "simplify"
   it to a `list()` of the view. §18. (`::TestTheViewSourcesForwardProjection`)
 - `HuggingFaceSource.project` narrows with `select_columns`; never `select_columns([])` (zero

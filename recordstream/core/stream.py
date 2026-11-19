@@ -496,32 +496,67 @@ class Stream:
             return
         want = set(keys)
         cheap = self._cheap_ops()
-        if cheap is not None:
-            yield from self._project_through_cheap_ops(want, cheap)
+        cheap_source = self._cheap_source()
+        if cheap is not None or cheap_source is not None:
+            yield from self._project_through_cheap_ops(
+                want, cheap if cheap is not None else list(self.ops), cheap_source
+            )
             return
         for record in self:
             yield {k: v for k, v in record.items() if k in want}
 
+    def _cheap_route_open(self) -> bool:
+        """Whether this stream takes the plain sequential route a cheap walk can stand in for.
+
+        Not when a stream-level op sees the whole stream, workers run the chain elsewhere, or a
+        chunk size batches the output into lists. Each of those would have to be re-derived here
+        to stay faithful, and the measured cases need none of them, so the gate is a refusal
+        rather than a second engine.
+        """
+        if self._workers > 1 or self._chunk_size > 0:
+            return False
+        return not any(hasattr(op, "stream") and callable(op.stream) for op in self.ops)
+
     def _cheap_ops(self) -> Optional[List[Any]]:
         """The chain with every op that offers one replaced by its cheap variant, or ``None``.
 
-        ``None`` — meaning "run the ordinary walk" — when no op offers one, and when this
-        stream would not take the plain sequential route: a stream-level op sees the whole
-        stream, workers run the chain elsewhere, and a chunk size batches the output into
-        lists. Each of those would have to be re-derived here to stay faithful, and the
-        measured case needs none of them, so the gate is a refusal rather than a second
-        engine.
+        ``None`` — no op offers one, or the route is closed (:meth:`_cheap_route_open`).
         """
         from recordstream.projection import SupportsCheapProjection
 
-        if self._workers > 1 or self._chunk_size > 0:
-            return None
-        if any(hasattr(op, "stream") and callable(op.stream) for op in self.ops):
+        if not self._cheap_route_open():
             return None
         cheap = [op.for_projection() if isinstance(op, SupportsCheapProjection) else op for op in self.ops]
         return cheap if any(a is not b for a, b in zip(cheap, self.ops)) else None
 
-    def _project_through_cheap_ops(self, want: Set[str], cheap: List[Any]) -> Iterator[Record]:
+    def _cheap_source(self) -> Optional[Any]:
+        """The source's cheap twin — the same records in the same order, payloads marked — or ``None``.
+
+        Offered by an INDEXABLE source through ``for_projection()`` (the source side of
+        :class:`recordstream.projection.SupportsCheapProjection`): the record a twin cannot answer
+        is read again as ``source[i]``, which only an indexable source can give without walking
+        everything before it. A twin of another length is not used — a record would be paired
+        with its neighbour's. ``None`` when the route is closed or the source offers none.
+        """
+        from recordstream.projection import SupportsCheapProjection
+
+        if not self._cheap_route_open():
+            return None
+        source = self.source
+        if isinstance(source, _ConfluidFluid) or not isinstance(source, SupportsCheapProjection):
+            return None
+        if not (hasattr(source, "__getitem__") and hasattr(source, "__len__")):
+            return None
+        twin = source.for_projection()
+        try:
+            same_length = len(twin) == len(source)
+        except TypeError:
+            same_length = False
+        return twin if same_length else None
+
+    def _project_through_cheap_ops(
+        self, want: Set[str], cheap: List[Any], cheap_source: Optional[Any] = None
+    ) -> Iterator[Record]:
         """Run the CHEAP chain per record, and re-run the real one when it fell short.
 
         The verification is the whole safety story, and it is deliberately empirical rather
@@ -543,7 +578,11 @@ class Stream:
         (a companion half), not about the keys, and the cheap variants make it exactly where
         the real ops do. Measured over a 1430-recording library, one filter term: 3.4 min for
         the ordinary walk against 0.5 s here, 41 records falling back because they carry no
-        annotations at all. Partial: a generator.
+        annotations at all.
+
+        With a ``cheap_source`` (:meth:`_cheap_source`) the cheap chain runs over the twin's
+        records and a record falling short is read again as ``source[i]`` — the source's own
+        expensive read happens for that record alone. Partial: a generator.
         """
         from recordstream.flow import _result_readers, run_steps_multi
         from recordstream.formats import answers
@@ -556,7 +595,8 @@ class Stream:
         cheap_readers = _result_readers(cheap_steps, cheap_outputs)
         full_steps, full_outputs = linear_steps(self.ops)
         full_readers = _result_readers(full_steps, full_outputs)
-        for item in source:
+        items = source if cheap_source is None else cheap_source
+        for position, item in enumerate(items):
             try:
                 # A COPY, so a cheap op that edits its record in place cannot disturb the one
                 # the fallback re-runs — both chains see the same input or the fallback lies.
@@ -566,7 +606,8 @@ class Stream:
                 enough = False
                 produced = []
             if not enough:
-                produced = run_steps_multi(item, full_steps, full_outputs, full_readers)
+                real = item if cheap_source is None else source[position]
+                produced = run_steps_multi(real, full_steps, full_outputs, full_readers)
             for record in produced:
                 yield {k: v for k, v in record.items() if k in want}
 

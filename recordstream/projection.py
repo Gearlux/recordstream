@@ -52,6 +52,14 @@ class SupportsCheapProjection(Protocol):
     The reference implementation is ``ReadFile``: its cheap variant answers from each file's
     metadata where the format can, which measured 143.5 ms -> 0.37 ms per record over a
     capture library.
+
+    An INDEXABLE SOURCE may offer one too, for a stream whose ops sit between it and the
+    question (a ``Stream`` with ops never reaches the source's own ``project``): its twin yields
+    the same records, in the same order and of the same count, with :data:`~recordstream.formats.STAND_IN`
+    where a value would need the expensive read. The stream runs the chain over the twin and
+    reads ``source[i]`` for a record the twin's answer falls short on. The reference is an
+    archive source whose index names each window's capture: a filter on the capture's name
+    reads no archive.
     """
 
     def for_projection(self) -> Any: ...

@@ -5,7 +5,7 @@ what it skips, what it costs, and that it inherits ``iter_key``'s three properti
 (projection-aware sources, deferred sources, laziness).
 """
 
-from typing import Any, Collection, Dict, Iterator, List, cast
+from typing import Any, Collection, Dict, Iterator, List, Optional, cast
 
 from confluid import PartialClass
 
@@ -161,6 +161,64 @@ class TestStreamForwardsProjection:
     def test_an_ops_free_stream_over_a_plain_source_keeps_the_generic_path(self) -> None:
         rows = list(__import__("recordstream").Stream(source=[{"class": 1, "image": "X"}]).project({"class"}))
         assert rows == [{"class": 1}]
+
+
+class TestASourceCanOfferACheapTwin:
+    """An indexable source may offer `for_projection()` too: the stream walks the twin through its ops.
+
+    A `Stream` with ops never reaches its source's `project`, so a source whose read is the
+    expensive part (an archive: every window copied out of a packed chunk) had no cheap path at
+    all — a filter on a name its index holds walked every archive. The twin yields the same
+    records with the payload marked; a record whose answer falls short is read as `source[i]`.
+    """
+
+    class _Archive:
+        """An indexable source whose read decodes a payload, and whose index knows each record's name."""
+
+        def __init__(self, names: List[str], twin_length: Optional[int] = None) -> None:
+            self.names = names
+            self.reads: List[int] = []
+            self.twin_length = twin_length
+
+        def __len__(self) -> int:
+            return len(self.names)
+
+        def __getitem__(self, index: int) -> Record:
+            self.reads.append(index)
+            return {"payload": f"DECODED {self.names[index]}", "name": self.names[index]}
+
+        def __iter__(self) -> Any:
+            return (self[i] for i in range(len(self)))
+
+        def for_projection(self) -> List[Record]:
+            from recordstream.formats import STAND_IN
+
+            names = self.names if self.twin_length is None else self.names[: self.twin_length]
+            return [{"payload": STAND_IN, "name": name} for name in names]
+
+    @staticmethod
+    def _stream(source: Any) -> Any:
+        from recordstream import Stream
+        from recordstream.ops.structure import RenameField
+
+        return Stream(source=source, ops=[RenameField(src="name", dst="label")])
+
+    def test_a_key_the_twin_answers_reads_no_record(self) -> None:
+        source = self._Archive(["a", "b", "c"])
+        assert [r["label"] for r in self._stream(source).project(("label",))] == ["a", "b", "c"]
+        assert source.reads == [], "the archive was read to answer a question its index holds"
+
+    def test_a_key_the_twin_marks_reads_each_record_by_its_index(self) -> None:
+        source = self._Archive(["a", "b"])
+        got = list(self._stream(source).project(("payload", "label")))
+        assert got == [{"payload": "DECODED a", "label": "a"}, {"payload": "DECODED b", "label": "b"}]
+        assert source.reads == [0, 1]
+
+    def test_a_twin_of_another_length_is_not_used(self) -> None:
+        """Paired by position, a short twin would hand a record its neighbour's answer."""
+        source = self._Archive(["a", "b", "c"], twin_length=2)
+        assert [r["label"] for r in self._stream(source).project(("label",))] == ["a", "b", "c"]
+        assert source.reads == [0, 1, 2]
 
 
 class TestTheViewSourcesForwardProjection:
