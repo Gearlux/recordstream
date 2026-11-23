@@ -80,4 +80,4 @@ def test_a_config_it_cannot_read_declares_nothing(tmp_path: Path) -> None:
 
 
 def test_it_is_a_source_of_the_palette() -> None:
-    assert ConfigStreamSource.__confluid_category__ == "source"
+    assert getattr(ConfigStreamSource, "__confluid_category__") == "source"

@@ -310,7 +310,7 @@ class TestASourceCanOfferACheapTwin:
         from recordstream.formats import ABSENT, StandIn, answers
 
         known = StandIn(samplerate=1e6)
-        assert known.samplerate == 1e6
+        assert getattr(known, "samplerate") == 1e6
         assert not answers({"signal": known}, ("signal",))
         assert answers({"boxes": ABSENT}, ("boxes",))
 
