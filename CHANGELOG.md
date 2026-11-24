@@ -7,6 +7,24 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A budget of full reads for a key-restricted walk** — `with recordstream.projection.full_read_budget(n):` lets the
+  walks in that block read at most `n` records in full (where a cheap answer falls short) and raises
+  `FullReadsExceeded` past it. A cheap answer spends nothing, and a nested block keeps its own count. A caller that
+  must answer at once runs its walk under a budget and hands a spent one to a background run.
+- **A cheap twin may say what it knows of a value, and that an entry is absent** — `StandIn(samplerate=...)` carries
+  attributes of the value it stands in for (an archive index's sample rate) and is still never an answer; `ABSENT`
+  marks an entry the full record does not carry, counts as an answer and is left out of the walk's record, so a
+  record without that entry is not read in full to learn so (`recordstream.formats`).
+- **`ConfigStreamSource(config, key, scopes, apply_ops)`** (`recordstream.sources.config`) reads the stream another
+  config defines — a path or `pkg://<distribution>/<path>` — so a second graph walks the same records without a copy
+  of the dataset's definition. By default it reads the stream's source alone (the records as stored);
+  `apply_ops: true` reads the stream with its ops. A key the config does not hold is refused, naming the keys it
+  does (`docs/sources.md`).
+- **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
+  columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
+  larger than the size is refused, never cut (`docs/image.md`).
+- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
+  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - **`OpenMask`** — a 2-D boolean `Mask` opened by a `rows` × `cols` rectangle (erosion then dilation, `open_cells`):
   a speck or a stripe thinner than the rectangle goes, every shape the rectangle fits keeps its size. Its entries are
   declared by name when `field` names the mask.
@@ -27,6 +45,8 @@ All notable changes to this project are documented here. The format follows
   order typed; `--dry_run` shows the same commands. A key a workflow object takes, a key its document declares and the
   command's own options stay the workflow's. `RunConfig(forward=False)` keeps a run to its `settings`. `--help` and TAB
   list the runs' options after the workflow's own (the `liquifai.config_refs` entry point for `RunConfig.config`).
+- The two entries above need a liquifai newer than 0.3.1. With liquifai 0.3.1 or older nothing is warned and no key
+  is handed on: a run behaves as it did in 0.1.0a3.
 - **`Mask.classes`** — a mask may name its values (`Mask(cells, classes=["road"])`: a cell holding `v` is
   `classes[v]`, a negative one background), as `Label.classes` and `Boxes.classes` do; it survives numpy operations,
   pickling and the item codec. `None` (the default) names nothing.
@@ -86,13 +106,15 @@ All notable changes to this project are documented here. The format follows
 - **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
   check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
   `checked_first: false` (a `RunConfig`).
-- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
-  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
 - `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
   the machine has, `cpu` included, is used as written.
 
 ### Fixed
+- **A record contract no longer sends a key-restricted walk back to full reads** — a `RecordContract` at the end of a
+  chain refused a cheap twin's `STAND_IN`, so every record was read whole. `RecordContract.for_projection()` hands
+  the walk the same check with a stand-in and `ABSENT` accepted; a missing entry and a wrong type are still refused,
+  and the contract of a full read is unchanged.
 - **The dry run of a workflow that cannot be planned is one `Error:` line** — `recordstream run <workflow> "only=[nope]"
   --dry_run` printed a traceback; it now prints `Error: Sequence: only names nope — the steps are named: …` and exits 1,
   as the real run does (`--debug` keeps the traceback).
@@ -101,9 +123,6 @@ All notable changes to this project are documented here. The format follows
 ## [0.1.0a3] — 2026-10-14
 
 ### Added
-- **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
-  columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
-  larger than the size is refused, never cut (`docs/image.md`).
 - **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
   has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
   default, still bound the longest side by `max_size`. A `None` beside a `0` is refused (`docs/image.md`).
