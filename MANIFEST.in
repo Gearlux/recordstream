@@ -7,3 +7,8 @@
 #
 # Pinned by tests/test_packaging.py::test_the_changelog_is_shipped_in_the_sdist
 include CHANGELOG.md
+
+# The pages the README links: a reader who has only the sdist has them too.
+#
+# Pinned by tests/test_packaging.py::test_every_docs_page_the_readme_links_is_shipped_in_the_sdist
+recursive-include docs *.md

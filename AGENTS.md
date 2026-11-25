@@ -371,5 +371,5 @@ Gotchas:
 - README links to repo files are absolute GitHub URLs; `docs/*.md` keep relative links
   (`tests/test_docs_links.py`).
 - Floors state what is tested; a dependent writes `recordstream>=0.1.0a1`. The release metadata,
-  the `Development Status` classifier matching the version, `CHANGELOG.md` in the sdist and no
-  direct-URL requirement are pinned by `tests/test_packaging.py`.
+  the `Development Status` classifier matching the version, `CHANGELOG.md` and every `docs/` page the README links in the sdist
+  (`MANIFEST.in`) and no direct-URL requirement are pinned by `tests/test_packaging.py`.
