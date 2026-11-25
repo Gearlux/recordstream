@@ -114,6 +114,7 @@ All notable changes to this project are documented here. The format follows
   each source's projection, once (`docs/sources.md`).
 
 ### Changed
+- **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
 - **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
   check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
   `checked_first: false` (a `RunConfig`).
