@@ -296,6 +296,48 @@ the first three.
 Named as top-level keys of a config, the settings reach the selection by their names, so a command line writes
 `max_subfolders_per_folder=5 max_files_per_folder=20` — a quick run of the same config.
 
+## Groups of files as one record (`GroupedFilesSource`)
+
+Some files stand for each other: near-copies of one picture, several takes of one scene. Put each such group in a
+folder of its own and `GroupedFilesSource` serves the FOLDER as one record. A group of 70 files then weighs as much
+in an epoch as one lone file.
+
+```
+data/
+  a.png                  one record
+  group_0001/b.png       one record: b, c and d together
+  group_0001/c.png
+  group_0001/d.png
+  cat/1.png              one record
+  cat/group_0002/2.png   one record: 2 and 3 together
+  cat/group_0002/3.png
+```
+
+```yaml
+train: !class:recordstream.sources.grouped.GroupedFilesSource
+  root: ${env:DATA_ROOT}/data
+  pattern: "**/*.png"
+  pick: next
+```
+
+Each record is `{"file": "<path>", "group_size": <files in the group>}`; an op decodes the file, as after
+`FilesSource`. `pick` says which file of a group a read gets:
+
+| `pick` | the file a read gets | for |
+| --- | --- | --- |
+| `next` (default) | another one at every read: the first, the second, … and round again | training: every epoch sees another file of each group |
+| `first` | the group's first file by name, always | a validation run on fixed files |
+| `seeded` | one file per group drawn from `seed`, the same at every read, in every worker, in every run | a validation run on fixed files that are not all "the first" |
+
+With the tree above and `pick: next`, the record of `group_0001` is `b.png` in epoch 1, `c.png` in epoch 2, `d.png`
+in epoch 3 and `b.png` again in epoch 4.
+
+The count behind `next` is shared by every worker process a loader starts — with workers restarted per epoch, with
+workers kept alive, with shuffling. A copy of the source made with `pickle` or `copy.deepcopy` counts on its own from
+zero. The folder is listed once, on first use.
+
+[`GroupedFilesSink`](storage.md) writes this layout from records that carry a group entry.
+
 ## Train / val / test splitting (`DatasetSplit`)
 
 `DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields records and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.

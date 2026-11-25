@@ -2169,9 +2169,9 @@ Python callable.
 | category | role | classes |
 |---|---|---|
 | `engine` | composes sources and ops | `Stream`, `JointStream`, `FlowGraph` |
-| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
+| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `GroupedFilesSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
 | `op` | `Record -> Optional[Record]` | every op meant to be a node |
-| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink` |
+| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink`, `GroupedFilesSink` |
 | `value` | produces a value with no record involved | `ClassNamesOutput`, `ClassNamesScan`, `RandomNumber` |
 | `contract` | states what a whole graph takes and delivers | `GraphContract` |
 
@@ -2687,3 +2687,40 @@ folders it reads what the folder limit read.
 FileSelection(sets=["/data/A/1.0"], pattern="**/*.json", max_subfolders_per_folder=5, max_files_per_folder=20)
 ```
 
+## 34. A group of files is one record, and the file it gives is counted in shared memory (`GroupedFilesSource`, 2026-11-25)
+
+**Context.** A dataset with many near-copies trains on the copies: 854 measured pictures hold 48 groups of copies, the
+largest of 72. Keeping one picture per group (87 left) throws the other 767 away. The user asked for the groups as
+folders, a source that takes a group folder as ONE record, and "a different record out of this group for each epoch";
+for a validation run, one fixed file per group — the first, or a seeded random one.
+
+**The problem.** No source is told which epoch it is, so "another file per epoch" must be counted by the source. A
+count kept in the object fails under a loader's workers. Measured with torch's `DataLoader`, 6 groups of 4 files, 4
+epochs, the file taken per epoch:
+
+| loader | count in the object | count in shared memory |
+| --- | --- | --- |
+| no workers | 0, 1, 2, 3 | 0, 1, 2, 3 |
+| 2 workers, restarted per epoch | **0, 0, 0, 0** | 0, 1, 2, 3 |
+| 2 workers, kept alive | 0, 1, 2, 3 (without shuffling only) | 0, 1, 2, 3 |
+
+A worker restarted per epoch gets a fresh copy of the source, so the count starts at zero: every epoch trains on the
+first file and nothing says so.
+
+**Decision.** `GroupedFilesSource` lists `root` once, takes a folder whose name starts with `prefix` as one record
+and keeps one count per record in a `multiprocessing.Array` of the `spawn` context (its lock can be taken by a
+spawned and by a forked worker). `pick: next` reads and raises the count under the lock; `first` and `seeded` count
+nothing (`seeded` is `random.Random(f"{seed}:{place}")`, so it needs no state to be the same everywhere). Such an
+array travels only to a process being STARTED, so `__getstate__` hands it over when a worker is being started
+(listing first, so the count exists before it leaves) and otherwise drops listing and count: a plain pickled copy
+counts on its own. `len()` creates the count too, which a loader asks for before it forks.
+
+`GroupedFilesSink` writes the layout: a record's file copied under `path`, into `<prefix><group>/` when the record
+carries the group entry, its place under `root` kept so a class folder stays a class folder.
+
+**Consequences.** The count needs no trainer and no epoch signal; a read that is not part of an epoch (one record
+read to check the dataset) moves one group one file on. A source sent to a worker through a queue, not at its start,
+counts per worker. Measured on the 854 pictures through a shuffling `DataLoader`, 4 epochs: every one of the 41
+groups of four or more files gave four different files, in all three loader setups.
+
+**What you may change.** Add a `pick`. Not a count kept in the object, and not an epoch read from a trainer.

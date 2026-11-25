@@ -213,6 +213,11 @@ Gotchas:
   order; hidden folders and consumed companions never listed; the listing memoised on its settings and the sets'
   folders; an empty selection or an empty set refused. A domain runnable takes
   the selection (or its `select(sets)` pairs), never a limit knob of its own (`tests/test_file_selection.py`).
+- `GroupedFilesSource` (§34, user request 2026-11-25, `tests/test_grouped_files.py`): a folder named `<prefix>…` is ONE
+  record; `pick` is `next` / `first` / `seeded`. The count behind `next` is a `spawn`-context `multiprocessing.Array`
+  handed to a worker only when the worker is started (`__getstate__`) — never a count kept in the object (measured:
+  workers restarted per epoch then read the first file every epoch) and never an epoch read from a trainer.
+  `GroupedFilesSink` copies, never moves, and refuses a file that would land on an existing one.
 - `DifferenceSource` compares ONE entry (`key`) by a closed `compare` (`value`/`name`/`stem`); a domain's notion of
   "the same record" is an entry a domain source writes, never a new `compare` spelling or a per-key predicate. It
   reads both sides' keys through `project` once (§31, `tests/test_difference_source.py`).

@@ -10,6 +10,7 @@ the enrichment table key on the submodule path, because that is what ``cls.__mod
 
 Submodules:
     - recordstream.sources.files: FilesSource (a plain list of file paths)
+    - recordstream.sources.grouped: GroupedFilesSource (a folder of files, a group folder ONE record)
     - recordstream.sources.huggingface: HuggingFaceSource (+ the METADATA_ALL_FEATURES sentinel)
     - recordstream.sources.split: DatasetSplit (+ the SplitName Literal)
     - recordstream.sources.range: RangeSource (a contiguous ``[start:stop)`` slice)
@@ -29,6 +30,7 @@ from recordstream.sources.config import ConfigStreamSource
 from recordstream.sources.difference import CompareBy, DifferenceSource
 from recordstream.sources.draw import DrawSource
 from recordstream.sources.files import FilesSource
+from recordstream.sources.grouped import GroupedFilesSource
 from recordstream.sources.huggingface import METADATA_ALL_FEATURES, HuggingFaceSource
 from recordstream.sources.range import RangeSource
 from recordstream.sources.selection import FileSelection
@@ -42,6 +44,7 @@ __all__ = [
     "DifferenceSource",
     "DrawSource",
     "FileSelection",
+    "GroupedFilesSource",
     "HuggingFaceSource",
     "FilesSource",
     "METADATA_ALL_FEATURES",

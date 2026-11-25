@@ -36,6 +36,26 @@ for record in ZarrGroupSource("ds.zarr"):   # exact keys, item types and attrs r
     ...
 ```
 
+`GroupedFilesSink` is not one of these: it stores no record, it COPIES each record's file into a folder per group.
+
+```yaml
+sink: !class:recordstream.storage.grouped_files.GroupedFilesSink
+  path: ${env:DATA_ROOT}/grouped     # where the copies go
+  root: ${env:DATA_ROOT}/pictures    # keeps each file's place under it (class folders stay)
+  file: file                         # the entry naming the file
+  group: group                       # the entry naming its group; a record without it is in no group
+```
+
+| record | lands in |
+|---|---|
+| `{file: pictures/cat/1.png, group: 3}` | `grouped/cat/group_0003/1.png` |
+| `{file: pictures/dog/9.png, group: 3}` | `grouped/dog/group_0003/9.png` |
+| `{file: pictures/cat/2.png}` | `grouped/cat/2.png` |
+
+The dataset read from is left as it is. A file that would land on an existing one is refused: two files of one name
+need `root`, a second run needs an empty `path`. Only the named file is copied — a label file beside it is not.
+[`GroupedFilesSource`](sources.md) reads the folder back, one record per group.
+
 All four backends share ONE logical schema — the **record key-group layout**, stamped
 `recordstream_format = "typedrecord-v1"`: per record, one group per KEY carrying the value's
 registered type name, the payload as a `data` dataset, and its attrs (scalars natively; structured

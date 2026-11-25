@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Groups of files as one record** — `GroupedFilesSource(root, pattern, prefix, pick, seed)`
+  (`recordstream.sources.grouped`) serves a folder whose name starts with `prefix` as ONE record. `pick: next` gives
+  another file of the group at every read, so every epoch trains on another one (the count is shared by every worker
+  a loader starts); `first` and `seeded` give one fixed file per group, for a validation run.
+  `GroupedFilesSink(path, root, file, group, prefix)` (`recordstream.storage.grouped_files`) writes that layout: each
+  record's file copied into a folder per group, its place under `root` kept (`docs/sources.md`, `docs/storage.md`,
+  `docs/architecture.md` §34).
 - **A budget of full reads for a key-restricted walk** — `with recordstream.projection.full_read_budget(n):` lets the
   walks in that block read at most `n` records in full (where a cheap answer falls short) and raises
   `FullReadsExceeded` past it. A cheap answer spends nothing, and a nested block keeps its own count. A caller that
