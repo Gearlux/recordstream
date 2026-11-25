@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
   `GroupedFilesSink(path, root, file, group, prefix)` (`recordstream.storage.grouped_files`) writes that layout: each
   record's file copied into a folder per group, its place under `root` kept (`docs/sources.md`, `docs/storage.md`,
   `docs/architecture.md` §34).
+- **Groups of records without moving a file** — `GroupedSource(source, groups, pick, seed)` wraps any indexable
+  source and serves the records a groups file names together as ONE record, with the same `pick`; a dataset whose
+  labels name its files by their place stays as it is. `GroupsFileSink(path, group)` writes the file from a run's
+  records.
 - **A budget of full reads for a key-restricted walk** — `with recordstream.projection.full_read_budget(n):` lets the
   walks in that block read at most `n` records in full (where a cheap answer falls short) and raises
   `FullReadsExceeded` past it. A cheap answer spends nothing, and a nested block keeps its own count. A caller that

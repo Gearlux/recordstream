@@ -218,6 +218,10 @@ Gotchas:
   handed to a worker only when the worker is started (`__getstate__`) — never a count kept in the object (measured:
   workers restarted per epoch then read the first file every epoch) and never an epoch read from a trainer.
   `GroupedFilesSink` copies, never moves, and refuses a file that would land on an existing one.
+  `GroupedSource` is the same pick over ANY indexable source, the groups read from a groups file of indices
+  (`GroupsFileSink`), for a dataset whose labels name its files by their place; a source of another length than the
+  file's `records` is refused, and `project` answers with each group's first record. The pick lives once, in
+  `_PickOfGroup`.
 - `DifferenceSource` compares ONE entry (`key`) by a closed `compare` (`value`/`name`/`stem`); a domain's notion of
   "the same record" is an entry a domain source writes, never a new `compare` spelling or a per-key predicate. It
   reads both sides' keys through `project` once (§31, `tests/test_difference_source.py`).

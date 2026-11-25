@@ -2169,9 +2169,9 @@ Python callable.
 | category | role | classes |
 |---|---|---|
 | `engine` | composes sources and ops | `Stream`, `JointStream`, `FlowGraph` |
-| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `GroupedFilesSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
+| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `GroupedFilesSource`, `GroupedSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
 | `op` | `Record -> Optional[Record]` | every op meant to be a node |
-| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink`, `GroupedFilesSink` |
+| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink`, `GroupedFilesSink`, `GroupsFileSink` |
 | `value` | produces a value with no record involved | `ClassNamesOutput`, `ClassNamesScan`, `RandomNumber` |
 | `contract` | states what a whole graph takes and delivers | `GraphContract` |
 
@@ -2724,3 +2724,16 @@ counts per worker. Measured on the 854 pictures through a shuffling `DataLoader`
 groups of four or more files gave four different files, in all three loader setups.
 
 **What you may change.** Add a `pick`. Not a count kept in the object, and not an epoch read from a trainer.
+
+**Amendment 2026-11-25: a groups file, for a dataset that cannot move (`GroupedSource`).** The measured dataset is a
+detection dataset: a label file per picture in a folder beside the pictures, an annotation file listing file names,
+and a metadata row per picture path. All three name a picture by its flat place, and its source lists that one
+folder, so a picture moved into a group folder is lost to all of them. The grouping belongs to the records, not to
+the files: `GroupedSource(source, groups, pick, seed)` wraps any indexable source and reads which records stand for
+each other from `{"records": N, "groups": [[i, j, …], …]}` (`GroupsFileSink` writes it, counting the records of a
+run). The pick and its shared count are one mixin, `_PickOfGroup`, under both sources. The file holds indices, so a
+source of another length is refused; a `project` walk answers with each group's first record and counts nothing.
+Measured on the same 854 pictures through a shuffling `DataLoader` over the detection source, 3 epochs, workers
+restarted and kept alive: 87 records per epoch, every one of the 43 groups of three or more gave three different
+pictures, each with its boxes. Not an index the user edits by hand, and never a key match per record: a domain that
+needs one writes the groups file from its own notion of "the same record".

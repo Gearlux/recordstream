@@ -56,6 +56,22 @@ The dataset read from is left as it is. A file that would land on an existing on
 need `root`, a second run needs an empty `path`. Only the named file is copied — a label file beside it is not.
 [`GroupedFilesSource`](sources.md) reads the folder back, one record per group.
 
+`GroupsFileSink` writes the groups down WITHOUT touching the dataset: one JSON file naming, by their place in the
+run, the records that share a group entry.
+
+```yaml
+sink: !class:recordstream.storage.grouped_files.GroupsFileSink
+  path: ${env:DATA_ROOT}/drones/train.groups.json
+  group: group
+```
+
+| records written, in order | the file |
+|---|---|
+| `{group: 7}`, `{}`, `{group: 7}`, `{group: 2}`, `{group: 2}`, `{group: 9}` | `{"records": 6, "groups": [[0, 2], [3, 4]]}` |
+
+A group of one is no group. The numbers are the source's indices only when the run reads the whole source in order
+and drops no record. [`GroupedSource`](sources.md) reads the file over the same source.
+
 All four backends share ONE logical schema — the **record key-group layout**, stamped
 `recordstream_format = "typedrecord-v1"`: per record, one group per KEY carrying the value's
 registered type name, the payload as a `data` dataset, and its attrs (scalars natively; structured

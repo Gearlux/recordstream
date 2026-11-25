@@ -338,6 +338,33 @@ zero. The folder is listed once, on first use.
 
 [`GroupedFilesSink`](storage.md) writes this layout from records that carry a group entry.
 
+### When the dataset must stay as it is (`GroupedSource`)
+
+A dataset whose labels name its files by their place — a label folder beside the pictures, an annotation file
+listing file names — breaks when a file moves into a group folder. `GroupedSource` groups the RECORDS instead: it
+wraps any indexable source, and a small groups file says which records stand for each other. Nothing moves.
+
+```json
+{"records": 854, "groups": [[28, 30, 54], [59, 78]]}
+```
+
+```yaml
+train: !class:recordstream.sources.grouped.GroupedSource
+  source: !class:my_package.DetectionSource {root: /data/drones, split: train}
+  groups: /data/drones/train.groups.json
+  pick: next
+```
+
+| the source | the view |
+| --- | --- |
+| 854 records | 87 records: one per group, one per record no group names |
+| record 28, 30 and 54, each with its picture and boxes | ONE record: 28 in epoch 1, 30 in epoch 2, 54 in epoch 3, 28 again in epoch 4 |
+
+Each record is exactly what the source gives for the picked index, labels and all. `pick` and the shared count are
+those of `GroupedFilesSource`. The file's `records` must be the source's length — a source of another length is
+refused, because the numbers would name other records. A key-restricted walk (`project`, class counts) answers with
+each group's first record and moves no group on. [`GroupsFileSink`](storage.md) writes the file.
+
 ## Train / val / test splitting (`DatasetSplit`)
 
 `DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields records and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.

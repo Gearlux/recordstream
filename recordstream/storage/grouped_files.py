@@ -1,9 +1,10 @@
-"""``GroupedFilesSink`` — copy each record's file into a folder per group."""
+"""Groups written down: ``GroupedFilesSink`` (a folder per group) and ``GroupsFileSink`` (a groups file)."""
 
+import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Dict, List, Union
 
 import confluid
 from loggair import get_logger
@@ -95,3 +96,47 @@ class GroupedFilesSink(DataSink):
     def flush(self) -> None:
         """Nothing is pending: every file is copied as its record is written."""
         logger.debug(f"GroupedFilesSink: {self._written} file(s) copied under {self.path!r}")
+
+
+# category="sink": surfaced by visual editors as a sink node docking into a DatasetProcessor's sink slot.
+@confluid.configurable(category="sink")
+class GroupsFileSink(DataSink):
+    """Write which records stand for each other as ONE small JSON file — the dataset itself is not touched.
+
+    Every record written is counted, so a record's number is its place in the run; a record carrying a group under
+    :attr:`group` joins that group. :meth:`flush` writes::
+
+        {"records": 854, "groups": [[28, 30, 54], [59, 78]]}
+
+    — how many records were written, and each group of two or more as its records' numbers.
+    :class:`~recordstream.sources.grouped.GroupedSource` reads it over the SAME source, one record per group. The
+    numbers are the source's indices only when the run reads the whole source in order and drops no record.
+
+    Args:
+        path: The file to write (its folder is created); an existing one is replaced.
+        group: Record entry naming the record's group; a record without it is in no group.
+    """
+
+    def __init__(self, path: Union[str, Path] = "", group: str = "group") -> None:
+        # Partial / zero-arg: store config only; nothing is written before flush().
+        self.path = str(path)
+        self.group = group
+        self._records = 0
+        self._groups: Dict[Any, List[int]] = {}
+
+    def write(self, record: Record) -> None:
+        """Count the record and note its group."""
+        group = item_value(record.get(self.group))
+        if group is not None:
+            self._groups.setdefault(group.item() if hasattr(group, "item") else group, []).append(self._records)
+        self._records += 1
+
+    def flush(self) -> None:
+        """Write the groups file."""
+        if not self.path:
+            raise ValueError("GroupsFileSink: `path` is empty — name the groups file to write")
+        target = Path(os.path.expanduser(os.path.expandvars(self.path)))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        groups = sorted(members for members in self._groups.values() if len(members) > 1)
+        target.write_text(json.dumps({"records": self._records, "groups": groups}) + "\n")
+        logger.debug(f"GroupsFileSink: {self._records} record(s), {len(groups)} group(s) -> {str(target)!r}")

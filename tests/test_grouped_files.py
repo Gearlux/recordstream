@@ -1,5 +1,7 @@
-"""Groups of files as folders: ``GroupedFilesSink`` writes them, ``GroupedFilesSource`` reads one file per group."""
+"""Groups as one record: as folders (``GroupedFilesSink`` / ``GroupedFilesSource``) or as a groups file
+(``GroupsFileSink`` / ``GroupedSource``)."""
 
+import json
 import pickle
 from pathlib import Path
 from typing import Any, Dict, List
@@ -7,9 +9,9 @@ from typing import Any, Dict, List
 import pytest
 from confluid import get_registry
 
-from recordstream.sources import GroupedFilesSource
+from recordstream.sources import GroupedFilesSource, GroupedSource
 from recordstream.sources.grouped import PICKS
-from recordstream.storage.grouped_files import GroupedFilesSink
+from recordstream.storage.grouped_files import GroupedFilesSink, GroupsFileSink
 
 
 def _files(folder: Path, *names: str) -> List[Path]:
@@ -168,3 +170,115 @@ class TestTheCountIsSharedByEveryWorker:
         copy = pickle.loads(pickle.dumps(source))
         assert Path(copy[1]["file"]).name == "b.png"
         assert Path(source[1]["file"]).name == "c.png"
+
+
+class _Numbers:
+    """An indexable source of ``{"n": index}`` records that counts its full reads."""
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+        self.reads = 0
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        self.reads += 1
+        return {"n": index}
+
+
+@pytest.fixture
+def groups_file(tmp_path: Path) -> str:
+    """Six records: 1, 3 and 4 stand for each other, 2 and 5 too, 0 is alone."""
+    path = tmp_path / "groups.json"
+    path.write_text(json.dumps({"records": 6, "groups": [[1, 3, 4], [2, 5]]}))
+    return str(path)
+
+
+class TestTheSinkWritesAGroupsFile:
+    def test_it_writes_how_many_records_and_each_group_of_two_or_more(self, tmp_path: Path) -> None:
+        sink = GroupsFileSink(path=str(tmp_path / "sub" / "groups.json"), group="duplicate_group")
+        for group in (None, 7, 2, 7, 7, 2, 9):
+            sink.write({"duplicate_group": group} if group is not None else {"other": 1})
+        sink.flush()
+        stored = json.loads((tmp_path / "sub" / "groups.json").read_text())
+        assert stored == {"records": 7, "groups": [[1, 3, 4], [2, 5]]}  # the group of one (9) is no group
+
+    def test_it_is_a_sink_node_that_builds_without_arguments_and_needs_a_path_to_write(self) -> None:
+        assert getattr(GroupsFileSink, "__confluid_category__") == "sink"
+        with pytest.raises(ValueError, match="`path` is empty"):
+            GroupsFileSink().flush()
+
+
+class TestAGroupOfRecordsIsOneRecord:
+    def test_the_view_serves_one_record_per_group_in_the_order_of_first_indices(self, groups_file: str) -> None:
+        view = GroupedSource(source=_Numbers(6), groups=groups_file, pick="first")
+        assert len(view) == 3
+        assert [record["n"] for record in view] == [0, 1, 2]
+
+    def test_next_takes_another_record_of_the_group_at_every_read(self, groups_file: str) -> None:
+        view = GroupedSource(source=_Numbers(6), groups=groups_file)
+        epochs = [[record["n"] for record in view] for _ in range(4)]
+        assert epochs == [[0, 1, 2], [0, 3, 5], [0, 4, 2], [0, 1, 5]]
+
+    def test_seeded_is_one_record_per_group_for_good(self, groups_file: str) -> None:
+        def picked(seed: int) -> List[int]:
+            return [r["n"] for r in GroupedSource(source=_Numbers(6), groups=groups_file, pick="seeded", seed=seed)]
+
+        assert picked(4) == picked(4)
+        assert len({tuple(picked(seed)) for seed in range(20)}) > 1
+
+    def test_a_key_restricted_walk_answers_with_each_groups_first_record_and_counts_nothing(
+        self, groups_file: str
+    ) -> None:
+        from recordstream.projection import project
+
+        view = GroupedSource(source=_Numbers(6), groups=groups_file)
+        assert [record["n"] for record in project(view, ["n"])] == [0, 1, 2]
+        assert [record["n"] for record in view] == [0, 1, 2]  # the walk moved no group on
+
+    def test_what_the_sink_wrote_is_read_back_over_the_same_source(self, tmp_path: Path) -> None:
+        sink = GroupsFileSink(path=str(tmp_path / "groups.json"))
+        for group in (1, None, 1, 2, 2):
+            sink.write({"group": group})
+        sink.flush()
+        view = GroupedSource(source=_Numbers(5), groups=str(tmp_path / "groups.json"), pick="first")
+        assert [record["n"] for record in view] == [0, 1, 3]
+
+    def test_a_source_of_another_length_is_refused(self, groups_file: str) -> None:
+        with pytest.raises(ValueError, match="written for 6 records and the source has 7"):
+            len(GroupedSource(source=_Numbers(7), groups=groups_file))
+
+    def test_a_missing_file_a_record_named_twice_and_a_source_without_an_index_are_refused(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(ValueError, match="does not exist"):
+            len(GroupedSource(source=_Numbers(2), groups=str(tmp_path / "none.json")))
+        twice = tmp_path / "twice.json"
+        twice.write_text(json.dumps({"records": 3, "groups": [[0, 1], [1, 2]]}))
+        with pytest.raises(ValueError, match="names record 1 twice"):
+            len(GroupedSource(source=_Numbers(3), groups=str(twice)))
+        with pytest.raises(TypeError, match="__len__ and __getitem__"):
+            len(GroupedSource(source=iter(()), groups=str(twice)))
+
+    def test_a_worker_started_with_the_view_goes_on_where_the_others_are(self, groups_file: str) -> None:
+        import multiprocessing
+
+        context = multiprocessing.get_context("spawn")
+        view = GroupedSource(source=_Numbers(6), groups=groups_file)
+        seen = []
+        for _ in range(3):
+            queue = context.Queue()
+            worker = context.Process(target=_read_numbers, args=(view, queue))
+            worker.start()
+            seen.append(queue.get(timeout=60)[1])
+            worker.join(timeout=60)
+        assert seen == [1, 3, 4]
+
+    def test_it_is_a_source_node_that_builds_without_arguments(self) -> None:
+        assert getattr(GroupedSource, "__confluid_category__") == "source"
+        GroupedSource()
+
+
+def _read_numbers(view: Any, queue: Any) -> None:
+    queue.put([record["n"] for record in view])
