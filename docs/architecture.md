@@ -1887,6 +1887,18 @@ knowledge (`complete: false`) and a refusal there is reported, not raised. Two a
 expanding node's trace keeps only its last branch (a rerun below it is refused), and a
 `bind:`/`merge_from:` failure raised by the kernel before the op is called is not attributed to a node.
 
+**Amendment 2026-11-25 — an entry as a picture.** A summary says that a node ran, not what it made: on a spectrogram
+pipeline every row read `float32, 819 x 15624` and nothing showed whether the bursts were there. A summary now marks an
+entry that is a raster — an image, a mask, a 2-D array of numbers — with `picture: true`, and
+`Tracer.picture(node, entry, side="output", width=None)` answers it as PNG bytes: an image as it is, a mask black and
+white, numbers grey from their lowest to their highest finite value, scaled down to `width` (never up), with every
+`Boxes` of the same snapshot outlined when its `canvas` is the raster's own frame. The pixels are
+`ops.image.value_to_image`'s (`recordstream.flow.picture` adds the question, the width, the boxes and the PNG), so a
+picture and every other preview agree. Measured on that pipeline: 16 to 55 ms for a picture 1200 pixels wide of an
+819 x 15624 array. Rejected: a renderer in the front end (it would import numpy and Pillow and restate the quantizer);
+a picture inside `to_dict()` (megabytes in every answer, for entries nobody looks at). A tensor and a signal have no
+picture yet.
+
 **Example.**
 
 ```python

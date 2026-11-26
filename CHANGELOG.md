@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A traced node's entry as a picture** — a summary of `Tracer.to_dict()` marks an image, a mask and a 2-D array of
+  numbers with `picture: true`, and `Tracer.picture(node, entry, side, width=)` answers the PNG, the boxes of the same
+  snapshot outlined over it (`recordstream.flow.picture`).
 - **Groups of files as one record** — `GroupedFilesSource(root, pattern, prefix, pick, seed)`
   (`recordstream.sources.grouped`) serves a folder whose name starts with `prefix` as ONE record. `pick: next` gives
   another file of the group at every read, so every epoch trains on another one (the count is shared by every worker

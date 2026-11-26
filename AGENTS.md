@@ -159,6 +159,10 @@ Gotchas:
   constructor stores only; snapshots are references (`copy_snapshots=True` is opt-in);
   `rerun_from` rebuilds through the constructor from the op's current values; `check()` checks
   each node over its record lineage and raises a located `ChainContractError` before any node runs.
+  A summary marks an entry that has a PICTURE (`picture: true`: an image, a mask, a 2-D array of numbers —
+  `flow.picture.pictured`) and `Tracer.picture(node, entry, side, width=)` answers it as a PNG, the snapshot's `Boxes`
+  outlined when their `canvas` is the raster's frame. The drawing is `ops.image.value_to_image`'s, never a second
+  renderer or quantizer; an `Image` is read in its declared layout. (`tests/test_trace_picture.py`)
 - `Subgraph` (§23, `tests/test_subgraph.py`, `tests/test_trace_subgraph.py`): the inside runs on
   the same kernel, never flattened, never on its own executor.
   - The parameter is `result`, never `outputs` (confluid broadcasts a document's `outputs:`).
