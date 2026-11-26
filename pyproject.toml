@@ -19,11 +19,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 # Floors are what this package is actually TESTED against, not the oldest release that
-# once worked. confluid 0.4.1 is the first release whose `to_pydantic` builds a model for a
-# class that contains itself: `Repeat.each` names `Repeat`, and on 0.4.0 that switched the
-# class's validation OFF (`Repeat(count=(-1, 2))` was accepted; 0.4.1 refuses it).
+# once worked. Measured 2026-11-26 in a clean Python 3.12 venv with CI's extras, from PyPI:
+# at liquifai 0.4.0 / confluid 0.5.0 / loggair 0.2.0 the suite passed (2153); at the previous
+# floors (liquifai 0.2.0, confluid 0.4.1) 26 tests of `recordstream run` failed (its dry run,
+# default command, forwarded flags and undeclared scopes). liquifai 0.4.0 requires confluid 0.5.0.
 dependencies = [
-    "confluid>=0.4.1",
+    "confluid>=0.5.0",
     "loggair>=0.2.0",
     "numpy",
     "Pillow",
@@ -38,7 +39,7 @@ dependencies = [
     # liquifai powers the generic `recordstream run <config.yaml>` CLI (recordstream.cli) that
     # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
     # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
-    "liquifai>=0.2.0",
+    "liquifai>=0.4.0",
     # `recordstream.resources` reads the machine's free memory and each worker's (`DatasetProcessor(workers=auto)`
     # and the memory guard of every multi-worker run); no stdlib call reads free memory on macOS.
     "psutil>=7.2",
@@ -75,6 +76,8 @@ dev = [
     "mypy>=1.0.0,<2.0.0",
     # psutil, a declared dependency, ships no type hints; without the stubs `import psutil` fails this project's mypy.
     "types-psutil",
+    # PyYAML (through confluid) ships none either; the tests import `yaml`, so CI's mypy needs these stubs too.
+    "types-PyYAML",
     "pytest>=7.0.0,<9.0.0",
     "pytest-cov>=4.0.0,<7.0.0",
     # CI installs `.[dev]` (unit-tests AND verify-examples), so torchvision here keeps the
