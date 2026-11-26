@@ -2402,8 +2402,9 @@ which records are built. Pin: `tests/test_processing_stop.py`.
 signal-detection sets said 8 for a 64 GB machine (a record peaks at 4.1 GB in its worker), and on an 18 GB machine 8
 such workers beside another run drove it past 80 GB. The count is now measured on the records and held to while the
 run goes. Each worker measures what a record took (`recordstream.resources.measure`): peak resident memory above
-what it held before the record (`ru_maxrss` — a lifetime peak, so a later, smaller record reads high: the plan errs
-large), the MPS driver's memory added where the GPU shares the machine's memory (1 GB on MPS adds about 80 MB to the
+what it held before the record (a lifetime peak, so a later, smaller record reads high: the plan errs large; on
+Linux `VmHWM`, the worker's own, because `ru_maxrss` there starts a spawned worker at its parent's peak — a 200 MB
+record measured 1.18 GB in CI, 2026-11-26), the MPS driver's memory added where the GPU shares the machine's memory (1 GB on MPS adds about 80 MB to the
 resident size), CPU over wall time, CUDA's peak and free memory. The running process plans with the largest of each
 (`WorkerGovernor`): the building records' peaks × 1.25, plus the footprint of each worker not started yet, within
 free memory − a reserve of 2 GB or 10 %; with `auto` also within the cores and the GPU. What the started workers hold
