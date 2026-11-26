@@ -88,6 +88,20 @@ edits (see [record-model.md](record-model.md#storage--the-record-key-group-layou
 > package — e.g. a waveform-recording format pair lives in the signal-domain package, not here. The
 > engine never couples to a specific format.
 
+## What a run deletes
+
+A sink that replaces what it holds says so before a run, through `planned_changes()`: a line for each thing that is
+gone once the run opens the sink. `recordstream run --dry_run` prints the lines as the plan's actions and changes
+nothing (see [workflow](workflow.md)).
+
+| Sink | With `overwrite: true` over existing data |
+|---|---|
+| `HDF5Sink` | `delete /data/train.h5 (1.2G)` |
+| `ZarrBatchSink` | `delete /data/train.zarr/data (12 files, 310.0K)` |
+
+A sink that appends, or whose file is not there yet, has no line. A sink of your own answers the same method, by
+shape; `recordstream.storage.base.size_text` writes the size.
+
 ## Array-valued item attributes
 
 Each key is stored as its own group: the item's payload as a `data` dataset and its scalar

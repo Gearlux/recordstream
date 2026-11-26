@@ -362,6 +362,9 @@ Gotchas:
   `create_dataset`. `read_record_group(group, slices=…)` is the one HDF5 row decoder
   (`tests/test_typed_storage.py::TestReadRecordGroupSlices`).
 - A metadata scan never loads an array; `SupportsMetadataScan` is structural.
+- A sink whose `open()` replaces what it holds answers `planned_changes()` with one `delete …` line per thing gone
+  (`HDF5Sink`, `ZarrBatchSink` under `overwrite`), sized by `storage.base.size_text`; the condition is the same one
+  `open()` reads, and asking touches nothing (`tests/test_storage_planned_changes.py`).
 
 ## Errors
 

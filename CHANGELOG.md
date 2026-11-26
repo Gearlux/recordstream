@@ -10,6 +10,8 @@ All notable changes to this project are documented here. The format follows
 - **A plan names what a run deletes** — `DatasetProcessor.plan()` asks its sink `planned_changes()` and lists the
   answers as the plan's actions, so `recordstream run --dry_run` prints them. A sink without the method plans as
   before.
+- **`HDF5Sink` and `ZarrBatchSink` say what `overwrite` deletes** — their `planned_changes()` names the file or
+  array a run replaces, with its size, so a dry run prints it. `storage.base.size_text` writes a byte count.
 - **A run can be asked to stop** — `ProgressReporting.set_stop_request(question)`: a `DatasetProcessor` asks the
   question after each record and, on yes, finishes the record in hand, flushes its sink and returns; a workflow hands
   it to the step it runs and starts no further step. A plain `recordstream run` is unchanged.

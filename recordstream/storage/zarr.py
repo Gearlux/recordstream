@@ -16,6 +16,7 @@ from recordstream.storage.base import (
     Storage,
     require_record_format,
     restore_attrs,
+    size_text,
     split_attrs,
     to_numpy,
 )
@@ -203,6 +204,17 @@ class ZarrBatchSink(Storage, DataSink):
                 dtype=self.dtype,
             )
         return self
+
+    def planned_changes(self) -> List[str]:
+        """What opening this sink for a run changes on disk: with ``overwrite`` the array that is there is deleted
+        (mode ``w``) — one ``delete <path>/data (<n> files, <size>)`` line; nothing when it appends or no array is
+        there. Asking changes nothing."""
+        held = Path(self.path) / "data"
+        if not (self.overwrite and self._data_arr is None and held.exists()):
+            return []
+        files = [each for each in held.rglob("*") if each.is_file()]
+        count = "1 file" if len(files) == 1 else f"{len(files)} files"
+        return [f"delete {held} ({count}, {size_text(sum(each.stat().st_size for each in files))})"]
 
     def write(self, record: Any) -> None:
         self.open()
