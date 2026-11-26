@@ -153,6 +153,7 @@ class DatasetProcessor(ProgressReporting):
         desc = self.progress_desc or "DatasetProcessor"
         records: Iterable[Any] = stream if workers == 1 else _records_from_workers(stream, workers)
         iterator = self._wrap_progress(records, total)
+        stopped = False  # a caller's stop request, read after each record (ProgressReporting.set_stop_request)
 
         if sink:
             logger.info(f"Streaming data to sink: {sink.__class__.__name__}")
@@ -165,6 +166,10 @@ class DatasetProcessor(ProgressReporting):
                     sink.write(record)
                     count += 1
                     self._report_progress(count, total, desc)
+                    if self._stop_requested():
+                        stopped = True
+                        break
+                _close(iterator)
                 sink.flush()
             logger.info(f"Streamed {count} record(s) to sink.")
         else:
@@ -173,9 +178,13 @@ class DatasetProcessor(ProgressReporting):
             for count, record in enumerate(iterator, start=1):
                 results.append(record)
                 self._report_progress(count, total, desc)
+                if self._stop_requested():
+                    stopped = True
+                    break
+            _close(iterator)
             logger.info(f"Processed {len(results)} records.")
 
-        logger.info("Processing complete.")
+        logger.info("Stopped as asked: what was written is kept." if stopped else "Processing complete.")
 
     def plan(self) -> Plan:
         """What :meth:`run` would do, no record built: the source's records, the first one built, how many are
@@ -236,6 +245,14 @@ class DatasetProcessor(ProgressReporting):
             return records
         desc = self.progress_desc or "DatasetProcessor"
         return _ProgressIter(records, total=total, desc=desc)
+
+
+def _close(records: Iterable[Any]) -> None:
+    """End ``records`` when a run left them early (a stop request): a generator's cleanup — the workers of a run on
+    workers — runs now, not when the garbage collector finds it. Nothing for records that cannot be closed."""
+    close = getattr(records, "close", None)
+    if callable(close):
+        close()
 
 
 def _start_index(start: Start, sink: Any) -> int:

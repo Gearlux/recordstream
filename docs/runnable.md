@@ -181,8 +181,13 @@ Orthogonal to entry points, a runnable may inherit two stateless mixins:
   `(value, total, desc) -> None` via `set_progress_callback()`, the runnable drains it via
   `self._report_progress(step, total, "epoch 3")` from its loop. With no sink injected
   (a plain CLI run) every call is a silent no-op.
+  It also takes the question a caller asks to **stop** the run: `set_stop_request(lambda: asked)`. A
+  `DatasetProcessor` asks it after each record (`self._stop_requested()`); on yes it finishes the record in hand,
+  flushes its sink as at a normal end and returns, so what was written is kept. A `Sequence`, `Conditional` and
+  `Switch` hand the question to the step they run, and a `Sequence` starts no further step. A question that raises is
+  read as no; with none handed in, a run goes to its end.
 
-Pins: `tests/test_runnable.py` / `tests/test_entrypoint.py`.
+Pins: `tests/test_runnable.py` / `tests/test_entrypoint.py` / `tests/test_stop_request.py`.
 
 ## A dataset run on several processes: `DatasetProcessor(workers=N)`
 

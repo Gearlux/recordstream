@@ -293,13 +293,15 @@ def _forward(step: Any, flags: Dict[str, Any]) -> Any:
     return step
 
 
-def _run(runnable: Any, progress_callback: Any = None) -> None:
+def _run(runnable: Any, progress_callback: Any = None, stop_request: Any = None) -> None:
     """Flow ``runnable`` (if deferred) and call its ``run()``; ``None`` is a no-op.
 
     When ``progress_callback`` is supplied (the combinator's OWN callback, injected by a GUI
     executor via :meth:`ProgressReporting.set_progress_callback`) it is FORWARDED to the branch
     first, so a canvas progress bar tracks whichever runnable is executing inside the workflow
-    (the combinator itself has no loop to report from).
+    (the combinator itself has no loop to report from). ``stop_request`` — the question the combinator was handed
+    (:meth:`ProgressReporting.set_stop_request`) — is forwarded the same way, so the step that is running is the one
+    asked to stop.
     """
     runnable = _resolve(runnable)
     if runnable is None:
@@ -311,6 +313,10 @@ def _run(runnable: Any, progress_callback: Any = None) -> None:
         setter = getattr(runnable, "set_progress_callback", None)
         if callable(setter):
             setter(progress_callback)
+    if stop_request is not None:
+        asker = getattr(runnable, "set_stop_request", None)
+        if callable(asker):
+            asker(stop_request)
     run()
 
 
@@ -353,7 +359,10 @@ class Sequence(TorchRunner, ProgressReporting):
                 raise RequirementNotMet(f"[{index}/{total}] {plan.title}: {plan.first_failure}")
         for index, step in enumerate(selected, start=1):
             logger.info(f"Sequence step {index}/{total}: {plans[index - 1].title}")
-            _run(step, self._progress_callback)
+            _run(step, self._progress_callback, self._stop_request)
+            if self._stop_requested():
+                logger.info(f"Sequence stopped as asked after step {index}/{total}.")
+                break
 
     def forward_flags(self, flags: Dict[str, Any]) -> None:
         """Hand ``flags`` — command-line keys the workflow does not use itself — to every step that starts a run."""
@@ -415,7 +424,7 @@ class Conditional(TorchRunner, ProgressReporting):
             logger.debug("Conditional: selected branch is None — nothing to run.")
             return
         logger.info(f"Conditional -> {type(branch).__name__}")
-        _run(branch, self._progress_callback)
+        _run(branch, self._progress_callback, self._stop_request)
 
 
 @configurable
@@ -454,7 +463,7 @@ class Switch(TorchRunner, ProgressReporting):
             logger.debug(f"Switch: no branch for key {key!r} and no default — nothing to run.")
             return
         logger.info(f"Switch[{key!r}] -> {type(branch).__name__}")
-        _run(branch, self._progress_callback)
+        _run(branch, self._progress_callback, self._stop_request)
 
     def _select(self) -> Optional[str]:
         selector = _resolve(self.select)

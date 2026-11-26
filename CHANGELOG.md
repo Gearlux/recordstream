@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **A run can be asked to stop** — `ProgressReporting.set_stop_request(question)`: a `DatasetProcessor` asks the
+  question after each record and, on yes, finishes the record in hand, flushes its sink and returns; a workflow hands
+  it to the step it runs and starts no further step. A plain `recordstream run` is unchanged.
 - **A traced node's entry as a picture** — a summary of `Tracer.to_dict()` marks an image, a mask and a 2-D array of
   numbers with `picture: true`, and `Tracer.picture(node, entry, side, width=)` answers the PNG, the boxes of the same
   snapshot outlined over it (`recordstream.flow.picture`).

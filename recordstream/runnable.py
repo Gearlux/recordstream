@@ -14,7 +14,9 @@ node) can cooperate with it WITHOUT this package importing the GUI framework:
   The executor injects a ``(value, total, desc) -> None`` sink via
   :meth:`~ProgressReporting.set_progress_callback`; the runnable drains it from its
   loop via :meth:`~ProgressReporting._report_progress` (a silent no-op when no sink
-  was injected, so a plain CLI run is unaffected).
+  was injected, so a plain CLI run is unaffected). It also takes the question a caller
+  asks to stop the run between items (:meth:`~ProgressReporting.set_stop_request`): a run answered yes finishes
+  the item in hand and ends as one that reached its end.
 
 Both are pure marker/utility mixins (no required state) so they compose cleanly
 with any base class (a ``torch.nn.Module``, a ``LightningModule``, a plain object).
@@ -51,6 +53,9 @@ _ENTRYPOINT_ATTR = "__runnable_entrypoint__"
 #: with a narrower or wider capability set declares its own Literal instead — the type names the
 #: CONVENTION, it does not gate dispatch (``run_entrypoint`` reads the markers, not this).
 RunnableTask = Literal["fit", "evaluate", "test", "predict"]
+
+#: The question a caller hands a run it may want to stop: ``() -> bool``, yes once a stop was asked.
+StopRequest = Callable[[], bool]
 
 #: A progress sink: ``(value, total, description) -> None``. ``value`` / ``total`` are
 #: floats in the same unit (optimizer steps, records); ``description`` is a short stage label.
@@ -115,6 +120,28 @@ class ProgressReporting:
             callback(float(value), float(total), desc)
         except Exception:  # noqa: BLE001 - progress reporting must never break the run
             logger.debug("progress callback raised; ignoring", exc_info=True)
+
+    #: Set by the executor via :meth:`set_stop_request`; ``None`` ⇒ the run is never asked to stop.
+    _stop_request: Optional[StopRequest] = None
+
+    def set_stop_request(self, request: Optional[StopRequest]) -> None:
+        """Hand the run (or clear, with ``None``) the question it asks between items: "stop now?". A run that is
+        answered yes finishes the item in hand, ends as a run that reached its end (its sink flushed) and returns —
+        what it did is kept. The stop is cooperative: nothing interrupts an item. Idempotent."""
+        self._stop_request = request
+
+    def _stop_requested(self) -> bool:
+        """Whether the injected question says to stop; ``False`` when none was injected (a plain CLI run).
+
+        Never raises — a question that fails is read as no: a broken caller must never end a run early."""
+        request = self._stop_request
+        if request is None:
+            return False
+        try:
+            return bool(request())
+        except Exception:  # noqa: BLE001 - a broken stop question must never break or end the run
+            logger.debug("stop request raised; reading it as no", exc_info=True)
+            return False
 
 
 def entrypoint(task: str, role: str = "runnable", primary: bool = False) -> Callable:

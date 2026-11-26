@@ -327,6 +327,12 @@ Gotchas:
   unindexable source is refused. §28 amendment (`tests/test_processing_start.py`). `start: resume` reads the sink's
   `resume_index()` when the run starts, never when the processor is built; no sink or no `resume_index()` is
   refused before the first record (`tests/test_processing_resume.py`).
+- **A run is stopped by a QUESTION, never by an error** (`ProgressReporting.set_stop_request`, user approval
+  2026-11-26): the processor asks `_stop_requested()` after each record and, on yes, leaves its loop, closes the
+  record iterator (a run on workers ends them), flushes the sink and returns — the ending of a short run. Never stop
+  a run through the progress callback: `_report_progress` swallows what it raises, on purpose. A question that raises
+  is read as no. `workflow._run` forwards the question beside the progress callback; a `Sequence` starts no further
+  step. `stop=` (an index) is another thing. (`tests/test_stop_request.py`)
 - `DatasetProcessor(stop=N)` ends the same slice (`source[start:stop]`, one `RangeSource` over the copy; `None` builds to
   the end) — never a count of records to skip or to stop after once built; a plan carries `stop` only when it is set,
   so a run to the end plans byte for byte as before (`tests/test_processing_stop.py`).
