@@ -36,6 +36,42 @@ for record in ZarrGroupSource("ds.zarr"):   # exact keys, item types and attrs r
     ...
 ```
 
+`GroupedFilesSink` is not one of these: it stores no record, it COPIES each record's file into a folder per group.
+
+```yaml
+sink: !class:recordstream.storage.grouped_files.GroupedFilesSink
+  path: ${env:DATA_ROOT}/grouped     # where the copies go
+  root: ${env:DATA_ROOT}/pictures    # keeps each file's place under it (class folders stay)
+  file: file                         # the entry naming the file
+  group: group                       # the entry naming its group; a record without it is in no group
+```
+
+| record | lands in |
+|---|---|
+| `{file: pictures/cat/1.png, group: 3}` | `grouped/cat/group_0003/1.png` |
+| `{file: pictures/dog/9.png, group: 3}` | `grouped/dog/group_0003/9.png` |
+| `{file: pictures/cat/2.png}` | `grouped/cat/2.png` |
+
+The dataset read from is left as it is. A file that would land on an existing one is refused: two files of one name
+need `root`, a second run needs an empty `path`. Only the named file is copied — a label file beside it is not.
+[`GroupedFilesSource`](sources.md) reads the folder back, one record per group.
+
+`GroupsFileSink` writes the groups down WITHOUT touching the dataset: one JSON file naming, by their place in the
+run, the records that share a group entry.
+
+```yaml
+sink: !class:recordstream.storage.grouped_files.GroupsFileSink
+  path: ${env:DATA_ROOT}/drones/train.groups.json
+  group: group
+```
+
+| records written, in order | the file |
+|---|---|
+| `{group: 7}`, `{}`, `{group: 7}`, `{group: 2}`, `{group: 2}`, `{group: 9}` | `{"records": 6, "groups": [[0, 2], [3, 4]]}` |
+
+A group of one is no group. The numbers are the source's indices only when the run reads the whole source in order
+and drops no record. [`GroupedSource`](sources.md) reads the file over the same source.
+
 All four backends share ONE logical schema — the **record key-group layout**, stamped
 `recordstream_format = "typedrecord-v1"`: per record, one group per KEY carrying the value's
 registered type name, the payload as a `data` dataset, and its attrs (scalars natively; structured
@@ -51,6 +87,20 @@ edits (see [record-model.md](record-model.md#storage--the-record-key-group-layou
 > Domain-specific storage formats implement the same `DataSink`/`DataSource` protocols in their own
 > package — e.g. a waveform-recording format pair lives in the signal-domain package, not here. The
 > engine never couples to a specific format.
+
+## What a run deletes
+
+A sink that replaces what it holds says so before a run, through `planned_changes()`: a line for each thing that is
+gone once the run opens the sink. `recordstream run --dry_run` prints the lines as the plan's actions and changes
+nothing (see [workflow](workflow.md)).
+
+| Sink | With `overwrite: true` over existing data |
+|---|---|
+| `HDF5Sink` | `delete /data/train.h5 (1.2G)` |
+| `ZarrBatchSink` | `delete /data/train.zarr/data (12 files, 310.0K)` |
+
+A sink that appends, or whose file is not there yet, has no line. A sink of your own answers the same method, by
+shape; `recordstream.storage.base.size_text` writes the size.
 
 ## Array-valued item attributes
 

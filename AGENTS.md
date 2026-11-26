@@ -19,7 +19,7 @@ document); storage sinks write them. On top sits the runnable layer: `recordstre
 | data model | `items.py`, `io.py` (codec), `dispatch.py`, `transform.py` (`Transform`, `Pipeline`), `algorithm.py` |
 | engine | `core/` (`families` → `mapstyle` → `wrappers` → `stream`), `flow/` (`steps` → `parse` → `execute` → `graph`, plus `subgraph`, `trace`) |
 | ops | `ops/`: `numpy`, `image`, `torch`, `target`, `structure`, `formula`, `formats` (`ReadFile`), `contract`, `predict`, `sink`, `debug`, the compose ops |
-| sources | `sources/`: `huggingface`, `files`, `split`, `range`, `concat`, `difference`, `draw`; `draws.py`; `formats.py` (file-format registry) |
+| sources | `sources/`: `huggingface`, `files`, `selection`, `split`, `range`, `concat`, `config`, `difference`, `draw`; `draws.py`; `formats.py` (file-format registry) |
 | storage | `storage/`: `hdf5`, `zarr`, `directory`, `query`, `cache` |
 | batching | `collate.py`, `batch.py` (read-back), `keras.py`, `loaders.py` |
 | boundaries | `projection.py`, `uri.py`, `labels.py`, `outputs.py`, `predictions.py` |
@@ -159,6 +159,10 @@ Gotchas:
   constructor stores only; snapshots are references (`copy_snapshots=True` is opt-in);
   `rerun_from` rebuilds through the constructor from the op's current values; `check()` checks
   each node over its record lineage and raises a located `ChainContractError` before any node runs.
+  A summary marks an entry that has a PICTURE (`picture: true`: an image, a mask, a 2-D array of numbers —
+  `flow.picture.pictured`) and `Tracer.picture(node, entry, side, width=)` answers it as a PNG, the snapshot's `Boxes`
+  outlined when their `canvas` is the raster's frame. The drawing is `ops.image.value_to_image`'s, never a second
+  renderer or quantizer; an `Image` is read in its declared layout. (`tests/test_trace_picture.py`)
 - `Subgraph` (§23, `tests/test_subgraph.py`, `tests/test_trace_subgraph.py`): the inside runs on
   the same kernel, never flattened, never on its own executor.
   - The parameter is `result`, never `outputs` (confluid broadcasts a document's `outputs:`).
@@ -182,6 +186,14 @@ Gotchas:
   short (§19): a scan placeholder is MARKED (`STAND_IN`) on the value, never removed; a cheap
   chain that raises counts as falling short; a dropped record is not re-run; no cheap path with
   workers, a `chunk_size` or a stream-level op (`::TestAChainWithOpsCanAnswerCheaply`).
+- An INDEXABLE source may offer `for_projection()` too (a twin: the same records, order and count, the payload
+  `STAND_IN`): the cheap chain then runs over the twin and a record falling short is read as `source[i]`, never by
+  walking the source; a twin of another length is not used (`::TestASourceCanOfferACheapTwin`). A stand-in may carry
+  what the twin knows of the value (`StandIn(samplerate=…)`) and is still never an answer; an entry the full record
+  does NOT carry is `ABSENT` in the twin — an answer, left out of what the walk yields — never a missing key, which
+  sends the record to a full read. `RecordContract.for_projection()` lets both through, nothing else. A caller that
+  must answer at once walks under `projection.full_read_budget(n)`: the cheap walk's fallback spends it
+  (`spend_full_read`, never a cheap answer) and raises `FullReadsExceeded` past it (`::TestAFullReadBudget`).
 - Every view source forwards a key-restricted walk through `project_indices`; never "simplify"
   it to a `list()` of the view. §18. (`::TestTheViewSourcesForwardProjection`)
 - `HuggingFaceSource.project` narrows with `select_columns`; never `select_columns([])` (zero
@@ -199,6 +211,21 @@ Gotchas:
   (`tests/test_files_source_formats.py::TestTheServedListingIsResolvedOncePerFileList`). `source[i]` re-lists a
   `root` folder per access (a new file appears at once); `paths()` is the one-listing answer for every record's file —
   never cache the folder listing to make the index fast (`tests/test_files_source_root.py::TestEveryPathAtOnce`).
+- `FileSelection` is THE way a run limits a dataset's files (§33, user request 2026-10-30): `sets` (any `os.PathLike`,
+  asked when listed), `pattern` (one glob or several), `exclude`, then `max_depth`, `max_subfolders_per_folder`
+  (each folder's first subfolders, at every level), `max_folders_per_set`, `max_files_per_folder`, `max_files` in that
+  order; hidden folders and consumed companions never listed; the listing memoised on its settings and the sets'
+  folders; an empty selection or an empty set refused. A domain runnable takes
+  the selection (or its `select(sets)` pairs), never a limit knob of its own (`tests/test_file_selection.py`).
+- `GroupedFilesSource` (§34, user request 2026-11-25, `tests/test_grouped_files.py`): a folder named `<prefix>…` is ONE
+  record; `pick` is `next` / `first` / `seeded`. The count behind `next` is a `spawn`-context `multiprocessing.Array`
+  handed to a worker only when the worker is started (`__getstate__`) — never a count kept in the object (measured:
+  workers restarted per epoch then read the first file every epoch) and never an epoch read from a trainer.
+  `GroupedFilesSink` copies, never moves, and refuses a file that would land on an existing one.
+  `GroupedSource` is the same pick over ANY indexable source, the groups read from a groups file of indices
+  (`GroupsFileSink`), for a dataset whose labels name its files by their place; a source of another length than the
+  file's `records` is refused, and `project` answers with each group's first record. The pick lives once, in
+  `_PickOfGroup`.
 - `DifferenceSource` compares ONE entry (`key`) by a closed `compare` (`value`/`name`/`stem`); a domain's notion of
   "the same record" is an entry a domain source writes, never a new `compare` spelling or a per-key predicate. It
   reads both sides' keys through `project` once (§31, `tests/test_difference_source.py`).
@@ -278,6 +305,9 @@ Gotchas:
   standard set is `RunnableTask`. §7. (`tests/test_entrypoint.py`)
 - The autograd flag is `__needs_autograd__`; its one reader fails open, so the flag and its reader
   change together or not at all. §8a.
+- `run` is the CLI's default command (`@app.script_command(default=True)`): `recordstream <config>` is
+  `recordstream run <config>`. Keep `run` — `RunConfig`, navigaitor and the domain steps spawn `recordstream run`
+  (`tests/test_cli_default_command.py`).
 - A runner builds the bound node with `cli.materialize_runnable()` (`flow_mode="manual"`), never a
   bare `flow()`, and a consumer's own CLI calls the same helper (`tests/test_cli_materialize.py`).
 - `DatasetProcessor(workers=N)` sends each record's INDEX to a spawn worker (`source[i]` through the
@@ -285,6 +315,42 @@ Gotchas:
   records; `workers: 1` stays the untouched sequential route. An unindexable source, a stream-level op
   and a `chunk_size` are refused before the first record, never run on one core silently. §28.
   (`tests/test_processing_workers.py`)
+- `DatasetProcessor(workers=auto)` measures record 0 in one worker, then hands out records while
+  `recordstream.resources.WorkerGovernor` says they fit (memory, cores, CUDA); every multi-worker run
+  keeps the reserve — none starts under it, and under it with at most one building the run ends its
+  workers and raises `OutOfMemory`. The count is enforced by when records are handed out, never by
+  resizing the pool; a fixed count is a ceiling only memory may lower. A worker reads torch from
+  `sys.modules` and never imports it. Default stays `workers: 1` (user decision 2026-10-22). §28
+  amendment 2026-10-22. (`tests/test_resources.py`, `tests/test_processing_workers.py::TestTheMemoryGuard`)
+- `DatasetProcessor(start=N)` resumes a run by building `source[N:]` through a `RangeSource` over a COPY of the
+  stream (the processor's own stream keeps its source); never by skipping records after building them. An
+  unindexable source is refused. §28 amendment (`tests/test_processing_start.py`). `start: resume` reads the sink's
+  `resume_index()` when the run starts, never when the processor is built; no sink or no `resume_index()` is
+  refused before the first record (`tests/test_processing_resume.py`).
+- **What a run changes on disk is the SINK's to say** (`planned_changes() -> List[str]`, by shape; user approval
+  2026-11-26): `DatasetProcessor.plan()` puts the lines in `Plan.actions` (`processing._planned_changes`), a sink
+  that raises is a failed check, and `run()` never asks. The processor knows no sink's folders — never compute a
+  sink's deletions here. (`tests/test_processing_plan_sink.py`)
+- **A run is stopped by a QUESTION, never by an error** (`ProgressReporting.set_stop_request`, user approval
+  2026-11-26): the processor asks `_stop_requested()` after each record and, on yes, leaves its loop, closes the
+  record iterator (a run on workers ends them), flushes the sink and returns — the ending of a short run. Never stop
+  a run through the progress callback: `_report_progress` swallows what it raises, on purpose. A question that raises
+  is read as no. `workflow._run` forwards the question beside the progress callback; a `Sequence` starts no further
+  step. `stop=` (an index) is another thing. (`tests/test_stop_request.py`)
+- `DatasetProcessor(stop=N)` ends the same slice (`source[start:stop]`, one `RangeSource` over the copy; `None` builds to
+  the end) — never a count of records to skip or to stop after once built; a plan carries `stop` only when it is set,
+  so a run to the end plans byte for byte as before (`tests/test_processing_stop.py`).
+- A workflow is planned before it runs (§32): a step that can say what it would do answers `plan() -> Plan`
+  (JSON-safe, round-trips); `Sequence` makes every step's checks before its first step runs, except a plan with
+  `checked_first: false`; `recordstream run --dry_run` changes nothing and exits 1 exactly when a real run would
+  stop. `RunConfig` runs `config` as written in its own process and is planned by that process's
+  `--dry-run --plan-format json` — never in-process. Never add a loop or template step: one `RunConfig` per run,
+  written out. `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}` or a folder
+  whose parent is missing. A workflow refusal is one `Error:` line, exit 1 (a failed step: its own status).
+  Several runs that make one choice (an option's train and val runs, then its check) are a NAMED inner `Sequence`
+  that an outer `only` picks — never a name prefix the user types per run. `RunConfig.environment` sets a variable
+  for its process only where the running environment leaves it unset (a machine's own value wins), and plans in the
+  same environment it runs in. (`tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`)
 
 ## Storage
 
@@ -296,6 +362,16 @@ Gotchas:
   `create_dataset`. `read_record_group(group, slices=…)` is the one HDF5 row decoder
   (`tests/test_typed_storage.py::TestReadRecordGroupSlices`).
 - A metadata scan never loads an array; `SupportsMetadataScan` is structural.
+- A sink whose `open()` replaces what it holds answers `planned_changes()` with one `delete …` line per thing gone
+  (`HDF5Sink`, `ZarrBatchSink` under `overwrite`), sized by `storage.base.size_text`; the condition is the same one
+  `open()` reads, and asking touches nothing (`tests/test_storage_planned_changes.py`).
+
+## Errors
+
+- Every exception recordstream defines derives from `recordstream.exceptions.RecordstreamError` (a leaf module) AND
+  from the builtin it stands for (`class DrawSpecError(RecordstreamError, ValueError)`); a private control-flow signal
+  that never leaves its module (`draws._NoFingerprint`, `flow.trace._Breakpoint`) is not an error and stays outside.
+  The classes are found by walking the package, never listed (`tests/test_exceptions.py`).
 
 ## Testing
 
@@ -311,6 +387,7 @@ Gotchas:
   set-but-missing one raises. Reproduce by executing a copy outside the workspace.
 - README links to repo files are absolute GitHub URLs; `docs/*.md` keep relative links
   (`tests/test_docs_links.py`).
-- Floors state what is tested; a dependent writes `recordstream>=0.1.0a1`. The release metadata,
-  the `Development Status` classifier matching the version, `CHANGELOG.md` in the sdist and no
-  direct-URL requirement are pinned by `tests/test_packaging.py`.
+- Floors state what is tested: each release raises its workspace floors to the newest releases and runs the suite
+  there, and a dependent's next release raises its `recordstream>=` the same way (user choice 2026-11-26). The release metadata,
+  the `Development Status` classifier matching the version, `CHANGELOG.md` and every `docs/` page the README links in the sdist
+  (`MANIFEST.in`) and no direct-URL requirement are pinned by `tests/test_packaging.py`.

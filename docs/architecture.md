@@ -1887,6 +1887,18 @@ knowledge (`complete: false`) and a refusal there is reported, not raised. Two a
 expanding node's trace keeps only its last branch (a rerun below it is refused), and a
 `bind:`/`merge_from:` failure raised by the kernel before the op is called is not attributed to a node.
 
+**Amendment 2026-11-25 — an entry as a picture.** A summary says that a node ran, not what it made: on a spectrogram
+pipeline every row read `float32, 819 x 15624` and nothing showed whether the bursts were there. A summary now marks an
+entry that is a raster — an image, a mask, a 2-D array of numbers — with `picture: true`, and
+`Tracer.picture(node, entry, side="output", width=None)` answers it as PNG bytes: an image as it is, a mask black and
+white, numbers grey from their lowest to their highest finite value, scaled down to `width` (never up), with every
+`Boxes` of the same snapshot outlined when its `canvas` is the raster's own frame. The pixels are
+`ops.image.value_to_image`'s (`recordstream.flow.picture` adds the question, the width, the boxes and the PNG), so a
+picture and every other preview agree. Measured on that pipeline: 16 to 55 ms for a picture 1200 pixels wide of an
+819 x 15624 array. Rejected: a renderer in the front end (it would import numpy and Pillow and restate the quantizer);
+a picture inside `to_dict()` (megabytes in every answer, for entries nobody looks at). A tensor and a signal have no
+picture yet.
+
 **Example.**
 
 ```python
@@ -2169,9 +2181,9 @@ Python callable.
 | category | role | classes |
 |---|---|---|
 | `engine` | composes sources and ops | `Stream`, `JointStream`, `FlowGraph` |
-| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
+| `source` | yields records, a view of other sources included | `HuggingFaceSource`, `FilesSource`, `GroupedFilesSource`, `GroupedSource`, `DrawSource`, `DatasetSplit`, `RangeSource`, `ConcatSource`, `MetadataFilterSource` |
 | `op` | `Record -> Optional[Record]` | every op meant to be a node |
-| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink` |
+| `sink` | writes records at the end of a processing run | `HDF5Sink`, `ZarrGroupSink`, `ZarrBatchSink`, `DirectorySink`, `GroupedFilesSink`, `GroupsFileSink` |
 | `value` | produces a value with no record involved | `ClassNamesOutput`, `ClassNamesScan`, `RandomNumber` |
 | `contract` | states what a whole graph takes and delivers | `GraphContract` |
 
@@ -2368,6 +2380,59 @@ refused up front. What must hold: the sink stays in the running process and rece
 index order; a worker builds a record from its index alone; `workers: 1` is the sequential route,
 untouched. Usage: [runnable.md](runnable.md#a-dataset-run-on-several-processes-datasetprocessorworkersn).
 
+**Amendment (2026-10-21): `start` resumes a run.** A generator run of thousands of records that stops part way
+(a machine out of memory, a session ended) used to be resumable only by a sink that skips what it holds — every record
+before it was built again to be thrown away (7248 replayed captures, about an hour, to reach the 564 missing). Since
+record `i` is `source[i]` whatever the run, `DatasetProcessor(start=N)` builds `source[N:]` through a `RangeSource`
+over a copy of the stream: the same records at those indices, sequential or on workers, the processor's own stream
+untouched. Rejected: a skip predicate on the sink (the record is built before it is asked), a `start` on each source
+(every source would need it). Example: `DatasetProcessor(stream=Stream(source), sink=sink, start=7248, workers=2)`.
+What you may change: nothing about which records are built — `source[N:]`, in order. Pin:
+`tests/test_processing_start.py`.
+
+**Amendment (2026-10-30): `stop` ends the slice.** A consuming project wanted a quick run of a config's first records
+(20 replayed captures to look at) without a second source spelling or a count in each source. `stop: N` is the other
+end of the same `RangeSource`: `source[start:stop]`, `None` the source's end; a stop at or before the start builds
+nothing, past the end builds to the end. The plan names `stop` only when it is set, so a run to the end plans as before
+— a workflow comparing plans sees no change. Rejected: a `max_records` count (a resumed run's count would move with its
+start). Example: `DatasetProcessor(stream=Stream(source), sink=sink, stop=20)`. What you may change: nothing about
+which records are built. Pin: `tests/test_processing_stop.py`.
+
+**Amendment (2026-10-22): `workers: auto` and the memory guard.** A fixed count is sized for one machine: the
+signal-detection sets said 8 for a 64 GB machine (a record peaks at 4.1 GB in its worker), and on an 18 GB machine 8
+such workers beside another run drove it past 80 GB. The count is now measured on the records and held to while the
+run goes. Each worker measures what a record took (`recordstream.resources.measure`): peak resident memory above
+what it held before the record (a lifetime peak, so a later, smaller record reads high: the plan errs large; on
+Linux `VmHWM`, the worker's own, because `ru_maxrss` there starts a spawned worker at its parent's peak — a 200 MB
+record measured 1.18 GB in CI, 2026-11-26), the MPS driver's memory added where the GPU shares the machine's memory (1 GB on MPS adds about 80 MB to the
+resident size), CPU over wall time, CUDA's peak and free memory. The running process plans with the largest of each
+(`WorkerGovernor`): the building records' peaks × 1.25, plus the footprint of each worker not started yet, within
+free memory − a reserve of 2 GB or 10 %; with `auto` also within the cores and the GPU. What the started workers hold
+is already missing from free memory and is never charged again: charging every started worker the largest footprint
+measured (one worker keeps a big record's memory, the others do not) planned one record at a time with 4.4 GB free and
+0.5 GB records (the bluetooth quickstart, 2026-10-23), where four fit. `auto` ramps from one record instead of probing first, so no
+record is built twice. The pool is created at the ceiling (`auto`: the core count) and the count is enforced by when
+records are handed out — a process pool cannot resize, a hand-out can. Free memory is read every 0.5 s while
+records build. Under the reserve no record starts; under it with at most one building, the run ends its workers and
+raises `OutOfMemory` — waiting could not make room.
+Rejected: a separate probe phase (it builds records twice or throws them away); killing a worker of several to make
+room (its record would be built again); limiting a fixed count by the cores (that count is the user's call on CPU);
+`OMP_NUM_THREADS=1` in the workers (it changes speed — measured, not set); the same governor for `Stream.parallel`,
+`FlowGraph.parallel` and the `Parallel` op in this change (`TASKS.md`). Consequences: `psutil` is a core dependency
+(no stdlib call reads free memory on macOS); output stays byte for byte that of one at a time (10 generated 5G NR
+records compared). Ending a worker mid-record reads the pool's private `_processes` until Python 3.14's
+`terminate_workers()`.
+Example:
+
+```text
+Building 10 record(s), workers: auto — 1 worker builds record 0 to measure it.
+workers: auto → 2 (memory: 4.2 GB free − 2.0 GB reserve, 1.0 GB a record + 0.3 GB a worker; cores: 12 at 1.0 each)
+```
+
+What you may change: the reserve, the margin, the GPU share, the monitor interval. What must hold: `workers: 1`
+stays the untouched sequential route; the count never rises above the one asked for; no record starts under the
+reserve. Pins: `tests/test_resources.py`, `tests/test_processing_workers.py::TestAuto`, `::TestTheMemoryGuard`.
+
 ## 29. A number written with its unit is a node that IS the number (`Quantity`, 2026-10-09)
 
 **Context.** A setting a person types is often a rate or a frequency, written with its unit — `250k`, `2.5 MSa/s` —
@@ -2481,3 +2546,207 @@ test = [{"file": "/test/tier1/x.json"}]
 **What you may change.** The refusal wording; another way of reading the kept records. What must hold: one key,
 the closed `compare`, both sides read through their projections, a record without the key refused by its index, and
 the kept records in `source`'s order. Pins: `tests/test_difference_source.py`.
+
+## 32. A workflow is planned before it runs; its steps run configs in processes of their own (2026-10-29)
+
+**Context.** The multi-step jobs a consuming project runs — refuse when an input folder is empty or the disk is too
+small, delete an output folder unless it holds this layout's marker, then run a dozen configs in turn — lived in
+shell scripts: environment knobs, `set -e`, a `DRY_RUN=1` branch per step, and a Python steps module per project
+repeating the same subprocess runner, settings parser and dry-run planner. The combinators (`Sequence`,
+`Conditional`, `Switch`) could chain runnables but not refuse early, empty a folder safely, run a config the way a
+person does, or say what they would do.
+
+**Decision.** The steps are runnables of the one document. `Require` refuses, `ReplaceFolder` empties once behind a
+marker, `RunConfig` runs `recordstream run <config> --scope s key=value` in a process of its own — its memory freed
+when it ends, its exit status the workflow's, its command one a person could type. Every runnable MAY answer
+`plan() -> Plan`, a JSON-safe description (checks, actions, commands, numbers, nested plans); `Sequence` plans every
+step and makes every check before its first step runs, and `recordstream run --dry-run` prints the plan instead of
+running. A `RunConfig` is planned by its own process's dry run (`--plan-format json`, the last JSON line of what it
+printed), so the checks of the config it runs — an empty folder, a sink that cannot say where it stopped — count
+before anything starts. Resume moved into the run: `DatasetProcessor(start="resume")` asks the sink's
+`resume_index()` when the run starts, so a config resumes whoever runs it. Rejected: running a config in-process
+(its overrides would need liquifai's private override machinery, and a plan read one way and run another drifts);
+a `dry_run` setting broadcast into every class (every runnable would need the parameter); a loop or template step
+for "one RunConfig per set" (a language inside the config — the configuration-utility ruling); a planned-once cache
+(a nested workflow is planned again by its own process when it runs).
+
+**Consequences.** A whole multi-step job is one config, its dry run exact. Each `RunConfig` costs one extra process
+before the workflow starts (its dry run, about a second or two), and a nested workflow is planned by its parent and
+again by itself. A step whose inputs an earlier step writes must say `checked_first: false`. Every step is built
+before the first runs — construction is cheap by the lazy-construction rule, so only a class breaking it notices.
+
+**Example.**
+
+```yaml
+paths:
+  output: out/converted
+runnable: !class:recordstream.workflow.Sequence
+  steps:
+    - !class:recordstream.workflow.ReplaceFolder { path: "${paths.output}", marker: .converted_v1 }
+    - !class:recordstream.workflow.RunConfig
+      name: labels
+      config: convert.yaml
+      settings: { input: labels, output: "${paths.output}/labels.h5" }
+      hint: fetch the labels first
+```
+
+```text
+$ recordstream run workflow.yaml        # labels/ is empty
+Error: [2/2] labels: FilesSource: pattern '*.json' matched no files under 'labels' (…) — run: fetch the labels first
+```
+
+**What you may change.** The plan's line layout and wording; which conditions exist. What must hold: a `Plan` stays
+JSON-safe and round-trips; every check is made before the first step runs (unless `checked_first: false`); a dry
+run changes nothing and exits 1 exactly when a real run would stop; `RunConfig` hands `config` to `recordstream run`
+as written; `ReplaceFolder` never empties a root, the home folder, a path holding an unfilled `${…}`, or a folder
+whose parent is missing. Pins: `tests/test_workflow_steps.py`, `tests/test_cli_dry_run.py`,
+`tests/test_processing_resume.py`; usage: [workflow.md](workflow.md), [runnable.md](runnable.md).
+
+**Amendment (2026-10-30): a named inner sequence, and the environment a run needs.** *Context:* a consuming
+project's step-by-step command was replaced by workflow configs. One of its choices was made of several runs (an
+option's three picture runs, their val runs, then a check of the folder they wrote), and `only` picked single steps
+by name; its training needed a CUDA allocator setting in the process's environment, which a config cannot write.
+*Decision:* `Sequence` takes a `name` (and a `title`), so a whole inner sequence is ONE step an outer `only` picks;
+`RunConfig` takes `environment`, each variable set for its process only where the running environment leaves it
+unset — a machine's own value wins — and the dry run is asked in that same environment, its plan naming what is set.
+*Consequences:* the process environment of a run is part of the document and shows in `--dry_run`; a variable the
+machine sets already is never overridden, so a per-machine `.env` stays the last word.
+
+```yaml
+runnable: !class:recordstream.workflow.Sequence
+  only: !ref:options
+  steps:
+    - !class:recordstream.workflow.Sequence
+      name: c
+      steps:
+        - !class:recordstream.workflow.RunConfig {config: pictures/c1.yaml}
+        - !class:recordstream.workflow.RunConfig {config: pictures/c2.yaml}
+    - !class:recordstream.workflow.RunConfig
+      name: train
+      config: train.yaml
+      environment: {PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"}
+```
+
+*What you may change:* how the plan shows the environment. What must hold: a variable already set is never replaced;
+the plan and the run see one environment.
+
+**Amendment (2026-11-03): a key the workflow does not use reaches its runs.** `recordstream run standardize.yaml
+--show_progress` was dropped without a word: only a key the workflow's author wired in (`settings: {runnable.workers:
+"${standardize.workers}"}`) reached a step, and a workflow listing a knob per setting of its runs limits the options
+of every run to the ones its author remembered. The user asked for the typed key to reach the runs and to show in `--help`
+and TAB, accepting the second spelling the configuration-utility ruling would otherwise bar. It stays ONE rule:
+
+* *The verdict is confluid's.* `cli.run` builds the runnable inside `confluid.collect_report()` (the report liquifai's
+  own check sees is empty in a `flow_mode="manual"` command, which builds in its body) and asks
+  `liquifai.overrides.unused_overrides`: a key no object of the workflow took. A key whose head the workflow's
+  document declares (`standardize.*`), and the command's own parameters (`dry_run`, `plan_format`), are the
+  workflow's, whatever the report says. A runnable without `forward_flags` has no run to hand a key to: each key
+  nothing took is WARNED about (`Override 'zzz' matched nothing and was ignored`, liquifai's own message) — a plain
+  `recordstream run` used to drop it without a word, because the runnable is built in the command's body, after
+  liquifai's own check ran on an empty report. A key the document declares is never judged, so overriding a line of
+  the file nothing reads is no typo; a key a `!lazy:` object takes counts as taken (checked on a real training config:
+  `--max_epochs`, `--lr` silent, `--zzz` warned). A liquifai older than the verdict leaves every key as it was.
+* *The delivery is the run's own rule.* `Sequence`, `Conditional` and `Switch` pass the keys to their steps
+  (`forward_flags`, flowing a deferred step once); a `RunConfig` appends them, `key=value`, AFTER its `settings` in the
+  command it plans and runs — the same command, so `--dry_run` shows what runs. The child process applies them
+  by its one rule, unchanged: a bare `workers=3` reaches the processor's `workers` and beats the author's
+  `runnable.workers=auto` before it (measured: a bare key beats an addressed one for the same parameter, in either
+  typed order).
+* *Limits, documented.* A key a workflow object takes is its own; `--scope` stays the author's `scopes:` knob;
+  `+key`/`~key` are not handed on; a dotted key under `runnable` addresses the workflow; a typo goes to every run.
+
+`RunConfig` gains `forward: bool = True` (a run held to its `settings`). `--help` and TAB list the runs' options after the
+workflow's own through the `liquifai.config_refs` entry point recordstream registers for `RunConfig.config` (liquifai
+`docs/architecture.md` §13). Pins: `tests/test_workflow_steps.py` (the forwarding group), `tests/test_cli_forwarded_flags.py`.
+
+## 33. Which files of a dataset a run reads is one selection (`FileSelection`, 2026-10-30)
+
+**Context.** Each config reading a dataset's files limited them its own way — a catalog's `max_cases_per_dir` inside
+a domain indexer, a glob here, an index range there — and a quick run of one meant a different knob in each. The user
+asked for one shared part "where we limit which records in the datasets are being processed or rendered", with
+`max_folders_per_set` (quick: 5) and the depth traversed.
+
+**Decision.** `FileSelection` is a source over several folders (`sets`): each listed by `pattern` (the `FilesSource`
+glob and exclude rules, lifted into `glob_files` / `excluded_by` so the two share them), hidden folders and consumed
+companions left out, then limited by `max_depth`, `max_folders_per_set`, `max_files_per_folder` and `max_files`, in
+that order. A set is any `os.PathLike`, asked when first listed. The listing is memoised on the settings and the sets'
+folders (a dataset of thousands of files is not listed per record — unlike `FilesSource`, whose root is re-listed per
+access by its own rule). `select(sets)` answers `(file, set)` pairs of other folders under the same limits, for a run
+that reads a copy of its sets. A domain's runnable takes the selection, never a limit knob of its own.
+
+**Consequences.** `FilesSource` keeps its rule (no filter knob); the selection is the place for limits. The settings
+are the selection's own parameters, so a config naming them as top-level keys hands a command line's
+`max_files_per_folder=3` to it by name.
+
+**Example.**
+
+```python
+FileSelection(sets=["/data/A/1.0", "/data/B/2.0"], pattern="**/*.json", max_folders_per_set=5, max_files_per_folder=20)
+```
+
+**What you may change.** Add a limit (a parameter, its place in `_limited`, a test). Not a limit on `FilesSource`, and
+not a re-listing per record.
+
+**Amendment 2026-10-31: `max_subfolders_per_folder`.** A quick run (`max_folders_per_set: 5`) of a dataset of three
+families of folders read the first five folders in name order — every one of the first two families, none of the
+third — because the folder limit counts the folders holding a file, at any depth, in one list. The user read "5" as
+five at each level. `max_subfolders_per_folder` is that reading, beside the folder limit rather than replacing it (a
+config that meant the first five folders keeps them): each folder, from the set down, keeps its own files and its
+first N subfolders with a selected file below them, applied after `max_depth` and before `max_folders_per_set`. On
+that dataset a quick run read 11 folders of the three families instead of 5 of two; on datasets of one level of
+folders it reads what the folder limit read.
+
+```python
+FileSelection(sets=["/data/A/1.0"], pattern="**/*.json", max_subfolders_per_folder=5, max_files_per_folder=20)
+```
+
+## 34. A group of files is one record, and the file it gives is counted in shared memory (`GroupedFilesSource`, 2026-11-25)
+
+**Context.** A dataset with many near-copies trains on the copies: 854 measured pictures hold 48 groups of copies, the
+largest of 72. Keeping one picture per group (87 left) throws the other 767 away. The user asked for the groups as
+folders, a source that takes a group folder as ONE record, and "a different record out of this group for each epoch";
+for a validation run, one fixed file per group — the first, or a seeded random one.
+
+**The problem.** No source is told which epoch it is, so "another file per epoch" must be counted by the source. A
+count kept in the object fails under a loader's workers. Measured with torch's `DataLoader`, 6 groups of 4 files, 4
+epochs, the file taken per epoch:
+
+| loader | count in the object | count in shared memory |
+| --- | --- | --- |
+| no workers | 0, 1, 2, 3 | 0, 1, 2, 3 |
+| 2 workers, restarted per epoch | **0, 0, 0, 0** | 0, 1, 2, 3 |
+| 2 workers, kept alive | 0, 1, 2, 3 (without shuffling only) | 0, 1, 2, 3 |
+
+A worker restarted per epoch gets a fresh copy of the source, so the count starts at zero: every epoch trains on the
+first file and nothing says so.
+
+**Decision.** `GroupedFilesSource` lists `root` once, takes a folder whose name starts with `prefix` as one record
+and keeps one count per record in a `multiprocessing.Array` of the `spawn` context (its lock can be taken by a
+spawned and by a forked worker). `pick: next` reads and raises the count under the lock; `first` and `seeded` count
+nothing (`seeded` is `random.Random(f"{seed}:{place}")`, so it needs no state to be the same everywhere). Such an
+array travels only to a process being STARTED, so `__getstate__` hands it over when a worker is being started
+(listing first, so the count exists before it leaves) and otherwise drops listing and count: a plain pickled copy
+counts on its own. `len()` creates the count too, which a loader asks for before it forks.
+
+`GroupedFilesSink` writes the layout: a record's file copied under `path`, into `<prefix><group>/` when the record
+carries the group entry, its place under `root` kept so a class folder stays a class folder.
+
+**Consequences.** The count needs no trainer and no epoch signal; a read that is not part of an epoch (one record
+read to check the dataset) moves one group one file on. A source sent to a worker through a queue, not at its start,
+counts per worker. Measured on the 854 pictures through a shuffling `DataLoader`, 4 epochs: every one of the 41
+groups of four or more files gave four different files, in all three loader setups.
+
+**What you may change.** Add a `pick`. Not a count kept in the object, and not an epoch read from a trainer.
+
+**Amendment 2026-11-25: a groups file, for a dataset that cannot move (`GroupedSource`).** The measured dataset is a
+detection dataset: a label file per picture in a folder beside the pictures, an annotation file listing file names,
+and a metadata row per picture path. All three name a picture by its flat place, and its source lists that one
+folder, so a picture moved into a group folder is lost to all of them. The grouping belongs to the records, not to
+the files: `GroupedSource(source, groups, pick, seed)` wraps any indexable source and reads which records stand for
+each other from `{"records": N, "groups": [[i, j, …], …]}` (`GroupsFileSink` writes it, counting the records of a
+run). The pick and its shared count are one mixin, `_PickOfGroup`, under both sources. The file holds indices, so a
+source of another length is refused; a `project` walk answers with each group's first record and counts nothing.
+Measured on the same 854 pictures through a shuffling `DataLoader` over the detection source, 3 epochs, workers
+restarted and kept alive: 87 records per epoch, every one of the 43 groups of three or more gave three different
+pictures, each with its boxes. Not an index the user edits by hand, and never a key match per record: a domain that
+needs one writes the groups file from its own notion of "the same record".

@@ -44,6 +44,15 @@ def to_numpy(data: Any) -> Any:
     return data
 
 
+def size_text(size: float) -> str:
+    """A byte count as ``du -sh`` writes it (``803B``, ``310.0K``, ``1.2G``) — for a sink's ``planned_changes()``."""
+    for unit in ("B", "K", "M", "G"):
+        if size < 1024:
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}T"
+
+
 @runtime_checkable
 class DataSource(Protocol):
     """Minimum contract for a RecordStream data source."""

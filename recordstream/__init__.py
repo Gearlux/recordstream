@@ -44,6 +44,7 @@ from recordstream.core import (
 
 # --- the record data model + transforms + item codec ----------------------------------------
 from recordstream.dispatch import dispatch, register_kernel, registered_kernels
+from recordstream.exceptions import RecordstreamError
 from recordstream.flow import FlowGraph
 from recordstream.formats import FORMAT_GROUP, FileFormat, file_formats, sibling
 from recordstream.io import (
@@ -120,6 +121,8 @@ except PackageNotFoundError:  # pragma: no cover - uninstalled source checkout
     __version__ = "0.0.0.dev0"
 
 __all__ = [
+    # ---- the root of every error recordstream raises ----
+    "RecordstreamError",
     # ---- record data model ----
     "Record",
     "NDArrayItem",

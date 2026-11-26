@@ -127,6 +127,34 @@ their `canvas` becomes the new size, which a writer normalizes them by. Run it a
 A picture already larger than the size is refused — `PadImage: the picture at 'image' is 3 x 4 (height x width),
 larger than the 2 x 4 it is padded to — a pad never cuts` — and so is a CHW picture (pad before `ToTensor`).
 
+## Stitching pictures into one (`StitchImages`)
+
+Several pictures of one record become ONE: side by side (`row`), top to bottom (`column`) or in rows of ⌈√n⌉
+(`grid`), each keeping its own pixels — never resampled. A row is as tall as its tallest panel and a column as wide
+as its widest; a smaller panel sits in its cell's top-left corner on the background. With `titles`, each panel gets a
+strip above it holding its name.
+
+```yaml
+- !class:recordstream.ops.image.StitchImages
+  fields: [picture, boxed]          # two 300 x 400 pictures -> one 300 x 804 (4 px gap)
+  layout: row
+  titles: [picture, boxed]          # adds a 20 px strip above each
+  output: side_by_side
+```
+
+| setting | meaning |
+| --- | --- |
+| `fields` | the record entries holding the pictures, in the order laid out |
+| `layout` | `row`, `column` or `grid` |
+| `titles` | one name per field, drawn in a strip above its panel; none by default |
+| `gap`, `background` | pixels between panels and their colour (a PIL colour name, `black`) |
+| `title_color`, `font_size` | the titles' lettering |
+| `output` | the entry the stitched picture is written to (`image`) |
+
+A field the record lacks is left out, and a record holding none of them passes through without `output` — a chain
+over records that carry some pictures and not others stitches what each has. A field holding something other than an
+`Image` is refused: `StitchImages: field 'other' is int, not an Image`.
+
 ## Masks (`ConvertToMask`)
 
 The segmentation counterpart, and the same shape of op — read one field, write a differently-typed item under `output`. A segmentation dataset ships its target as a greyscale/paletted PNG whose pixel values *are* the class ids (an Oxford-IIIT Pet trimap, Cityscapes label ids, a VOC segmentation map); this turns that payload into the `int64` `[H, W]` `Mask` every per-pixel loss expects.

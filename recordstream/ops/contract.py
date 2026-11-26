@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Tuple
 
 from confluid import configurable, input_specs, output
 
+from recordstream.exceptions import RecordstreamError
 from recordstream.items import Record, get_item_type, item_type_names
 
 #: Declared-type sentinel meaning "the entry must be PRESENT, any type" — for a boundary
@@ -25,12 +26,12 @@ from recordstream.items import Record, get_item_type, item_type_names
 ANY_TYPE = "*"
 
 
-class ContractError(ValueError):
+class ContractError(RecordstreamError, ValueError):
     """A record violated a :class:`RecordContract` — the message names the boundary,
     the record ordinal, the offending entry, and what the record does carry."""
 
 
-class ChainContractError(ValueError):
+class ChainContractError(RecordstreamError, ValueError):
     """An op chain cannot hold together — checked by :func:`check_chain` BEFORE it runs.
 
     The failure this exists to prevent is a SILENT one: an op that reads a record entry an
@@ -63,8 +64,27 @@ class RecordContract:
         self.fields = fields or {}
         self.name = name
         self._count = 0  # runtime record counter for error messages — NOT config (per-instance)
+        self._stand_ins_pass = False  # set on the copy `for_projection` hands out, never config
+
+    def for_projection(self) -> "RecordContract":
+        """The contract a key-restricted walk runs: the same check, a stand-in or ``ABSENT`` let through.
+
+        The op side of :class:`recordstream.projection.SupportsCheapProjection`. A cheap answer
+        puts the stand-in where a value would need the expensive read (an archive's samples), and
+        this contract refused it as the wrong type, so the cheap chain raised on every record and
+        the walk read each one in full — measured 2026-11-18: a filter on a window's file name
+        over a 3544-window archive source extracted chunk after chunk for minutes. The stand-in
+        is never an answer (:func:`~recordstream.formats.answers`), so passing it here cannot
+        make a filter wrong: a question about that entry still reads the record. A MISSING entry
+        and a value of the wrong type are refused as before.
+        """
+        cheap = RecordContract(dict(self.fields), self.name)
+        cheap._stand_ins_pass = True
+        return cheap
 
     def __call__(self, record: Record) -> Record:
+        from recordstream.formats import Absent, StandIn
+
         label = self.name or "record contract"
         for key, type_name in self.fields.items():
             if key not in record:
@@ -76,6 +96,8 @@ class RecordContract:
             except KeyError as error:
                 self._fail(f"{label}: entry {key!r} declares {error.args[0]}", record)
             value = record[key]
+            if self._stand_ins_pass and isinstance(value, (StandIn, Absent)):
+                continue
             if not isinstance(value, expected):
                 self._fail(
                     f"{label}: record #{self._count} entry {key!r} is a {type(value).__name__}, expected {type_name}",

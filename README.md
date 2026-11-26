@@ -428,14 +428,14 @@ wire evaluates it when it saves the graph and writes the resulting list into `na
 | [docs/graph.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph.md) | `flow:` documents + the `FlowGraph` engine, `ops:` as the linear spelling of the same step graph, subgraphs (`Subgraph` — a flow used as one op, and using one twice), expanding (1→N) steps, `Stream.from_ops_yaml`, tracing one record (`Tracer`) |
 | [docs/graph-contract.md](https://github.com/Gearlux/recordstream/blob/main/docs/graph-contract.md) | what ONE graph must deliver — outputs (all required), the records of a delivered stream, `delivered:` written by the editor, the `classes` slot rule, and every refusal `check()` gives |
 | [docs/trace.md](https://github.com/Gearlux/recordstream/blob/main/docs/trace.md) | Tracing one record through a `Stream` or a `FlowGraph` (`Tracer`): the static check, pausing before a node, `step` / `resume`, rerunning one node through its constructor, looking inside a subgraph (`prep/grey`), the JSON trace, every refusal |
-| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, `DifferenceSource` (one dataset less another's records), `DrawSource` (a generator's settings drawn per record), Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
+| [docs/sources.md](https://github.com/Gearlux/recordstream/blob/main/docs/sources.md) | `HuggingFaceSource`, `FilesSource`, `DatasetSplit` train/val/test views, `RangeSource`, `ConcatSource`, `DifferenceSource` (one dataset less another's records), `GroupedFilesSource` (a folder of files, a group folder one record, another file of it per epoch), `GroupedSource` (the same over any source, the groups named by a groups file), `FileSelection` (the files of several folders, limited by depth, folders and files), `DrawSource` (a generator's settings drawn per record), Confluid `!ref:` sharing, dataset identity (`dataset_uri` / `dataset_url`) |
 | [docs/storage.md](https://github.com/Gearlux/recordstream/blob/main/docs/storage.md) | HDF5 / Zarr / Directory sinks & sources (`typedrecord-v1`), array-valued item attributes, the `SupportsMetadataScan` protocol + `MetadataFilterSource` querying |
 | [docs/projection.md](https://github.com/Gearlux/recordstream/blob/main/docs/projection.md) | Key projection (`SupportsProjection`), lazy key walks (`iter_key`), one-peek `first_value`, `num_classes`, the fittable `LabelMap`, class-balance weights |
 | [docs/predictions.md](https://github.com/Gearlux/recordstream/blob/main/docs/predictions.md) | The model boundary: prediction-output contracts (`ClassificationOutput` & co), `ensure_record_dataset`, the `PredictionsSink` protocol + the classification sink |
-| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), padding a picture to a size (`PadImage`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
+| [docs/image.md](https://github.com/Gearlux/recordstream/blob/main/docs/image.md) | Generic value→image conversion (`ConvertToImage`, `normalize_to_uint8`), mask→class-id conversion (`ConvertToMask`), padding a picture to a size (`PadImage`), several pictures stitched into one (`StitchImages`), channel layout / value range / element type (`ConvertMode`, `Scale`, `ToType`), array introspection helpers |
 | [docs/configure.md](https://github.com/Gearlux/recordstream/blob/main/docs/configure.md) | Per-record op parameters (`ConfigureOp` and a flow step's `bind:`) |
-| [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream run`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting`, a dataset run on several processes (`DatasetProcessor(workers=N)`) |
-| [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document |
+| [docs/runnable.md](https://github.com/Gearlux/recordstream/blob/main/docs/runnable.md) | Runnables (`run()` + `recordstream <config>`, also spelled `recordstream run <config>`), the `@entrypoint` task/role markers + `run_entrypoint` dispatch with a worked example, `TorchRunner` / `ProgressReporting`, a dataset run on several processes (`DatasetProcessor(workers=N)`, or `workers: auto` measured on the records and held to the free memory), a run resumed (`start=N`, or `start: resume` asking the sink), what a run would do (`plan()`) |
+| [docs/workflow.md](https://github.com/Gearlux/recordstream/blob/main/docs/workflow.md) | Workflow combinators (`Sequence`/`Conditional`/`Switch` + predicates): resume-safe multi-stage pipelines as ONE document; the steps around the runs (`Require`, `ReplaceFolder`, `RunConfig`), every step checked before the first runs, and `recordstream run <workflow> --dry_run` |
 | [docs/augmentation.md](https://github.com/Gearlux/recordstream/blob/main/docs/augmentation.md) | Augmentation via bare albumentations / torchvision `transforms.v2` — the op-family dispatch, key vocabulary, bbox recipes, seeding |
 | [docs/architecture.md](https://github.com/Gearlux/recordstream/blob/main/docs/architecture.md) | Architecture decision records — the *why* behind non-obvious mechanisms (e.g. why collation is a pluggable registry) |
 
@@ -483,6 +483,15 @@ Everything else works without either. A `Stream` is map-style (`__len__`/`__geti
 class-balance statistics return numpy, so a non-torch backend converts in one line. Reaching for
 `recordstream.ops.ToTensor` without the extra raises an `ImportError` naming it.
 
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `KERAS_BACKEND` | `torch` / `tensorflow` / `jax`: the Keras 3 backend; unset, `recordstream.keras` picks the first installed one |
+| `DATA_ROOT` | the datasets' folder; a config writes `$DATA_ROOT/...` |
+
+`env.complete` lists them.
+
 ## 📄 License
 
-MIT
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) (the `LICENSE` file): free for personal, academic and other noncommercial use. Commercial use needs a separate licence from the author.

@@ -1,10 +1,10 @@
 [project]
 name = "recordstream"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "Clean, functional data pipelines for ML research and production."
 readme = "README.md"
 authors = [{ name = "Gert Behiels" }]
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -19,12 +19,14 @@ classifiers = [
     "Typing :: Typed",
 ]
 # Floors are what this package is actually TESTED against, not the oldest release that
-# once worked. confluid 0.4.1 is the first release whose `to_pydantic` builds a model for a
-# class that contains itself: `Repeat.each` names `Repeat`, and on 0.4.0 that switched the
-# class's validation OFF (`Repeat(count=(-1, 2))` was accepted; 0.4.1 refuses it).
+# once worked: each release raises them to the newest workspace releases (user choice 2026-11-26).
+# Measured 2026-11-26 in a clean Python 3.12 venv with CI's extras, from PyPI: at liquifai 0.4.0 /
+# confluid 0.5.0 / loggair 0.3.0 the suite passed (2153); at the previous floors (liquifai 0.2.0,
+# confluid 0.4.1) 26 tests of `recordstream run` failed (its dry run, default command, forwarded
+# flags and undeclared scopes). liquifai 0.4.0 requires confluid 0.5.0.
 dependencies = [
-    "confluid>=0.4.1",
-    "loggair>=0.2.0",
+    "confluid>=0.5.0",
+    "loggair>=0.3.0",
     "numpy",
     "Pillow",
     "h5py",
@@ -38,7 +40,10 @@ dependencies = [
     # liquifai powers the generic `recordstream run <config.yaml>` CLI (recordstream.cli) that
     # runs any Confluid-wired runnable; it also brings `rich` (used by DatasetProcessor's
     # optional console progress bar). liquifai depends only on confluid/loggair/rich — no cycle.
-    "liquifai>=0.2.0",
+    "liquifai>=0.4.0",
+    # `recordstream.resources` reads the machine's free memory and each worker's (`DatasetProcessor(workers=auto)`
+    # and the memory guard of every multi-worker run); no stdlib call reads free memory on macOS.
+    "psutil>=7.2",
 ]
 requires-python = ">=3.12"
 
@@ -70,6 +75,10 @@ dev = [
     "flake8>=6.0.0,<8.0.0",
     "flake8-junit-report>=2.1.0",
     "mypy>=1.0.0,<2.0.0",
+    # psutil, a declared dependency, ships no type hints; without the stubs `import psutil` fails this project's mypy.
+    "types-psutil",
+    # PyYAML (through confluid) ships none either; the tests import `yaml`, so CI's mypy needs these stubs too.
+    "types-PyYAML",
     "pytest>=7.0.0,<9.0.0",
     "pytest-cov>=4.0.0,<7.0.0",
     # CI installs `.[dev]` (unit-tests AND verify-examples), so torchvision here keeps the
@@ -172,14 +181,19 @@ recordstream = "recordstream.cli:main"
 [project.entry-points."liquifai.apps"]
 recordstream = "recordstream.cli:app"
 
-# Which of this project's extras are ML FRAMEWORKS, for `aisland framework`. Selecting a name
-# here is what makes `aisland setup` add the matching extra to this project's install.
+# A parameter that names a config another run reads: --help and TAB of a workflow list the options of the runs its
+# RunConfig steps start (liquifai.completion.config_refs). Name = <class>.<parameter>; no class is imported.
+[project.entry-points."liquifai.config_refs"]
+"recordstream.workflow.RunConfig.config" = "recordstream.workflow:RunConfig"
+
+# Which of this project's extras are ML FRAMEWORKS, for aisland's `framework` selection. Choosing a name
+# is what makes `aisland setup` add the matching extra to this project's install.
 #
 # The core engine is numpy — `torch` powers only `ToTensor` and the output builders, and `keras`
 # only `recordstream.keras`, so a workspace that selects no framework still gets a fully working
 # record engine.
-[tool.aisland]
-frameworks = ["torch", "keras"]
+[tool.aisland.selection.framework]
+choices = ["torch", "keras"]
 
 [tool.setuptools.packages.find]
 where = ["."]

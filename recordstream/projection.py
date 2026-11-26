@@ -21,9 +21,47 @@ Design notes
   make every ``Stream`` look classification-capable to duck-typed consumers.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Collection, Dict, Iterator, List, Optional, Protocol, Sequence, runtime_checkable
 
+from recordstream.exceptions import RecordstreamError
 from recordstream.items import Record, item_value
+
+
+class FullReadsExceeded(RecordstreamError, RuntimeError):
+    """A key-restricted walk would read more records in full than :func:`full_read_budget` allows."""
+
+
+#: The full reads a walk in this context may still make — ``None`` outside :func:`full_read_budget` (no limit).
+_FULL_READS: "ContextVar[Optional[List[int]]]" = ContextVar("recordstream_full_reads", default=None)
+
+
+@contextmanager
+def full_read_budget(reads: int) -> Iterator[None]:
+    """Let a cheap walk in this block read at most ``reads`` records in FULL, then raise :class:`FullReadsExceeded`.
+
+    A walk answered from cheap twins and scans reads a record in full only where the cheap answer falls short (a
+    key nobody's index knows): over an archive of thousands of windows that is every window's chunk, for minutes.
+    A caller that must answer at once (a list page) runs its walk under a budget and, when it is spent, hands the
+    question to a stoppable background run instead. Counted where :meth:`recordstream.core.stream.Stream.project`
+    falls back to the real read — never a cheap answer. Nested blocks keep their own budget.
+    """
+    token = _FULL_READS.set([int(reads)])
+    try:
+        yield
+    finally:
+        _FULL_READS.reset(token)
+
+
+def spend_full_read() -> None:
+    """Count one full read against the budget in force, raising :class:`FullReadsExceeded` when none is left."""
+    budget = _FULL_READS.get()
+    if budget is None:
+        return
+    if budget[0] <= 0:
+        raise FullReadsExceeded("this walk would read more records in full than its budget allows")
+    budget[0] -= 1
 
 
 @runtime_checkable
@@ -52,6 +90,14 @@ class SupportsCheapProjection(Protocol):
     The reference implementation is ``ReadFile``: its cheap variant answers from each file's
     metadata where the format can, which measured 143.5 ms -> 0.37 ms per record over a
     capture library.
+
+    An INDEXABLE SOURCE may offer one too, for a stream whose ops sit between it and the
+    question (a ``Stream`` with ops never reaches the source's own ``project``): its twin yields
+    the same records, in the same order and of the same count, with :data:`~recordstream.formats.STAND_IN`
+    where a value would need the expensive read. The stream runs the chain over the twin and
+    reads ``source[i]`` for a record the twin's answer falls short on. The reference is an
+    archive source whose index names each window's capture: a filter on the capture's name
+    reads no archive.
     """
 
     def for_projection(self) -> Any: ...
@@ -275,6 +321,9 @@ def num_mask_classes(source: Any, key: str = "mask") -> int:
 
 
 __all__ = [
+    "FullReadsExceeded",
+    "full_read_budget",
+    "spend_full_read",
     "SupportsProjection",
     "SupportsCheapProjection",
     "project",

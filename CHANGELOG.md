@@ -6,23 +6,151 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a4] — 2026-11-26
+
 ### Added
+- **A plan names what a run deletes** — `DatasetProcessor.plan()` asks its sink `planned_changes()` and lists the
+  answers as the plan's actions, so `recordstream run --dry_run` prints them. A sink without the method plans as
+  before.
+- **`HDF5Sink` and `ZarrBatchSink` say what `overwrite` deletes** — their `planned_changes()` names the file or
+  array a run replaces, with its size, so a dry run prints it. `storage.base.size_text` writes a byte count.
+- **A run can be asked to stop** — `ProgressReporting.set_stop_request(question)`: a `DatasetProcessor` asks the
+  question after each record and, on yes, finishes the record in hand, flushes its sink and returns; a workflow hands
+  it to the step it runs and starts no further step. A plain `recordstream run` is unchanged.
+- **A traced node's entry as a picture** — a summary of `Tracer.to_dict()` marks an image, a mask and a 2-D array of
+  numbers with `picture: true`, and `Tracer.picture(node, entry, side, width=)` answers the PNG, the boxes of the same
+  snapshot outlined over it (`recordstream.flow.picture`).
+- **Groups of files as one record** — `GroupedFilesSource(root, pattern, prefix, pick, seed)`
+  (`recordstream.sources.grouped`) serves a folder whose name starts with `prefix` as ONE record. `pick: next` gives
+  another file of the group at every read, so every epoch trains on another one (the count is shared by every worker
+  a loader starts); `first` and `seeded` give one fixed file per group, for a validation run.
+  `GroupedFilesSink(path, root, file, group, prefix)` (`recordstream.storage.grouped_files`) writes that layout: each
+  record's file copied into a folder per group, its place under `root` kept (`docs/sources.md`, `docs/storage.md`,
+  `docs/architecture.md` §34).
+- **Groups of records without moving a file** — `GroupedSource(source, groups, pick, seed)` wraps any indexable
+  source and serves the records a groups file names together as ONE record, with the same `pick`; a dataset whose
+  labels name its files by their place stays as it is. `GroupsFileSink(path, group)` writes the file from a run's
+  records.
+- **A budget of full reads for a key-restricted walk** — `with recordstream.projection.full_read_budget(n):` lets the
+  walks in that block read at most `n` records in full (where a cheap answer falls short) and raises
+  `FullReadsExceeded` past it. A cheap answer spends nothing, and a nested block keeps its own count. A caller that
+  must answer at once runs its walk under a budget and hands a spent one to a background run.
+- **A cheap twin may say what it knows of a value, and that an entry is absent** — `StandIn(samplerate=...)` carries
+  attributes of the value it stands in for (an archive index's sample rate) and is still never an answer; `ABSENT`
+  marks an entry the full record does not carry, counts as an answer and is left out of the walk's record, so a
+  record without that entry is not read in full to learn so (`recordstream.formats`).
+- **`ConfigStreamSource(config, key, scopes, apply_ops)`** (`recordstream.sources.config`) reads the stream another
+  config defines — a path or `pkg://<distribution>/<path>` — so a second graph walks the same records without a copy
+  of the dataset's definition. By default it reads the stream's source alone (the records as stored);
+  `apply_ops: true` reads the stream with its ops. A key the config does not hold is refused, naming the keys it
+  does (`docs/sources.md`).
+- **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
+  columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
+  larger than the size is refused, never cut (`docs/image.md`).
+- **`StitchImages` lays several pictures of a record out as one** — in a row, a column or a grid, each panel's own
+  pixels, an optional title strip above each; a picture the record lacks is left out (`docs/image.md`).
+- **`OpenMask`** — a 2-D boolean `Mask` opened by a `rows` × `cols` rectangle (erosion then dilation, `open_cells`):
+  a speck or a stripe thinner than the rectangle goes, every shape the rectangle fits keeps its size. Its entries are
+  declared by name when `field` names the mask.
+- **`ConnectedComponents(dropped_output=...)`** — the cells of the components `min_area_bins` drops, as a `Mask`
+  (`small_component_cells`, grouped as the boxes are); blank, the default, writes none.
+- **An indexable source may answer a key-restricted walk through the ops after it** — a `Stream` with ops never
+  reached its source's own `project`, so a question an archive's index could answer (which capture a window comes
+  from) read every record whole. A source now offers `for_projection()` as an op does: a twin of the same records in the
+  same order, `STAND_IN` where the payload would be. `Stream.project` runs the chain over the twin and reads `source[i]`
+  for a record whose answer falls short. A twin of another length is not used.
+- **`recordstream run` warns about a key nothing takes** — `recordstream run train.yaml --lrr 0.1` printed nothing and
+  ran with the default; it now says `Override 'lrr' matched nothing and was ignored`, before the run, as liquifai does
+  for a command that builds its objects itself. A key the config declares (`--max_files` beside a `max_files:` line)
+  is never judged, and a key an object built later (`!lazy:`) takes counts as taken. A run started by a workflow
+  warns the same way for a key the workflow handed it.
+- **A key typed on a workflow's command line reaches its runs** — `recordstream run workflow.yaml --show_progress`
+  hands every key the workflow does not use itself to each `RunConfig` it starts, after that run's `settings` and in the
+  order typed; `--dry_run` shows the same commands. A key a workflow object takes, a key its document declares and the
+  command's own options stay the workflow's. `RunConfig(forward=False)` keeps a run to its `settings`. `--help` and TAB
+  list the runs' options after the workflow's own (the `liquifai.config_refs` entry point for `RunConfig.config`).
+- The two entries above need a liquifai newer than 0.3.1. With liquifai 0.3.1 or older nothing is warned and no key
+  is handed on: a run behaves as it did in 0.1.0a3.
+- **`Mask.classes`** — a mask may name its values (`Mask(cells, classes=["road"])`: a cell holding `v` is
+  `classes[v]`, a negative one background), as `Label.classes` and `Boxes.classes` do; it survives numpy operations,
+  pickling and the item codec. `None` (the default) names nothing.
+- **`RecordstreamError`**, the root of every error recordstream raises (`from recordstream import RecordstreamError`):
+  `except RecordstreamError` catches them all, and each still is the builtin it was (`DrawSpecError` a `ValueError`,
+  `WorkflowError` a `RuntimeError`, `OutOfMemory` a `MemoryError`), so an existing `except` keeps working.
+- **`DatasetProcessor(stop=N)`** builds only `source[start:N]` — a quick run of a config's first records, or a
+  resumed run that ends at N; `null` (the default) builds to the end, and a plan without it is as before
+  (`docs/runnable.md`).
+- **`FileSelection`** (`recordstream.sources.selection`) — the files of several folders ("sets") as records
+  (`{file, set, relative}`), chosen by `pattern` (one glob or several), `exclude`, `max_depth`,
+  `max_subfolders_per_folder` (each folder's first subfolders, at every level, so a few folders of every branch),
+  `max_folders_per_set`, `max_files_per_folder` and `max_files`, so every config reading a dataset's files limits
+  them the same way (`docs/sources.md`).
+- **`recordstream <config>` runs a config** — `run` is the default command, so `recordstream config.yaml` is
+  `recordstream run config.yaml`, with every flag and setting (`docs/runnable.md`).
+- **A workflow's steps around its runs** (`recordstream.workflow`) — `Require(condition, message)` refuses before
+  anything runs; `ReplaceFolder(path, marker)` empties a folder once, a marker in it making a re-run resume;
+  `RunConfig(config, scopes, settings, …)` runs one config in its own process, a failed one stopping the workflow
+  with its exit status. The conditions `EnvSet`, `FreeSpace` and `HasFiles` join `PathExists` / `Not` / `AllOf` /
+  `AnyOf`, each saying what it checks (`docs/workflow.md`).
+- **`recordstream run <config> --dry_run`** runs nothing: it prints what each step would check, delete, create and
+  run, and exits 1 when a real run would stop; `--plan_format json` prints the plan as one line
+  (`recordstream.workflow.Plan`). A runnable says what it would do through `plan()`; `DatasetProcessor.plan()` gives
+  the records, the start, how many it builds and the sink, or why the source cannot be read. `--plan_format json`
+  without `--dry_run` is refused (`Error: --plan_format only applies with --dry_run; …`, exit 1), running nothing,
+  and a format other than `text` or `json` is refused naming both.
+- **`Sequence(only=[...])`** runs the steps it names and every step without a name; a `Sequence` with a `name` is
+  one step of the sequence around it, picked by that name, and its `title` names it in a plan.
+- **`RunConfig(environment={NAME: value})`** runs its process with the variables a machine's run needs, each set
+  only where the running environment leaves it unset; the dry run is asked in the same environment and its plan
+  names what is set.
+- **`DatasetProcessor(start: resume)`** asks the sink where it stopped — its `resume_index()` — when the run starts
+  (`docs/runnable.md`).
+- A workflow refusal is one `Error:` line and exit 1 (`--debug` keeps the traceback).
+- **`DatasetProcessor(workers: auto)` picks how many records to build at once** — it measures record 0 in one
+  worker (peak memory, cores, GPU memory), then builds as many at once as the machine's free memory, cores and GPU
+  hold, following the free memory while it runs; the log says what decided the count (`docs/runnable.md`). The
+  default stays `workers: 1`.
+- **A memory guard on every run on workers** — a fixed count is lowered when the measured records do not fit, no
+  record starts while free memory is under the reserve (2 GB, or a tenth of the machine), and a run under it with one
+  record building stops with `recordstream.resources.OutOfMemory` instead of driving the machine into swap.
+- `psutil` is a dependency (it reads the machine's free memory).
+- **`DatasetProcessor(start=N)` resumes a run** — it builds only `source[N:]` (a `RangeSource` over the source), the
+  records a whole run gives at those indices, one at a time or on workers; an unindexable source is refused
+  (`docs/runnable.md`).
+- **`FilesSource(exclude=…)` holds a FOLDER out** — a glob holding a slash is matched against the path relative to
+  `root` (the whole path for a `files` list), `*` crossing folders: `exclude: "*/dvb*/*"` leaves out every file
+  under a folder whose name starts with `dvb`, one level down. A glob without a slash still matches the file's name
+  alone, as before (`docs/sources.md`).
 - **`DifferenceSource(source, remove, key, compare)`** (`recordstream.sources.difference`) — `source` without every
   record whose `key` a record of `remove` also carries (a test set left out of a training pool); `compare` is
   `value`, `name` (the file name, any folder) or `stem` (that name less its extension). The keys are read through
   each source's projection, once (`docs/sources.md`).
 
 ### Changed
+- **recordstream requires liquifai 0.4.0, confluid 0.5.0 and loggair 0.3.0** (`liquifai>=0.4.0`, was `>=0.2.0`;
+  `confluid>=0.5.0`, was `>=0.4.1`; `loggair>=0.3.0`, was `>=0.2.0`): `recordstream run`'s dry run, default command,
+  forwarded flags and undeclared-scope refusal are tested against them, and liquifai 0.4.0 requires confluid 0.5.0.
+- **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
+- **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
+  check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
+  `checked_first: false` (a `RunConfig`).
 - `ModelPredict(device=…)` runs a named device this machine lacks on the machine's best one (cuda, then mps, then
   cpu) and says so once in the log — a pipeline written for `cuda` runs on a Mac's GPU or a CPU-only machine; a device
   the machine has, `cpu` included, is used as written.
 
+### Fixed
+- **A record contract no longer sends a key-restricted walk back to full reads** — a `RecordContract` at the end of a
+  chain refused a cheap twin's `STAND_IN`, so every record was read whole. `RecordContract.for_projection()` hands
+  the walk the same check with a stand-in and `ABSENT` accepted; a missing entry and a wrong type are still refused,
+  and the contract of a full read is unchanged.
+- **The dry run of a workflow that cannot be planned is one `Error:` line** — `recordstream run <workflow> "only=[nope]"
+  --dry_run` printed a traceback; it now prints `Error: Sequence: only names nope — the steps are named: …` and exits 1,
+  as the real run does (`--debug` keeps the traceback).
+
+
 ## [0.1.0a3] — 2026-10-14
 
 ### Added
-- **`PadImage(height, width, value)`** (`recordstream.ops.image`) pads a picture to a fixed size — rows at the bottom,
-  columns at the right, every added pixel `value` — its `Boxes` unmoved and their `canvas` the new size; a picture
-  larger than the size is refused, never cut (`docs/image.md`).
 - **`ConvertToImage` keeps or follows a side** — `width` / `height` may be `None` (that side stays as the source
   has it; both `None` is no resize), `0` (that side follows the other, aspect ratio kept) or a size; `0` and `0`, the
   default, still bound the longest side by `max_size`. A `None` beside a `0` is refused (`docs/image.md`).

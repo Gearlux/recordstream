@@ -5,8 +5,10 @@ what it skips, what it costs, and that it inherits ``iter_key``'s three properti
 (projection-aware sources, deferred sources, laziness).
 """
 
-from typing import Any, Collection, Dict, Iterator, List, cast
+import itertools
+from typing import Any, Collection, Dict, Iterator, List, Optional, cast
 
+import pytest
 from confluid import PartialClass
 
 from recordstream import Label, MultiLabel, first_value, is_class_id
@@ -161,6 +163,182 @@ class TestStreamForwardsProjection:
     def test_an_ops_free_stream_over_a_plain_source_keeps_the_generic_path(self) -> None:
         rows = list(__import__("recordstream").Stream(source=[{"class": 1, "image": "X"}]).project({"class"}))
         assert rows == [{"class": 1}]
+
+
+class TestASourceCanOfferACheapTwin:
+    """An indexable source may offer `for_projection()` too: the stream walks the twin through its ops.
+
+    A `Stream` with ops never reaches its source's `project`, so a source whose read is the
+    expensive part (an archive: every window copied out of a packed chunk) had no cheap path at
+    all — a filter on a name its index holds walked every archive. The twin yields the same
+    records with the payload marked; a record whose answer falls short is read as `source[i]`.
+    """
+
+    class _Archive:
+        """An indexable source whose read decodes a payload, and whose index knows each record's name."""
+
+        def __init__(self, names: List[str], twin_length: Optional[int] = None) -> None:
+            self.names = names
+            self.reads: List[int] = []
+            self.twin_length = twin_length
+
+        def __len__(self) -> int:
+            return len(self.names)
+
+        def __getitem__(self, index: int) -> Record:
+            self.reads.append(index)
+            return {"payload": f"DECODED {self.names[index]}", "name": self.names[index]}
+
+        def __iter__(self) -> Any:
+            return (self[i] for i in range(len(self)))
+
+        def for_projection(self) -> List[Record]:
+            from recordstream.formats import STAND_IN
+
+            names = self.names if self.twin_length is None else self.names[: self.twin_length]
+            return [{"payload": STAND_IN, "name": name} for name in names]
+
+    @staticmethod
+    def _stream(source: Any) -> Any:
+        from recordstream import Stream
+        from recordstream.ops.structure import RenameField
+
+        return Stream(source=source, ops=[RenameField(src="name", dst="label")])
+
+    def test_a_key_the_twin_answers_reads_no_record(self) -> None:
+        source = self._Archive(["a", "b", "c"])
+        assert [r["label"] for r in self._stream(source).project(("label",))] == ["a", "b", "c"]
+        assert source.reads == [], "the archive was read to answer a question its index holds"
+
+    def test_a_key_the_twin_marks_reads_each_record_by_its_index(self) -> None:
+        source = self._Archive(["a", "b"])
+        got = list(self._stream(source).project(("payload", "label")))
+        assert got == [{"payload": "DECODED a", "label": "a"}, {"payload": "DECODED b", "label": "b"}]
+        assert source.reads == [0, 1]
+
+    def test_a_twin_of_another_length_is_not_used(self) -> None:
+        """Paired by position, a short twin would hand a record its neighbour's answer."""
+        source = self._Archive(["a", "b", "c"], twin_length=2)
+        assert [r["label"] for r in self._stream(source).project(("label",))] == ["a", "b", "c"]
+        assert source.reads == [0, 1, 2]
+
+    class _ImageArchive(_Archive):
+        """The archive whose full read decodes an IMAGE, as a workspace's contract declares."""
+
+        def __getitem__(self, index: int) -> Record:
+            import numpy as np
+
+            from recordstream import Image
+
+            self.reads.append(index)
+            return {"payload": Image(np.zeros((2, 2), dtype=np.uint8)), "name": self.names[index]}
+
+    def test_a_record_contract_on_the_chain_lets_the_twins_stand_in_through(self) -> None:
+        """A host puts its interface last in the chain (`payload: Image`); the twin's STAND_IN is not one.
+
+        Measured 2026-11-18: the contract refused every stand-in as the wrong type, the cheap chain
+        raised on each record and the walk read them all — a filter on a window's file name over a
+        3544-window archive source extracted chunk after chunk for minutes.
+        """
+        from recordstream import Stream
+        from recordstream.ops.contract import RecordContract
+        from recordstream.ops.structure import RenameField
+
+        source = self._ImageArchive(["a", "b", "c"])
+        contract = RecordContract(fields={"payload": "Image", "label": "*"}, name="host interface")
+        stream = Stream(source=source, ops=[RenameField(src="name", dst="label"), contract])
+        assert [r["label"] for r in stream.project(("label",))] == ["a", "b", "c"]
+        assert source.reads == [], "the contract sent every record back to the archive"
+        # a question about the payload itself still reads the record, and gets the real one
+        (record,) = list(itertools.islice(stream.project(("payload",)), 1))
+        assert source.reads == [0] and record["payload"].data.shape == (2, 2)
+
+    def test_the_projection_contract_still_refuses_a_missing_entry_and_a_wrong_type(self) -> None:
+        from recordstream.formats import STAND_IN
+        from recordstream.ops.contract import ContractError, RecordContract
+
+        real = RecordContract(fields={"payload": "Image"}, name="host interface")
+        cheap = real.for_projection()
+        assert cheap({"payload": STAND_IN}) == {"payload": STAND_IN}
+        with pytest.raises(ContractError, match="has no entry 'payload'"):
+            cheap({})
+        with pytest.raises(ContractError, match="is a str, expected Image"):
+            cheap({"payload": "not an image"})
+        with pytest.raises(ContractError, match="is a StandIn, expected Image"):
+            real({"payload": STAND_IN})  # the contract a full read runs is unchanged
+
+    class _Annotated(_Archive):
+        """An archive whose index knows which records carry a `boxes` entry and which carry none."""
+
+        def __init__(self, boxes: List[Optional[str]]) -> None:
+            super().__init__([f"r{i}" for i in range(len(boxes))])
+            self.boxes = boxes
+
+        def __getitem__(self, index: int) -> Record:
+            record = super().__getitem__(index)
+            if self.boxes[index] is not None:
+                record["boxes"] = self.boxes[index]
+            return record
+
+        def for_projection(self) -> List[Record]:
+            from recordstream.formats import ABSENT
+
+            twin = super().for_projection()
+            for record, boxes in zip(twin, self.boxes):
+                record["boxes"] = ABSENT if boxes is None else boxes
+            return twin
+
+    def test_an_entry_the_twin_knows_is_absent_is_answered_without_a_read_and_left_out(self) -> None:
+        """Most records carry no `boxes`; a missing key would send each back to a full read to learn that."""
+        from recordstream import Stream
+        from recordstream.formats import ABSENT
+        from recordstream.ops.contract import RecordContract
+
+        source = self._Annotated(["two boxes", None, None])
+        contract = RecordContract(fields={"payload": "*", "boxes": "*"}, name="host interface")
+        stream = Stream(source=source, ops=[self._stream(source).ops[0]])
+        assert list(stream.project(("boxes", "label"))) == [
+            {"boxes": "two boxes", "label": "r0"},
+            {"label": "r1"},
+            {"label": "r2"},
+        ]
+        assert source.reads == []
+        # the same answer through a host's contract, which lets ABSENT through as it lets a stand-in through
+        assert contract.for_projection()({"payload": "x", "boxes": ABSENT})
+
+    def test_a_stand_in_may_carry_what_is_known_of_the_value_and_is_still_no_answer(self) -> None:
+        from recordstream.formats import ABSENT, StandIn, answers
+
+        known = StandIn(samplerate=1e6)
+        assert getattr(known, "samplerate") == 1e6
+        assert not answers({"signal": known}, ("signal",))
+        assert answers({"boxes": ABSENT}, ("boxes",))
+
+
+class TestAFullReadBudget:
+    """A caller that must answer at once runs its walk under a budget of full reads (a list page's filter)."""
+
+    def _stream(self, archive: Any) -> Any:
+        from recordstream import Stream
+        from recordstream.ops.structure import RenameField
+
+        return Stream(source=archive, ops=[RenameField(src="name", dst="label")])
+
+    def test_a_walk_the_twin_answers_spends_nothing(self) -> None:
+        from recordstream.projection import full_read_budget
+
+        archive = TestASourceCanOfferACheapTwin._Archive(["a", "b", "c"])
+        with full_read_budget(0):
+            assert [r["label"] for r in self._stream(archive).project(("label",))] == ["a", "b", "c"]
+
+    def test_the_walk_raises_once_it_would_read_more_records_in_full_than_allowed(self) -> None:
+        from recordstream.projection import FullReadsExceeded, full_read_budget
+
+        archive = TestASourceCanOfferACheapTwin._Archive(["a", "b", "c"])
+        with full_read_budget(2), pytest.raises(FullReadsExceeded):
+            list(self._stream(archive).project(("payload",)))
+        assert archive.reads == [0, 1], "the third record was read past the budget"
+        assert len(list(self._stream(archive).project(("payload",)))) == 3, "outside a budget nothing is limited"
 
 
 class TestTheViewSourcesForwardProjection:

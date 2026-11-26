@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 import h5py
 import numpy as np
@@ -17,6 +17,7 @@ from recordstream.storage.base import (
     Storage,
     require_record_format,
     restore_attrs,
+    size_text,
     split_attrs,
     to_numpy,
 )
@@ -152,6 +153,14 @@ class HDF5Sink(Storage, DataSink):
             logger.info(f"Opening HDF5 file for writing: {self.path} (mode={mode})")
             self._file = h5py.File(self.path, mode)
         return self
+
+    def planned_changes(self) -> List[str]:
+        """What opening this sink for a run changes on disk: with ``overwrite`` the file that is there is deleted
+        (mode ``w``) — one ``delete <file> (<size>)`` line; nothing when it appends or no file is there. Asking
+        changes nothing."""
+        if not (self.overwrite and self._counter == 0 and self.path.is_file()):
+            return []
+        return [f"delete {self.path} ({size_text(self.path.stat().st_size)})"]
 
     def close(self) -> None:
         if self._file:

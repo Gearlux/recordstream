@@ -183,7 +183,17 @@ class Image(NDArrayItem):
 
 @register_item
 class Mask(NDArrayItem):
-    """A segmentation / activity mask array (same spatial frame as its sibling image)."""
+    """A segmentation / activity mask array (same spatial frame as its sibling image).
+
+    Attributes:
+        classes: Optional class-NAME of each value — a cell holding ``v`` is ``classes[v]``, a negative cell is
+            background. The convention of ``Label.classes`` and ``Boxes.classes``: the vocabulary travels WITH the
+            mask, so a viewer can name and colour one whose source declares no class list. ``None``: the values are
+            ids of whatever vocabulary the consumer holds.
+    """
+
+    _item_attrs: Tuple[str, ...] = ("classes",)
+    classes: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------

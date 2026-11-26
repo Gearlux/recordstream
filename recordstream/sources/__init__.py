@@ -10,12 +10,15 @@ the enrichment table key on the submodule path, because that is what ``cls.__mod
 
 Submodules:
     - recordstream.sources.files: FilesSource (a plain list of file paths)
+    - recordstream.sources.grouped: GroupedFilesSource (a folder of files, a group folder ONE record), GroupedSource
+      (any indexable source, the groups a groups file names ONE record each)
     - recordstream.sources.huggingface: HuggingFaceSource (+ the METADATA_ALL_FEATURES sentinel)
     - recordstream.sources.split: DatasetSplit (+ the SplitName Literal)
     - recordstream.sources.range: RangeSource (a contiguous ``[start:stop)`` slice)
     - recordstream.sources.concat: ConcatSource (several indexable sources end to end)
     - recordstream.sources.difference: DifferenceSource (one source less the records another carries)
     - recordstream.sources.draw: DrawSource (a generator's settings drawn anew per record)
+    - recordstream.sources.selection: FileSelection (the files of several folders, limited the same way everywhere)
 
 ``__all__`` below is load-bearing, not decoration: a visual editor's node bridge scans this
 module in two passes, and the first (``recordstream.discovery.scan_module``) filters on
@@ -24,19 +27,26 @@ second pass — the one that surfaces these nodes — walks exactly this ``__all
 """
 
 from recordstream.sources.concat import ConcatSource
+from recordstream.sources.config import ConfigStreamSource
 from recordstream.sources.difference import CompareBy, DifferenceSource
 from recordstream.sources.draw import DrawSource
 from recordstream.sources.files import FilesSource
+from recordstream.sources.grouped import GroupedFilesSource, GroupedSource
 from recordstream.sources.huggingface import METADATA_ALL_FEATURES, HuggingFaceSource
 from recordstream.sources.range import RangeSource
+from recordstream.sources.selection import FileSelection
 from recordstream.sources.split import DatasetSplit, SplitName
 
 __all__ = [
     "CompareBy",
     "ConcatSource",
+    "ConfigStreamSource",
     "DatasetSplit",
     "DifferenceSource",
     "DrawSource",
+    "FileSelection",
+    "GroupedFilesSource",
+    "GroupedSource",
     "HuggingFaceSource",
     "FilesSource",
     "METADATA_ALL_FEATURES",

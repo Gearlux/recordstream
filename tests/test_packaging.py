@@ -16,6 +16,7 @@ The sibling ``test_docs_links.py`` covers the README's *contents* once it become
 that landing page.
 """
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, cast
@@ -124,3 +125,17 @@ def test_the_changelog_is_shipped_in_the_sdist() -> None:
     missing = [name for name in ("CHANGELOG.md",) if name not in included]
 
     assert not missing, f"MANIFEST.in does not include: {missing}"
+
+
+def test_every_docs_page_the_readme_links_is_shipped_in_the_sdist() -> None:
+    """The README links the pages under ``docs/`` on GitHub; the sdist carries them too, so a reader who has only the
+    sdist still has them. `MANIFEST.in` must cover every linked page."""
+    readme = (_REPO / "README.md").read_text(encoding="utf-8")
+    linked = sorted(set(re.findall(r"/blob/main/(docs/[\w./-]+\.md)", readme)))
+    assert linked and all((_REPO / page).is_file() for page in linked)
+    rules = [line.split() for line in (_REPO / "MANIFEST.in").read_text().splitlines() if line and line[0] != "#"]
+    shipped = {str(path.relative_to(_REPO)) for rule in rules if rule[0] == "include" for path in _REPO.glob(rule[1])}
+    for rule in rules:
+        if rule[0] == "recursive-include":
+            shipped |= {str(p.relative_to(_REPO)) for pattern in rule[2:] for p in (_REPO / rule[1]).rglob(pattern)}
+    assert [page for page in linked if page not in shipped] == []

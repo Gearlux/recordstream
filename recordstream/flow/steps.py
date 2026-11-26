@@ -14,6 +14,8 @@ boundary), and how a SUBGRAPH op is recognised and opened (:func:`_is_subgraph`,
 import inspect
 from typing import Any, Dict, Literal, NamedTuple, Optional, Sequence, Tuple
 
+from recordstream.exceptions import RecordstreamError
+
 RESERVED_STEP_KEYS = ("from", "merge_from", "bind")
 """Step-grammar keys stripped from a step mapping before the op is constructed."""
 
@@ -79,7 +81,7 @@ def _open_subgraph(op: Any, label: str, where: str = "") -> None:  # op: a Subgr
         raise raised from refusal
 
 
-class StepReferenceError(ValueError):
+class StepReferenceError(RecordstreamError, ValueError):
     """A step reference (``from:`` / ``merge_from:`` / ``bind:``) naming no EARLIER step.
 
     Raised by :func:`recordstream.flow.parse.parse_flow` with the flow grammar's own message

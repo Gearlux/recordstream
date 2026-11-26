@@ -140,6 +140,25 @@ source = FilesSource(root="/data/captures", pattern="*/*/val/*.sigmf-meta")
 files = source.paths()          # one scan; a file added to the folder is in the next answer
 ```
 
+### Holding a folder out (`exclude`)
+
+`exclude` drops files from the listing without reading them. Without a slash it is a name glob —
+`exclude: "*.tmp"` drops every temporary file whatever its folder. With a slash it is matched
+against the path **relative to `root`**, and `*` crosses folders, so a whole set of captures is
+held out by its place in the tree:
+
+```yaml
+source: !class:recordstream.sources.files.FilesSource
+  root: $DATA_ROOT/Signal Detection/1.0
+  pattern: "*/*/train/*.sigmf-meta"   # every set's training captures …
+  exclude: "*/dvb*/*"                 # … but the folders dvb and dvb_rcs2, one level down
+```
+
+A slashed glob is anchored at the root: `dvb/*` names a folder *at* the root and holds nothing out
+one level down, so a set below the family folders is written `*/dvb*/*`. For a `files` list there is
+no root, and the glob is matched against the whole path. Changing `exclude` on a built source re-filters
+the next listing.
+
 ### Asking a file what it says, without opening it
 
 Some questions about a listing are not worth a decode. *Where was each of these recordings
@@ -226,6 +245,126 @@ class MyOp:
         """A variant producing the same record minus what it cannot make cheaply."""
 ```
 
+## Choosing the files of several folders (`FileSelection`)
+
+A run over a dataset's files — processing them, drawing them — says WHICH files once, the same way in every config:
+`FileSelection` lists each folder of `sets` in turn and limits what it keeps.
+
+```yaml
+recordings: !class:recordstream.sources.selection.FileSelection
+  sets: [$DATA_ROOT/Captures/1.0, $DATA_ROOT/Captures/2.0]
+  pattern: ["**/*.json", "**/*.mat"]   # one glob, or several joined
+  exclude: "*/train/*"                 # by name without a slash, by place under the set with one
+  max_depth: 2                         # at most 2 folders below a set (0: its own files)
+  max_subfolders_per_folder: 5         # each folder's first 5 subfolders, at every level, in name order
+  max_folders_per_set: 5               # each set's first 5 folders holding a file, in name order
+  max_files_per_folder: 20             # each folder's first 20 files
+  max_files: 0                         # 0: no limit on the whole
+```
+
+Each record is `{"file", "set", "relative"}`: the path, its set, and its place under `relative_to` (the set's parent
+folder by default) less its extension — what a run names its outputs by. The limits apply in that order: depth,
+subfolders of each folder, folders of each set (the set's own folder is one of them, first), files of each folder,
+then the total. A dotfile and everything in a hidden folder (`.sync/`) are never listed, and a companion half a
+registered format consumes is left out, so a pair counts once. A set may be any object naming a folder
+(`os.PathLike`): it is asked when the selection is first listed, so a download fills it then. The listing is made once for its settings, and an empty selection is
+refused naming the sets and globs:
+
+```
+ValueError: FileSelection: ['**/*.mat'] matched no files under ['/data/Captures/1.0'] (exclude '', max_depth None)
+```
+
+The two folder limits differ on a dataset of several branches. `max_subfolders_per_folder` keeps a folder's own files
+and its first subfolders (those with a selected file below them), then the same inside each one kept, so it reaches
+every branch; `max_folders_per_set` counts every folder holding a file, at any depth, in one list, so it stops at the
+first branches in name order. With a limit of 3:
+
+| folder of the set | `max_subfolders_per_folder: 3` | `max_folders_per_set: 3` |
+|---|---|---|
+| `birds/1/` | kept | kept |
+| `birds/2/` | kept | kept |
+| `birds/3/` | kept | kept |
+| `birds/4/` | — | — |
+| `cats/1/` | kept | — |
+| `cats/2/` | kept | — |
+| `dogs/1/` | kept | — |
+| `dogs/2/` | kept | — |
+
+The set's own folder is a folder too: of `birds/`, `cats/`, `dogs/` and a fourth, `max_subfolders_per_folder: 3` keeps
+the first three.
+
+Named as top-level keys of a config, the settings reach the selection by their names, so a command line writes
+`max_subfolders_per_folder=5 max_files_per_folder=20` — a quick run of the same config.
+
+## Groups of files as one record (`GroupedFilesSource`)
+
+Some files stand for each other: near-copies of one picture, several takes of one scene. Put each such group in a
+folder of its own and `GroupedFilesSource` serves the FOLDER as one record. A group of 70 files then weighs as much
+in an epoch as one lone file.
+
+```
+data/
+  a.png                  one record
+  group_0001/b.png       one record: b, c and d together
+  group_0001/c.png
+  group_0001/d.png
+  cat/1.png              one record
+  cat/group_0002/2.png   one record: 2 and 3 together
+  cat/group_0002/3.png
+```
+
+```yaml
+train: !class:recordstream.sources.grouped.GroupedFilesSource
+  root: ${env:DATA_ROOT}/data
+  pattern: "**/*.png"
+  pick: next
+```
+
+Each record is `{"file": "<path>", "group_size": <files in the group>}`; an op decodes the file, as after
+`FilesSource`. `pick` says which file of a group a read gets:
+
+| `pick` | the file a read gets | for |
+| --- | --- | --- |
+| `next` (default) | another one at every read: the first, the second, … and round again | training: every epoch sees another file of each group |
+| `first` | the group's first file by name, always | a validation run on fixed files |
+| `seeded` | one file per group drawn from `seed`, the same at every read, in every worker, in every run | a validation run on fixed files that are not all "the first" |
+
+With the tree above and `pick: next`, the record of `group_0001` is `b.png` in epoch 1, `c.png` in epoch 2, `d.png`
+in epoch 3 and `b.png` again in epoch 4.
+
+The count behind `next` is shared by every worker process a loader starts — with workers restarted per epoch, with
+workers kept alive, with shuffling. A copy of the source made with `pickle` or `copy.deepcopy` counts on its own from
+zero. The folder is listed once, on first use.
+
+[`GroupedFilesSink`](storage.md) writes this layout from records that carry a group entry.
+
+### When the dataset must stay as it is (`GroupedSource`)
+
+A dataset whose labels name its files by their place — a label folder beside the pictures, an annotation file
+listing file names — breaks when a file moves into a group folder. `GroupedSource` groups the RECORDS instead: it
+wraps any indexable source, and a small groups file says which records stand for each other. Nothing moves.
+
+```json
+{"records": 854, "groups": [[28, 30, 54], [59, 78]]}
+```
+
+```yaml
+train: !class:recordstream.sources.grouped.GroupedSource
+  source: !class:my_package.DetectionSource {root: /data/drones, split: train}
+  groups: /data/drones/train.groups.json
+  pick: next
+```
+
+| the source | the view |
+| --- | --- |
+| 854 records | 87 records: one per group, one per record no group names |
+| record 28, 30 and 54, each with its picture and boxes | ONE record: 28 in epoch 1, 30 in epoch 2, 54 in epoch 3, 28 again in epoch 4 |
+
+Each record is exactly what the source gives for the picked index, labels and all. `pick` and the shared count are
+those of `GroupedFilesSource`. The file's `records` must be the source's length — a source of another length is
+refused, because the numbers would name other records. A key-restricted walk (`project`, class counts) answers with
+each group's first record and moves no group on. [`GroupsFileSink`](storage.md) writes the file.
+
 ## Train / val / test splitting (`DatasetSplit`)
 
 `DatasetSplit` partitions any indexable source (implementing `__len__` and `__getitem__`) into reproducible **train / val / test** views. It is a `source` (`category="source"`) — it yields records and is wired into a trainer's `source:` slot — and it applies no ops, so it's a source, not an engine.
@@ -304,6 +443,25 @@ val_set: !class:recordstream.sources.split.DatasetSplit()
 > `_target_:` source is built at load time and is what the slot wants. The examples above use
 > `${ref:…}` to a top-level source instead, which is also what lets several wrappers share one
 > loaded source.
+
+## A stream another config defines (`ConfigStreamSource`)
+
+A training config already says what its data is — `train_set: !class:recordstream.Stream` with a source and the
+preprocessing a model needs. `ConfigStreamSource` reads that stream from the config file, so another graph (an
+analysis, a comparison) walks the same records without copying the dataset's definition:
+
+```yaml
+pictures: !class:recordstream.sources.config.ConfigStreamSource
+  config: pkg://<project>/examples/train.yaml   # a path, or a config a package ships
+  key: train_set                                # train_set, val_set, test_set, stream, …
+  scopes: [framework=lightning]                 # as on the config's command line
+  apply_ops: false                              # false: the records as stored; true: with the stream's ops
+```
+
+By default it reads the stream's source alone — a training stream usually ends in resizing, normalising and
+`ToTensor`, which a reader of the records does not want; `apply_ops: true` reads the stream as the config defines it. The
+config is loaded on first use, never when the source is built; `len`, `source[i]` and `dataset_uri` answer what the
+config's stream answers. A key the config does not hold is refused naming the keys it does.
 
 ## Leaving out another dataset's records (`DifferenceSource`)
 

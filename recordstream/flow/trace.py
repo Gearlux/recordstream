@@ -81,6 +81,7 @@ from recordstream._compat import is_torch_tensor
 from recordstream.core.families import _apply_op, _op_expands
 from recordstream.flow.execute import _result_readers, _run_from, run_steps_multi
 from recordstream.flow.graph import FlowGraph
+from recordstream.flow.picture import picture, pictured
 from recordstream.flow.steps import (
     _MISSING,
     SUBGRAPH_SEPARATOR,
@@ -90,7 +91,7 @@ from recordstream.flow.steps import (
     _is_subgraph,
     _open_subgraph,
 )
-from recordstream.items import NDArrayItem, Record, is_item
+from recordstream.items import Boxes, NDArrayItem, Record, is_item
 from recordstream.ops.contract import ChainContractError, check_chain
 
 if TYPE_CHECKING:  # the annotation only — a module-level import of core.stream would invert the core -> flow layering
@@ -865,6 +866,29 @@ class Tracer:
             raise KeyError(f"{self._locate(node)}: {node!r} has no {side} entry {entry!r} — it has {sorted(record)}")
         return record[entry]
 
+    def picture(self, node: str, entry: str, side: Side = "output", *, width: Optional[int] = None) -> bytes:
+        """The entry :meth:`value` answers, as a PNG (:func:`recordstream.flow.picture.picture`) — at most ``width``
+        pixels wide — with every :class:`~recordstream.Boxes` of the SAME snapshot outlined over it when its
+        ``canvas`` is the raster's own ``(H, W)``. An entry that has no picture (its summary carries no
+        ``picture``) is a ``ValueError`` naming it; a node or an entry that is not there is refused as
+        :meth:`value` refuses it."""
+        from recordstream.ops.image import image_frame
+
+        owner, local = self._resolve(node)
+        if owner is not self:
+            return owner.picture(local, entry, side, width=width)
+        value = self.value(node, entry, side)
+        if not pictured(value):
+            raise ValueError(
+                f"{self._locate(node)}: the {side} entry {entry!r} ({type(value).__name__}) has no picture — "
+                "one is drawn of an image, a mask or a 2-D array of numbers"
+            )
+        recorded = self._trace[node]
+        record = recorded.input if side == "input" else recorded.output
+        frame = image_frame(value)
+        boxes = [held for held in record.values() if isinstance(held, Boxes) and held.canvas == frame]
+        return picture(value, width=width, boxes=boxes)
+
     @property
     def names(self) -> List[str]:
         """The node names, in schedule order, each subgraph's inner nodes right after it (parses on first use)."""
@@ -1059,6 +1083,8 @@ def _summarize_tensor(value: Any) -> Dict[str, Any]:  # a torch tensor, describe
 def _summarize_value(value: Any) -> Dict[str, Any]:  # any record value
     """One record value as JSON: its type, an item's declared attributes, and its payload summarised."""
     summary: Dict[str, Any] = {"type": type(value).__name__}
+    if pictured(value):
+        summary["picture"] = True  # Tracer.picture answers it as a PNG
     if isinstance(value, NDArrayItem):
         for attr in type(value)._item_attrs:
             declared = getattr(value, attr, None)
