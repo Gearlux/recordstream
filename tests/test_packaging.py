@@ -106,10 +106,6 @@ def test_the_changelog_is_shipped_in_the_sdist() -> None:
     A CHANGELOG is referenced by nothing, so it is silently absent — measured on this
     project's own sdist before `MANIFEST.in` existed.
 
-    It matters more than a tidiness point here: `[project.urls] Changelog` points at the
-    file on GitHub, so while that repository is private the sdist is the ONLY copy a
-    reader can reach.
-
     Asserted on the declaration rather than by building an sdist, for the same reason
     the package-data rules are: building one takes seconds and needs a clean tree, and
     the declaration is the thing that actually goes stale.
