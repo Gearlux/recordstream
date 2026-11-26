@@ -152,12 +152,25 @@ def read_memory(pids: Iterable[int] = ()) -> MemoryReading:
     return MemoryReading(available=int(memory.available), total=int(memory.total), processes=processes)
 
 
+#: Where Linux states this process's own peak resident memory (``VmHWM``, in kB).
+_PROC_STATUS = "/proc/self/status"
+
+
 def _peak_rss() -> int:
-    """This process's peak resident memory, in bytes."""
+    """This process's own peak resident memory, in bytes.
+
+    Never ``ru_maxrss`` on Linux: a program started from a running process (a ``spawn`` worker) begins with the peak
+    of the process it was forked from — measured: a worker started by a parent holding 1000 MB read 1019 MB before it
+    did anything, against 14 MB in its ``VmHWM``.
+    """
     if sys.platform == "win32":
         return int(psutil.Process().memory_info().peak_wset)
+    if sys.platform.startswith("linux"):
+        with open(_PROC_STATUS) as status:
+            line = next(line for line in status if line.startswith("VmHWM:"))
+        return int(line.split()[1]) * 1024
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return int(peak if sys.platform == "darwin" else peak * 1024)  # macOS counts bytes, Linux kilobytes
+    return int(peak if sys.platform == "darwin" else peak * 1024)  # macOS counts bytes, the other Unixes kilobytes
 
 
 def _unified_gpu_memory() -> int:

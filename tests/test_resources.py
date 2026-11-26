@@ -1,7 +1,7 @@
 """``recordstream.resources``: what a record costs in its worker, and how many records the machine can build at once.
 
 The planning tests give the governor stated numbers (a machine of 18 GB, records of 4 GB) and check the count it
-plans; the measuring tests build records in a fresh spawn process, where nothing else has raised the peak.
+plans; the measuring tests build records in a fresh spawn process, so only that record raises the worker's peak.
 """
 
 import json
@@ -13,6 +13,7 @@ import time
 import types
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Tuple
 
 import numpy as np
@@ -218,6 +219,16 @@ class TestARecordIsMeasured:
         assert 190 * 2**20 <= cost.memory <= 400 * 2**20
         assert cost.footprint > 0
 
+    def test_a_worker_started_by_a_large_process_counts_only_its_own_peak(self) -> None:
+        """On Linux a started program inherits the peak of the process it was forked from: the record's memory is the
+        worker's own peak above what it held, never the size of the process that started it."""
+        held = np.ones(600 * 2**20, dtype=np.uint8)  # touched: the parent holds 600 MB when it starts the worker
+        try:
+            _, cost = _measure_in_fresh_process("allocate")
+        finally:
+            del held
+        assert 190 * 2**20 <= cost.memory <= 400 * 2**20
+
     def test_a_busy_record_keeps_one_core(self) -> None:
         _, cost = _measure_in_fresh_process("busy")
         assert 0.7 <= cost.cores <= 1.3
@@ -257,8 +268,18 @@ class TestARecordIsMeasured:
 
 
 class TestThePeakIsReadPerPlatform:
-    def test_linux_counts_kilobytes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_linux_reads_its_own_peak_never_the_one_it_inherited(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        status = tmp_path / "status"
+        status.write_text("Name:\tpython\nVmPeak:\t  900000 kB\nVmHWM:\t    1000 kB\nVmRSS:\t     800 kB\n")
         monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(resources, "_PROC_STATUS", str(status))
+        monkeypatch.setattr(resources.resource, "getrusage", lambda who: types.SimpleNamespace(ru_maxrss=900000))
+        assert resources._peak_rss() == 1024000
+
+    def test_another_unix_counts_kilobytes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "freebsd14")
         monkeypatch.setattr(resources.resource, "getrusage", lambda who: types.SimpleNamespace(ru_maxrss=1000))
         assert resources._peak_rss() == 1024000
 
