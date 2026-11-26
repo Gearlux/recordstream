@@ -387,6 +387,7 @@ Gotchas:
   set-but-missing one raises. Reproduce by executing a copy outside the workspace.
 - README links to repo files are absolute GitHub URLs; `docs/*.md` keep relative links
   (`tests/test_docs_links.py`).
-- Floors state what is tested; a dependent writes `recordstream>=0.1.0a1`. The release metadata,
+- Floors state what is tested: each release raises its workspace floors to the newest releases and runs the suite
+  there, and a dependent's next release raises its `recordstream>=` the same way (user choice 2026-11-26). The release metadata,
   the `Development Status` classifier matching the version, `CHANGELOG.md` and every `docs/` page the README links in the sdist
   (`MANIFEST.in`) and no direct-URL requirement are pinned by `tests/test_packaging.py`.

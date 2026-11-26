@@ -125,9 +125,9 @@ All notable changes to this project are documented here. The format follows
   each source's projection, once (`docs/sources.md`).
 
 ### Changed
-- **recordstream requires liquifai 0.4.0 and confluid 0.5.0** (`liquifai>=0.4.0`, was `>=0.2.0`; `confluid>=0.5.0`,
-  was `>=0.4.1`): `recordstream run`'s dry run, default command, forwarded flags and undeclared-scope refusal are
-  tested against them, and liquifai 0.4.0 requires confluid 0.5.0.
+- **recordstream requires liquifai 0.4.0, confluid 0.5.0 and loggair 0.3.0** (`liquifai>=0.4.0`, was `>=0.2.0`;
+  `confluid>=0.5.0`, was `>=0.4.1`; `loggair>=0.3.0`, was `>=0.2.0`): `recordstream run`'s dry run, default command,
+  forwarded flags and undeclared-scope refusal are tested against them, and liquifai 0.4.0 requires confluid 0.5.0.
 - **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
 - **A `Sequence` checks every step before its first step runs** — each step is built and planned first, and a failed
   check stops the workflow there, naming the step. A step whose inputs an earlier step writes says
