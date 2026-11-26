@@ -1,6 +1,6 @@
 [project]
 name = "recordstream"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "Clean, functional data pipelines for ML research and production."
 readme = "README.md"
 authors = [{ name = "Gert Behiels" }]

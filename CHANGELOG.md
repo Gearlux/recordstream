@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0a4] — 2026-11-26
+
 ### Added
 - **A plan names what a run deletes** — `DatasetProcessor.plan()` asks its sink `planned_changes()` and lists the
   answers as the plan's actions, so `recordstream run --dry_run` prints them. A sink without the method plans as
