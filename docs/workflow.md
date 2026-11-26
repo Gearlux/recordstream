@@ -170,7 +170,10 @@ DRY RUN: every step would run
 
 `--plan_format json` prints the same plan as one JSON line — what a `RunConfig` reads from its process, and what a
 tool returns as is (`recordstream.workflow.Plan.from_dict`). A runnable says what it would do through a `plan()`
-method returning a `Plan`; one without it is planned as `run <Class>`.
+method returning a `Plan`; one without it is planned as `run <Class>`. A `DatasetProcessor`'s plan also lists what
+its sink says a run changes on disk: a sink that deletes or replaces what it holds when a run opens it answers
+`planned_changes()` with a line each (`delete /data/train/images (807 files, 1.2G)`), and those lines are the plan's
+actions. A sink without the method adds nothing; one that cannot answer is a failed check.
 
 `--plan_format` only applies to a dry run. Without `--dry_run` it is refused and nothing runs, so asking for the plan
 never starts a real run; a format other than `text` or `json` is refused too:

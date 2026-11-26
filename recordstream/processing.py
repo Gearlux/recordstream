@@ -188,7 +188,8 @@ class DatasetProcessor(ProgressReporting):
 
     def plan(self) -> Plan:
         """What :meth:`run` would do, no record built: the source's records, the first one built, how many are
-        built, the sink — or, when the source cannot be read or the start cannot be found, why, as a failed check."""
+        built, the sink, and what the sink says a run changes on disk (its ``planned_changes()``: the plan's
+        actions) — or, when the source cannot be read or the start cannot be found, why, as a failed check."""
         title = type(self).__name__
         if self.stream is None:
             return Plan(title=title, checks=[Check("a stream is set", False, "DatasetProcessor needs a 'stream'")])
@@ -212,7 +213,13 @@ class DatasetProcessor(ProgressReporting):
         }
         if self.stop is not None:  # a run to the end plans as it always did
             details["stop"] = self.stop
-        return Plan(title=title, checks=[Check("the source can be read", True)], details=details)
+        checks = [Check("the source can be read", True)]
+        try:
+            actions = _planned_changes(sink)
+        except Exception as unsure:  # noqa: BLE001 - whatever stops the sink saying it is what the plan reports
+            checks.append(Check("the sink can say what a run changes", False, f"{type(sink).__name__}: {unsure}"))
+            actions = []
+        return Plan(title=title, checks=checks, actions=actions, details=details)
 
     def _materialized(self) -> Tuple[Stream, Any]:
         """The stream (its source and ops) and the sink built from the deferred markers a YAML load leaves.
@@ -245,6 +252,14 @@ class DatasetProcessor(ProgressReporting):
             return records
         desc = self.progress_desc or "DatasetProcessor"
         return _ProgressIter(records, total=total, desc=desc)
+
+
+def _planned_changes(sink: Any) -> List[str]:  # sink: any sink, or None
+    """What opening ``sink`` for a run would change on disk, a line each (``delete /x/train/images (807 files,
+    1.2G)``) — the sink's own ``planned_changes()``, by shape; nothing for a sink that has none. Asking changes
+    nothing."""
+    planner = getattr(sink, "planned_changes", None)
+    return [str(line) for line in planner()] if callable(planner) else []
 
 
 def _close(records: Iterable[Any]) -> None:

@@ -327,6 +327,10 @@ Gotchas:
   unindexable source is refused. §28 amendment (`tests/test_processing_start.py`). `start: resume` reads the sink's
   `resume_index()` when the run starts, never when the processor is built; no sink or no `resume_index()` is
   refused before the first record (`tests/test_processing_resume.py`).
+- **What a run changes on disk is the SINK's to say** (`planned_changes() -> List[str]`, by shape; user approval
+  2026-11-26): `DatasetProcessor.plan()` puts the lines in `Plan.actions` (`processing._planned_changes`), a sink
+  that raises is a failed check, and `run()` never asks. The processor knows no sink's folders — never compute a
+  sink's deletions here. (`tests/test_processing_plan_sink.py`)
 - **A run is stopped by a QUESTION, never by an error** (`ProgressReporting.set_stop_request`, user approval
   2026-11-26): the processor asks `_stop_requested()` after each record and, on yes, leaves its loop, closes the
   record iterator (a run on workers ends them), flushes the sink and returns — the ending of a short run. Never stop
