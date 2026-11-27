@@ -2750,3 +2750,68 @@ Measured on the same 854 pictures through a shuffling `DataLoader` over the dete
 restarted and kept alive: 87 records per epoch, every one of the 43 groups of three or more gave three different
 pictures, each with its boxes. Not an index the user edits by hand, and never a key match per record: a domain that
 needs one writes the groups file from its own notion of "the same record".
+
+## 35. A record has an id that survives every view (`record_ids`, `IdentifiedSource`, 2026-11-27)
+
+**Context.** A record was found by its place in a source. Everything kept ABOUT records by the applications built
+on this package — predictions, embeddings, analysis results, thumbnails — was keyed by that place, or by a name
+each application made up for itself, and no two of them agreed on one. A place also changes meaning under a view:
+record 3 of a validation split is not record 3 of the dataset.
+
+**Decision.** An id is `<dataset>#<key>`. The dataset is the source's `dataset_uri` (§13), else the folder it reads
+(`root`, as a `file://` URI), else its `name` — the folder before the name, because two sources left at one default
+name read two datasets. The key
+is the source's own name for the record when it has one — the opt-in `SupportsRecordKeys.record_keys()`, one cheap
+listing, as `FilesSource.paths()` is — and the record's place in the ROOT source when it has none.
+`record_ids(source)` walks wrappers as `dataset_uri` does, and follows a view through its `indices` (or `matches`),
+so a view never needs code of its own to keep its source's ids. `IdentifiedSource` writes the id into the record as
+a plain entry (`record_id`), which is how the record model carries anything (§1): no container, no side channel. A
+record made from another is named `<parent>@<region>` and carries `parent_id`.
+
+**Consequences.** Ids are plain text and never parsed: the parent link is the `parent_id` entry, not something
+read back out of the id. An id that is a place holds only while the source does not change; `has_record_keys` says
+which sort a source gives, so a consumer can warn. A stream with ops is counted as its own records, since ops may
+drop or add some; the id has to be put in the record below the ops.
+
+**What you may change.** Give another source `record_keys()`. Give a new view `indices`. Not an id computed from a
+record's content (it would read every record to name it), and not a second entry name for the id.
+
+## 36. What is computed from a record is kept by what computed it (`DerivedStore`, `Derive`, 2026-11-27)
+
+**Context.** Values computed from records were cached in several places, each with a key of its own: a record's
+place and a graph file's time, a hash of the record's content, a hash of built graphs. A file's time says a file
+was touched, not that the values changed; a content hash reads every record again to find its values.
+
+**Decision.** One store, three names: the producer, the output, the record id (§35). The producer is
+`producer_hash(ops, files)` — the ops as the document they build from (`confluid.dump(…, qualified=True)`, every
+setting listed) and the content of the files that decide the values. A table is an index and append-only `.npz`
+shards; values go through `io.py`, the one serializer. `Derive` is the composing op: its inner ops run for a record
+only when an output is missing, through `_apply_op` like every composing op.
+
+**Consequences.** Nothing is ever stale, and nothing is ever overwritten by a changed setting: old producers stay
+until `remove`d, so the store grows, and `producers()` is how a caller sees what to remove. A producer that cannot
+be written as a document is refused outright — a silent placeholder would keep two different producers under one
+name. Hashing a weights file reads it whole, once per run.
+
+**What you may change.** Add a way to read a table. Not a key that includes a file's time, not a default root, and
+not a second serializer beside `io.py`.
+
+## 37. A step that moves the raster writes where it moved it (`recordstream.frames`, 2026-11-27)
+
+**Context.** `ResizeDetection` worked out its two scale factors, scaled the boxes it was given, and kept
+neither factor nor the size it started from. A model fed the resized picture answered in that picture's pixels
+with no way back; `ModelPredict(frame=)` recovers the way from two rasters' sizes, which is right for a
+stretch and wrong for a pad or a crop. Pooling a feature map over a labelled box needs the same way forwards.
+
+**Decision.** The record carries a `Frames` item under `frames`: per named frame, the mapping from the frame of
+the record as stored into it, as a scale and an offset per axis. A frame-changing op composes its own step
+after what is there (`add_step`). The record model already says where such a fact goes: on a value or under a
+plain key (§1) — so it travels through every later step, a sink and a worker with no side channel. One scale
+and one offset per axis is closed under composition and inversion and covers resize, crop, pad and letterbox.
+
+**Consequences.** A mapping exists only where a step wrote one; a consumer that finds none must refuse or
+check, never assume a stretch. A rotation or a warp is outside the form and writes none. `ResizeDetection`
+writes its step only when asked (`frame`), so no existing record gains an entry.
+
+**What you may change.** Have another geometry op write its step. Not a matrix form for the sake of rotations
+no op here performs, and not a mapping derived from two rasters' sizes.

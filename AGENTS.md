@@ -19,10 +19,10 @@ document); storage sinks write them. On top sits the runnable layer: `recordstre
 | data model | `items.py`, `io.py` (codec), `dispatch.py`, `transform.py` (`Transform`, `Pipeline`), `algorithm.py` |
 | engine | `core/` (`families` → `mapstyle` → `wrappers` → `stream`), `flow/` (`steps` → `parse` → `execute` → `graph`, plus `subgraph`, `trace`) |
 | ops | `ops/`: `numpy`, `image`, `torch`, `target`, `structure`, `formula`, `formats` (`ReadFile`), `contract`, `predict`, `sink`, `debug`, the compose ops |
-| sources | `sources/`: `huggingface`, `files`, `selection`, `split`, `range`, `concat`, `config`, `difference`, `draw`; `draws.py`; `formats.py` (file-format registry) |
-| storage | `storage/`: `hdf5`, `zarr`, `directory`, `query`, `cache` |
+| sources | `sources/`: `huggingface`, `files`, `selection`, `split`, `range`, `concat`, `config`, `difference`, `draw`, `identified`; `draws.py`; `formats.py` (file-format registry) |
+| storage | `storage/`: `hdf5`, `zarr`, `directory`, `query`, `cache`, `derived` |
 | batching | `collate.py`, `batch.py` (read-back), `keras.py`, `loaders.py` |
-| boundaries | `projection.py`, `uri.py`, `labels.py`, `outputs.py`, `predictions.py` |
+| boundaries | `projection.py`, `uri.py`, `record_id.py`, `frames.py`, `labels.py`, `outputs.py`, `predictions.py` |
 | runnables | `runnable.py`, `workflow.py`, `processing.py`, `cli.py`; `discovery.py` |
 
 Executed examples: `examples/*.py`; notebook: `notebooks/01 - cat_exploration.ipynb`.
@@ -64,6 +64,9 @@ Gotchas:
 - Every op that makes or re-frames a `Boxes` fills `canvas`, also for an empty target. The frame
   lookup stays narrow: `"image"`, then the first `Image`, else `None`
   (`tests/test_convert_to_mask.py::TestBoxesKnowTheirFrame`).
+- Frames (§37, `tests/test_frames.py`): a step that resizes, crops or pads a raster writes its mapping into the record's
+  `frames` entry with `frames.add_step` (a scale and an offset per axis, from the record as stored into the named
+  frame); a frame without a mapping is a `FrameError`, never a mapping guessed from two rasters' sizes.
 - Serialize only through `io.py` (`register_io` per exact type).
 
 ## Ops
@@ -163,6 +166,11 @@ Gotchas:
   `flow.picture.pictured`) and `Tracer.picture(node, entry, side, width=)` answers it as a PNG, the snapshot's `Boxes`
   outlined when their `canvas` is the raster's frame. The drawing is `ops.image.value_to_image`'s, never a second
   renderer or quantizer; an `Image` is read in its declared layout. (`tests/test_trace_picture.py`)
+- `ModelPredict(model_frame=)` writes a self-resizing model's own `last_frames()` into the record's frames: the model
+  says where its network saw the picture, the op never works it out from sizes (`::TestAModelThatResizesInsideItselfSaysWhere`).
+- `ModelPredict(raw=, taps=)` writes the model's raw output and the outputs of modules inside it as record entries; the
+  hooks are set once, when the model is made ready, and found by `get_submodule` (duck-typed: no torch import). Its
+  parameters are only ever APPENDED (`tests/test_ops_predict.py::TestTheRawOutputAndTheTaps`, `::test_frame_is_appended_last`).
 - `Subgraph` (§23, `tests/test_subgraph.py`, `tests/test_trace_subgraph.py`): the inside runs on
   the same kernel, never flattened, never on its own executor.
   - The parameter is `result`, never `outputs` (confluid broadcasts a document's `outputs:`).
@@ -232,6 +240,11 @@ Gotchas:
 - Identity (§13, `tests/test_dataset_uri.py`): `dataset_uri` is the canonical handle,
   `dataset_url` a link for a person or `None`. Both read stored config only. The free functions
   follow `.source`; a wrapper never decorates the URI; `ConcatSource` answers `None`.
+- Record ids (§35, `tests/test_record_id.py`): an id is `<dataset>#<key>` — `dataset_uri`, else the folder the source reads (`root`), else its `name`;
+  the source's `record_keys()` (`SupportsRecordKeys`, one cheap listing, no record read), else the record's place in the
+  ROOT source. `record_ids` follows a view through its `indices` / `matches`, so a new view exposes `indices` and
+  writes no id code. The id rides in the record as the plain entry `record_id` (`IdentifiedSource`), a derived record's
+  parent as `parent_id`; an id is never parsed and never computed from a record's content.
 - A number a graph's setting takes WITH its unit is a `Quantity` node wired into it (`recordstream.quantity`, user
   request 2026-10-09): a `float` subclass reading `parse_quantity`, `kind` (`rate`/`frequency`/`time`/`any`) refusing
   another kind's unit — the unit itself stays in the value (the `Grid` ruling below); never a unit reading inside a step, never a confluid spelling for it, never a builder
@@ -362,6 +375,10 @@ Gotchas:
   `create_dataset`. `read_record_group(group, slices=…)` is the one HDF5 row decoder
   (`tests/test_typed_storage.py::TestReadRecordGroupSlices`).
 - A metadata scan never loads an array; `SupportsMetadataScan` is structural.
+- `DerivedStore` (§36, `tests/test_derived_store.py`) keeps what was computed from records by producer, output name and
+  record id. The producer is `producer_hash(ops, files)`: never a file's time, never a record's content. A producer
+  whose settings cannot be dumped is refused, never hashed as a placeholder. Shards are written once; values go through
+  `io.py`. The store has no default root. `Derive` is the composing op over it (inner ops through `_apply_op`).
 - A sink whose `open()` replaces what it holds answers `planned_changes()` with one `delete …` line per thing gone
   (`HDF5Sink`, `ZarrBatchSink` under `overwrite`), sized by `storage.base.size_text`; the condition is the same one
   `open()` reads, and asking touches nothing (`tests/test_storage_planned_changes.py`).

@@ -98,6 +98,15 @@ from recordstream.projection import (
     num_mask_classes,
     project,
 )
+from recordstream.record_id import (
+    PARENT_ID,
+    RECORD_ID,
+    SupportsRecordKeys,
+    derive,
+    derived_id,
+    has_record_keys,
+    record_ids,
+)
 from recordstream.runnable import (
     ProgressCallback,
     ProgressReporting,
@@ -108,7 +117,15 @@ from recordstream.runnable import (
     run_entrypoint,
     runnable_entrypoints,
 )
-from recordstream.sources import ConcatSource, DatasetSplit, DrawSource, HuggingFaceSource, RangeSource, SplitName
+from recordstream.sources import (
+    ConcatSource,
+    DatasetSplit,
+    DrawSource,
+    HuggingFaceSource,
+    IdentifiedSource,
+    RangeSource,
+    SplitName,
+)
 from recordstream.transform import FunctionTransform, Pipeline, Transform, as_transform
 from recordstream.uri import SupportsDatasetIdentity, dataset_uri, dataset_uris, dataset_url
 from recordstream.workflow import AllOf, AnyOf, Conditional, Not, PathExists, Sequence, Switch
@@ -219,6 +236,15 @@ __all__ = [
     "dataset_uri",
     "dataset_uris",
     "dataset_url",
+    # ---- record identity ----
+    "PARENT_ID",
+    "RECORD_ID",
+    "IdentifiedSource",
+    "SupportsRecordKeys",
+    "derive",
+    "derived_id",
+    "has_record_keys",
+    "record_ids",
     # ---- projection ----
     "SupportsProjection",
     "first_value",

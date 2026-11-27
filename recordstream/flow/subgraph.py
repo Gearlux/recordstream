@@ -194,6 +194,12 @@ class Subgraph:
             pending += ([source] if source is not None else []) + list(step.merge_from)
         return [step for step in steps if step.name in wanted]
 
+    @property
+    def lineage(self) -> List[str]:
+        """The names of the inner steps on the lineage of the result step, in step order: what decides the
+        record the subgraph returns. A reader that names the subgraph's result by what made it reads these."""
+        return [step.name for step in self._returned()]
+
     def _boundary(self) -> Tuple[Any, Any]:  # (consumes, produces): both {entry: type} or both type tuples
         """What the inside needs from the record it receives and what it adds, derived from the inner ops.
 

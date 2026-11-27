@@ -123,6 +123,8 @@ recordstream-core = "recordstream.core"
 recordstream-sources = "recordstream.sources"
 recordstream-ops-parallel = "recordstream.ops.parallel"
 recordstream-ops-enable = "recordstream.ops.enable"
+# Derive (ops whose outputs are kept in a DerivedStore by record id; the store itself is YAML-only)
+recordstream-ops-derive = "recordstream.ops.derive"
 recordstream-ops-random-apply = "recordstream.ops.random_apply"
 # ConfigureOp (per-record parameter injection — derive an op's parameter from the record); entry-point
 # changes need an editable reinstall before StreamStudio/navigaitor discovery sees the module.

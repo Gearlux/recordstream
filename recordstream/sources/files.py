@@ -188,6 +188,20 @@ class FilesSource:
         """
         return [str(Path(path)) for path in self._served]
 
+    def record_keys(self) -> List[str]:
+        """Every record's key, in record order: its file's path under ``root`` (the path as given for a ``files``
+        list). Implements :class:`recordstream.record_id.SupportsRecordKeys` from the one listing ``paths()`` reads."""
+        if not self.root:
+            return self.paths()
+        root = Path(os.path.expanduser(os.path.expandvars(self.root)))
+        keys = []
+        for path in self._served:
+            try:
+                keys.append(Path(path).relative_to(root).as_posix())
+            except ValueError:
+                keys.append(str(Path(path)))
+        return keys
+
     def __len__(self) -> int:
         return len(self._served)
 

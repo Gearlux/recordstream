@@ -290,9 +290,11 @@ class TestTheFrameKnob:
             ModelPredict(model=model, kind="detection", frame="nope")({"image": np.zeros((4, 4))})
 
     def test_frame_is_appended_last(self) -> None:
+        # Widget values are positional, so a parameter is only ever APPENDED: each one keeps its place
+        # behind the ones that were there before it.
         import inspect
 
-        assert list(inspect.signature(ModelPredict.__init__).parameters)[-1] == "frame"
+        assert list(inspect.signature(ModelPredict.__init__).parameters)[-4:] == ["frame", "raw", "taps", "model_frame"]
 
 
 class TestSolidifyIsAHookNotASwap:
@@ -336,3 +338,77 @@ class TestDetectionBatchesAreLists:
         records = [{"image": np.zeros((4, 4, 3), dtype=np.float32)} for _ in range(2)]
         out = ModelPredict(model=model, kind="detection").predict_batch(records)
         assert seen["type"] == "list" and len(out) == 2
+
+
+class TestTheRawOutputAndTheTaps:
+    def test_the_raw_output_is_written_beside_the_prediction(self) -> None:
+        out = ModelPredict(model=_Classifier(), kind="classification", raw="logits")({"image": np.zeros((8, 12))})
+        assert out["logits"].tolist() == [0.1, 2.0] and out["predict"].value == 1
+
+    def test_a_detectors_raw_output_is_its_own_mapping(self) -> None:
+        def model(batch: Any) -> Any:
+            return [{"boxes": np.array([[1.0, 2.0, 5.0, 6.0]]), "scores": np.array([0.9]), "labels": np.array([1])}]
+
+        out = ModelPredict(model=model, kind="detection", raw="raw")({"image": np.zeros((8, 12))})
+        assert sorted(out["raw"]) == ["boxes", "labels", "scores"] and out["raw"]["scores"].tolist() == [0.9]
+
+    def test_nothing_is_written_without_the_settings(self) -> None:
+        out = ModelPredict(model=_Classifier(), kind="classification")({"image": np.zeros((8, 12))})
+        assert sorted(out) == ["image", "predict", "score"]
+
+    def test_a_tapped_modules_output_is_written_per_record(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        class Net(torch.nn.Module):  # type: ignore[name-defined,misc]
+            def __init__(self) -> None:
+                super().__init__()
+                self.body = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(6, 4))
+                self.head = torch.nn.Linear(4, 2)
+
+            def forward(self, batch: Any) -> Any:
+                return self.head(self.body(batch))
+
+        op = ModelPredict(model=Net(), kind="classification", device="cpu", taps={"latent": "body", "pre": "body.0"})
+        records = [{"image": torch.full((2, 3), float(value))} for value in (0.0, 1.0)]
+        first, second = op.predict_batch(records)
+        assert first["latent"].shape == (4,)
+        assert first["pre"].tolist() == [0.0] * 6 and second["pre"].tolist() == [1.0] * 6
+        assert not np.allclose(first["latent"], second["latent"])
+        again = op(records[1])
+        assert np.allclose(again["latent"], second["latent"])  # hooked once: a second call writes one output, not two
+
+    def test_a_tap_naming_no_module_is_refused(self) -> None:
+        torch = pytest.importorskip("torch")
+        op = ModelPredict(model=torch.nn.Linear(2, 2), kind="classification", device="cpu", taps={"latent": "nowhere"})
+        with pytest.raises(ValueError, match="names the module 'nowhere'"):
+            op({"image": torch.zeros(2)})
+        with pytest.raises(ValueError, match="no get_submodule"):
+            ModelPredict(model=_Classifier(), kind="classification", taps={"latent": "x"})({"image": np.zeros(2)})
+
+
+class TestAModelThatResizesInsideItselfSaysWhere:
+    class _Halving:
+        """Answers one box per picture, and says its network saw each picture at half size."""
+
+        def __call__(self, batch: Any) -> Any:
+            self.count = len(batch)
+            return [{"boxes": np.array([[0.0, 0.0, 4.0, 4.0]]), "scores": np.array([0.9])} for _ in batch]
+
+        def last_frames(self) -> Any:
+            return [(0.5, 0.5, 0.0, 0.0)] * self.count
+
+    def test_the_models_frame_is_written_into_each_record(self) -> None:
+        from recordstream.frames import frames_of, map_record_boxes
+
+        op = ModelPredict(model=self._Halving(), kind="detection", model_frame="model")
+        first, second = op.predict_batch([{"image": np.zeros((8, 12))}, {"image": np.zeros((8, 12))}])
+        assert frames_of(first).into("model") == frames_of(second).into("model") == (0.5, 0.5, 0.0, 0.0)
+        assert map_record_boxes(first, [[0, 0, 8, 12]], to="model").tolist() == [[0.0, 0.0, 4.0, 6.0]]
+
+    def test_nothing_is_written_without_the_setting(self) -> None:
+        out = ModelPredict(model=self._Halving(), kind="detection")({"image": np.zeros((8, 12))})
+        assert "frames" not in out
+
+    def test_a_model_that_cannot_say_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="has no last_frames"):
+            ModelPredict(model=_Classifier(), kind="classification", model_frame="model")({"image": np.zeros(2)})

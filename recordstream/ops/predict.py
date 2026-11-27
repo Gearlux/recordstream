@@ -46,6 +46,10 @@ def available_devices() -> "list[str]":
     return devices
 
 
+#: The fields an output OBJECT (not an array, not a mapping) is read by when its raw form is asked for.
+_RAW_FIELDS = ("logits", "probs", "boxes", "scores", "labels", "mask", "image")
+
+
 def _to_numpy(value: Any) -> np.ndarray:
     if hasattr(value, "detach"):
         value = value.detach().cpu()
@@ -132,6 +136,16 @@ class ModelPredict:
             A model fed a resized copy (a DETR postprocesses to its own square) answers in
             model space; naming the ORIGINAL image here scales boxes and canvas back to it.
             ``""`` keeps the input's own frame. Appended last (widget order rule).
+        raw: Record field the model's RAW output for the record is written under, before it is turned into
+            the stamped prediction: the row of scores a classifier gave, a detector's own mapping. ``""``
+            (default) writes none. Appended last (widget order rule).
+        taps: Record field -> the dotted path of a module INSIDE the model (``backbone.layer4``), whose output
+            for the record is written under that field as an array. A torch model only (its
+            ``get_submodule`` / ``register_forward_hook``); empty (default) taps nothing. Appended last.
+        model_frame: The name of the frame the NETWORK saw each picture in, for a model that resizes inside
+            itself. When set, the model's ``last_frames()`` — one ``(sx, sy, ox, oy)`` per record of the forward
+            just run, from the picture it was handed into the one its network saw — is written into the
+            record's ``frames`` entry (``recordstream.frames``). Blank (default) writes none. Appended last.
     """
 
     def __init__(
@@ -144,6 +158,9 @@ class ModelPredict:
         score: str = "score",
         batch_size: int = 0,
         frame: str = "",
+        raw: str = "",
+        taps: Optional[Dict[str, str]] = None,
+        model_frame: str = "",
     ) -> None:
         if kind not in get_args(PredictKind):
             raise ValueError(f"ModelPredict kind must be one of {get_args(PredictKind)}, got {kind!r}")
@@ -157,6 +174,10 @@ class ModelPredict:
         self.device = device
         self.batch_size = int(batch_size)
         self.frame = frame
+        self.raw = raw
+        self.taps: Dict[str, str] = dict(taps) if taps else {}
+        self.model_frame = model_frame
+        self._tapped: Dict[str, Any] = {}
         self._ready: Any = None
         self._resolved_device: str = ""
 
@@ -195,8 +216,31 @@ class ModelPredict:
                 model.eval()
             if hasattr(model, "to") and callable(model.to):
                 model.to(self._resolve_device())
+            self._hook_taps(model)
             self._ready = model
         return self._ready
+
+    def _hook_taps(self, model: Any) -> None:
+        """Hook each tapped module once, so every forward leaves its output in ``_tapped`` by record field."""
+        for field, path in self.taps.items():
+            finder = getattr(model, "get_submodule", None)
+            if not callable(finder):
+                raise ValueError(
+                    f"ModelPredict: taps name modules of a torch model, and {type(model).__name__} has no "
+                    "get_submodule — leave `taps` empty for it"
+                )
+            try:
+                module = finder(path)
+            except AttributeError as missing:
+                raise ValueError(
+                    f"ModelPredict: tap {field!r} names the module {path!r}, which {type(model).__name__} does not "
+                    f"have ({missing})"
+                ) from missing
+
+            def keep(_module: Any, _inputs: Any, output: Any, field: str = field) -> None:
+                self._tapped[field] = output
+
+            module.register_forward_hook(keep)
 
     def _call(self, batch: Any) -> Any:
         model = self._model()
@@ -233,7 +277,15 @@ class ModelPredict:
         # DETECTION models take a LIST of per-image tensors — the torchvision convention
         # (FasterRCNN, DETR wrappers); everything else gets the stacked batch.
         batch = list(values) if self.kind == "detection" else self._stack(values)
+        self._tapped = {}
         out = self._call(batch)
+        absent = [field for field in self.taps if field not in self._tapped]
+        if absent:
+            raise ValueError(
+                f"ModelPredict: the model's forward did not run the tapped module(s) of {absent} "
+                f"({[self.taps[field] for field in absent]})"
+            )
+        steps = self._model_frames(len(records))
         stamped: "list[Dict[str, Any]]" = []
         for index, record in enumerate(records):
             if self.kind == "classification":
@@ -247,8 +299,47 @@ class ModelPredict:
                 one = {**record, f"{self.output}_mask": self._segmentation(out, index)}
             else:
                 one = {**record, self.output: self._restoration(out, index)}
+            if self.raw:
+                one[self.raw] = self._raw(out, index)
+            for field, tapped in self._tapped.items():
+                one[field] = _to_numpy(_nth(tapped, index))
+            if steps is not None:
+                from recordstream.frames import add_step
+
+                one = add_step(one, self.model_frame, steps[index])
             stamped.append(one)
+        self._tapped = {}
         return stamped
+
+    def _model_frames(self, count: int) -> "Optional[list[tuple[float, float, float, float]]]":
+        """What the model says of the forward just run: per record, the step into the frame its network saw."""
+        if not self.model_frame:
+            return None
+        asked = getattr(self._model(), "last_frames", None)
+        if not callable(asked):
+            raise ValueError(
+                f"ModelPredict: model_frame {self.model_frame!r} asks the model where its network saw each picture, "
+                f"and {type(self.model).__name__} has no last_frames() — leave `model_frame` blank for it"
+            )
+        steps = [(float(sx), float(sy), float(ox), float(oy)) for sx, sy, ox, oy in asked()]
+        if len(steps) != count:
+            raise ValueError(
+                f"ModelPredict: {type(self.model).__name__}.last_frames() answered {len(steps)} frame(s) for "
+                f"{count} record(s)"
+            )
+        return steps
+
+    def _raw(self, out: Any, index: int) -> Any:
+        """The model's own output for record ``index``: an array, or a mapping of arrays for a model that gives one."""
+        one = _nth(out, index)
+        if isinstance(one, dict):
+            return {name: _to_numpy(value) for name, value in one.items()}
+        if hasattr(one, "shape") or isinstance(one, (int, float, list, tuple)):
+            return _to_numpy(one)
+        named = {name: getattr(one, name) for name in _RAW_FIELDS if getattr(one, name, None) is not None}
+        if not named:
+            raise ValueError(f"ModelPredict: cannot write the raw output of a {type(one).__name__} under {self.raw!r}")
+        return {name: _to_numpy(_nth(value, index)) for name, value in named.items()}
 
     def _stack(self, values: "list[Any]") -> Any:
         """One batch from the records' inputs — ragged shapes fail naming the fix."""

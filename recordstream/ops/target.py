@@ -462,6 +462,9 @@ class ResizeDetection(Transform):
         height: Target height in pixels; required at use (validated lazily, ``0`` = unset).
         input_key: Record key carrying the image (default ``"image"``).
         target_key: Record key carrying the target ``Boxes``; a record without it resizes the image alone.
+        frame: The name of the frame the resized image is in (``model``). When set, the mapping from the frame the
+            image came in is written into the record's ``frames`` entry (``recordstream.frames``), so a box can be
+            taken back to the picture as stored. Blank (default) writes none.
     """
 
     consumes = (Boxes,)
@@ -473,12 +476,14 @@ class ResizeDetection(Transform):
         height: int = 0,
         input_key: str = "image",
         target_key: str = "target",
+        frame: str = "",
     ) -> None:
         super().__init__()
         self.width = int(width)
         self.height = int(height)
         self.input_key = str(input_key)
         self.target_key = str(target_key)
+        self.frame = str(frame)
 
     def _resize_image(self, payload: Any) -> Any:
         from PIL import Image as PILImage
@@ -524,6 +529,11 @@ class ResizeDetection(Transform):
         from recordstream.items import NDArrayItem, with_data
 
         merged[self.input_key] = with_data(item, resized) if isinstance(item, NDArrayItem) else resized
+        if self.frame:
+            from recordstream.frames import add_step
+
+            step = (float(self.width) / float(orig_w), float(self.height) / float(orig_h), 0.0, 0.0)
+            merged = add_step(merged, self.frame, step)
 
         target = resolve_item(
             record, self.target_key, Boxes, owner="ResizeDetection", param="target_key", fallback=False, required=False

@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **A record has an id** — `record_ids(source)` names every record `<dataset>#<key>`, the same through any view of
+  its dataset (a split, a range, a filter, a concatenation); `IdentifiedSource` writes it into each record under
+  `record_id`. A source with its own name for a record answers `record_keys()` (`FilesSource`: the file's path under
+  its root); otherwise the id is the record's place, and `has_record_keys` says so. `derive(record, region)` names a
+  record made from another and keeps its parent's id (`recordstream.record_id`).
+- **What ops compute is kept by record id** — `DerivedStore` (`recordstream.storage.derived`) keeps values by
+  producer, output name and record id, the producer a hash of the ops, their settings and the files they read
+  (`producer_hash`). The `Derive` op wraps ops whose outputs are kept: they run once per record and are read from the
+  store from then on.
+- `DatasetSplit.indices` — the selected view's source indices.
+- **`ModelPredict` writes what is inside the model** — `raw` names the entry the model's raw output is written
+  under, and `taps` maps a record entry to the dotted path of a module inside a torch model, whose output for the
+  record is written under that entry.
+- `Subgraph.lineage` — the names of the inner steps on the lineage of the result step.
+- **A record carries its frames** — `recordstream.frames`: the `Frames` item under the `frames` entry holds, per
+  named frame, the mapping from the record as stored into it (a scale and an offset per axis); `add_step` is what a
+  frame-changing op calls, `map_record_boxes` takes boxes from one frame to another. `ResizeDetection(frame=)`
+  writes its step, so a box of the resized picture can be taken back to the stored one.
+- **A model that resizes inside itself says where** — `ModelPredict(model_frame=)` writes the model's
+  `last_frames()` (per record, the step from the picture it was handed to the one its network saw) into the
+  record's frames.
+
 ## [0.1.0a4] — 2026-11-26
 
 ### Added

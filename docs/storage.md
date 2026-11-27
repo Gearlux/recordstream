@@ -164,3 +164,54 @@ the same nested shape derived from a live record. Array-valued attrs appear in t
 shape/dtype stub strings (`"<array shape=(2, 2) dtype=float64>"`), so queries can test presence
 without a single array read. A key named like a Python keyword (e.g. `class`) can't be addressed
 in an expression — use the programmatic `predicate` or a non-keyword key name.
+
+## What was computed from records (`DerivedStore`)
+
+A prediction, an embedding or a score is computed from a record by a chain of ops with its settings and weights.
+`DerivedStore` keeps such values by three names: the **producer** (a hash of what computed them), the **output**'s
+name, and the [record id](sources.md#identifying-a-record).
+
+The usual way in is the `Derive` op. It wraps the ops whose outputs are worth keeping; for each record the ops run
+once, and from then on the kept values are written onto the record without running them:
+
+```yaml
+stream: !class:recordstream.core.stream.Stream
+  source: !class:recordstream.sources.identified.IdentifiedSource
+    source: !class:recordstream.sources.files.FilesSource {root: $DATA_ROOT/captures, name: captures}
+  ops:
+    - !class:recordstream.ops.formats.ReadFile {}
+    - !class:recordstream.ops.derive.Derive
+      store: !class:recordstream.storage.derived.DerivedStore {root: $RUN_DIR/derived}
+      outputs: [embedding]
+      files: [weights/encoder.pt]
+      ops:
+        - !class:mypackage.Embed {weights: weights/encoder.pt}
+```
+
+The producer is `producer_hash(ops, files)`: the inner ops written as the YAML they build from, every setting
+listed, plus the content of each file in `files`. Another op, another setting or another weights file is another
+producer, kept beside the old one — so a kept value is never stale, and no file time is compared. A setting left at
+its default and the same value written out are the same producer. An op whose settings cannot be written as a
+document (a class that is not `@configurable` and was not built from a config) is refused: two of them with
+different settings would be kept under one name.
+
+Reading without the op:
+
+```python
+from recordstream.storage.derived import DerivedStore
+
+store = DerivedStore(root="$RUN_DIR/derived")
+table = store.table(op.producer, "embedding")
+todo = table.missing(ids)                 # the ids with no value yet
+vectors = table.array(ids)                # one row per id, in the order asked
+store.producers()                         # [{producer, outputs: {name: records}, bytes, description}, …]
+store.remove(producer)                    # delete one producer's values
+```
+
+On disk a producer is a folder and each output a folder inside it, holding an `index.json` and numbered `.npz`
+shards that are written once and never changed; `producer.yaml` says what the producer is. Values go through the
+item codec, so a `Boxes` or an `Image` comes back as its type. A value that holds arrays inside a mapping is
+refused — keep each array as an output of its own. One process writes a table at a time; any number read it.
+
+Where the store lives is the caller's choice: recordstream names no default folder. One root serves any number of
+datasets and producers, because a record id names its dataset.

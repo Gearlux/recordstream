@@ -862,3 +862,54 @@ class MyStoreSource:
 Rationale: [docs/architecture.md §13](architecture.md#13-dataset-identity-is-a-protocol-and-a-view-propagates-it-verbatim-recordstreamuri-2026-08-02).
 
 > **Note on `!ref:`** — Confluid `!ref:` resolves to the same live object as the referenced key, so a single `HuggingFaceSource` is loaded once and shared. Write the marker again when you want an independent instance instead.
+
+## Identifying a record
+
+A record's place in a source says nothing once the source is split, sliced or filtered. `record_ids(source)` names
+every record so that the same record has the same id through any view of its dataset:
+
+```python
+from recordstream import DatasetSplit, IdentifiedSource, record_ids
+from recordstream.sources import FilesSource
+
+files = FilesSource(root="/data/captures", pattern="**/*.png")
+record_ids(files)                    # ['file:///data/captures#a/1.png', 'file:///data/captures#a/2.png', …]
+record_ids(DatasetSplit(files, val_fraction=0.3, seed=7, split="val"))    # some of the same ids
+```
+
+An id is `<dataset>#<key>`:
+
+- **the dataset** is the source's `dataset_uri`; else, for a source that reads a folder (`root`), that folder as a
+  `file://` URI; else its `name`; else nothing. The folder comes before the name, so two sources left at one
+  default name never share an id;
+- **the key** is the source's own name for the record — a source that has one implements `record_keys()`
+  (`SupportsRecordKeys`; `FilesSource` answers each file's path under its `root`) — or the record's place in the
+  ROOT source when it has none.
+
+`has_record_keys(source)` says which: `False` means the ids are places, and hold only while the source's records
+and their order stay as they are. Asking for ids reads no record.
+
+A view keeps the ids of what it reads: a `RangeSource`, a `DatasetSplit` and each of its views, a
+`DifferenceSource` and a `MetadataFilterSource` are followed through their indices; a `ConcatSource` gives each
+member's ids end to end; a `Stream` without ops is its source. A stream WITH ops may drop or add records, so the
+walk cannot follow it — put the id in the record first:
+
+```yaml
+source: !class:recordstream.sources.identified.IdentifiedSource
+  source: !class:recordstream.sources.files.FilesSource
+    root: $DATA_ROOT/captures
+    name: captures
+```
+
+`IdentifiedSource` writes each record's id under `record_id` (`RECORD_ID`) and changes nothing else. An op, a sink
+or a [derived store](storage.md#what-was-computed-from-records-derivedstore) further on then names the record
+without knowing where it was read.
+
+A record made FROM another — one box of an image — is named by its parent and a region:
+
+```python
+from recordstream import derive
+
+crop = derive(record, "box3", {"image": pixels})
+# {'image': …, 'record_id': 'file:///data/captures#a/1.png@box3', 'parent_id': 'file:///data/captures#a/1.png'}
+```

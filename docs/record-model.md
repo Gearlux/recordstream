@@ -573,3 +573,31 @@ and [kinds.md](kinds.md).
 
 A torch-`Tensor`-subclass item base (torch payloads currently ride in wrapper items or as plain
 values) and confluid-native item-type discovery. See the root `TASKS.md`.
+
+## Frames: getting a box back to the stored picture
+
+A `Boxes` is stated in a raster's pixels. Once a step resizes, crops or pads the raster, box and raster are in
+a new frame — and a prediction drawn on the stored picture, or a labelled box looked up in a network's feature
+map, needs the way between the two. A step that changes the frame writes it into the record's `frames` entry
+(`recordstream.frames`):
+
+```python
+from recordstream.frames import frames_of, map_record_boxes
+from recordstream.ops.target import ResizeDetection
+
+record = ResizeDetection(width=128, height=128, frame="model")(record)   # stored 256 high, 512 wide
+frames_of(record).into("model")                    # (0.25, 0.5, 0.0, 0.0)
+map_record_boxes(record, predicted, from_="model")               # back onto the stored picture
+map_record_boxes(record, labelled, to="model")                   # into the network's input
+```
+
+A mapping is a scale and an offset per axis, `x' = x * sx + ox` — a resize, a crop, a pad, a letterbox and any
+chain of them. `Frames.maps` holds, per frame name, the mapping from the frame of the record as stored
+(`record`) into it; `between(from_, to)` gives the mapping between any two. A frame-changing op calls
+`add_step(record, frame, step)`, which continues the frame when the record already has it.
+
+`ResizeDetection` writes its step when `frame` names one (blank, the default, writes none). A model that resizes
+inside itself says where through `ModelPredict(model_frame=)`: the op writes the model's `last_frames()`, one
+step per record of the forward just run. A step that cannot
+be undone point for point — a rotation by an arbitrary angle, a warp — writes no mapping, and asking for a frame
+the record has no mapping into is a `FrameError`: a refusal, never a guess.

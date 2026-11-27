@@ -160,6 +160,11 @@ class DatasetSplit:
         """Cached test-split view (≈ ``test_fraction`` of the source)."""
         return self._view("test")
 
+    @property
+    def indices(self) -> List[int]:
+        """The SELECTED view's source indices, in its order — what a walk over ``source`` needs to follow it."""
+        return self._view(self.split or "train").indices
+
     def project(self, keys: Collection[str]) -> Iterator[Record]:
         """Yield the SELECTED view's records carrying only ``keys`` (see :meth:`_SplitView.project`)."""
         yield from self._view(self.split or "train").project(keys)

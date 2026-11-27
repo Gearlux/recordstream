@@ -13,6 +13,7 @@ Submodules:
     - recordstream.sources.grouped: GroupedFilesSource (a folder of files, a group folder ONE record), GroupedSource
       (any indexable source, the groups a groups file names ONE record each)
     - recordstream.sources.huggingface: HuggingFaceSource (+ the METADATA_ALL_FEATURES sentinel)
+    - recordstream.sources.identified: IdentifiedSource (a source's records, each carrying its record id)
     - recordstream.sources.split: DatasetSplit (+ the SplitName Literal)
     - recordstream.sources.range: RangeSource (a contiguous ``[start:stop)`` slice)
     - recordstream.sources.concat: ConcatSource (several indexable sources end to end)
@@ -33,6 +34,7 @@ from recordstream.sources.draw import DrawSource
 from recordstream.sources.files import FilesSource
 from recordstream.sources.grouped import GroupedFilesSource, GroupedSource
 from recordstream.sources.huggingface import METADATA_ALL_FEATURES, HuggingFaceSource
+from recordstream.sources.identified import IdentifiedSource
 from recordstream.sources.range import RangeSource
 from recordstream.sources.selection import FileSelection
 from recordstream.sources.split import DatasetSplit, SplitName
@@ -48,6 +50,7 @@ __all__ = [
     "GroupedFilesSource",
     "GroupedSource",
     "HuggingFaceSource",
+    "IdentifiedSource",
     "FilesSource",
     "METADATA_ALL_FEATURES",
     "RangeSource",
