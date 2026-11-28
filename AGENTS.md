@@ -171,6 +171,9 @@ Gotchas:
 - `ModelPredict(raw=, taps=)` writes the model's raw output and the outputs of modules inside it as record entries; the
   hooks are set once, when the model is made ready, and found by `get_submodule` (duck-typed: no torch import). Its
   parameters are only ever APPENDED (`tests/test_ops_predict.py::TestTheRawOutputAndTheTaps`, `::test_frame_is_appended_last`).
+- `ModelPredict.forward(batch, gradients=)` is the ONE place the model is called: `predict_batch` goes through it, so
+  a prediction and an analysis's forward cannot drift. It converts nothing and sets the gradient mode itself
+  (`torch.set_grad_enabled`), off unless asked (`::test_a_forward_alone_gives_the_models_tensors_and_keeps_its_graph_when_asked`).
 - `Subgraph` (§23, `tests/test_subgraph.py`, `tests/test_trace_subgraph.py`): the inside runs on
   the same kernel, never flattened, never on its own executor.
   - The parameter is `result`, never `outputs` (confluid broadcasts a document's `outputs:`).

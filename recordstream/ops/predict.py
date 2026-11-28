@@ -242,21 +242,54 @@ class ModelPredict:
 
             module.register_forward_hook(keep)
 
-    def _call(self, batch: Any) -> Any:
+    def _call(self, batch: Any, gradients: bool = False) -> Any:
         model = self._model()
         try:
             import torch  # noqa: F401
-
-            with torch.no_grad():
-                if self._resolved_device:
-                    if hasattr(batch, "to"):
-                        batch = batch.to(self._resolved_device)
-                    elif isinstance(batch, list):
-                        # a detection batch is a LIST of tensors — each rides to the device
-                        batch = [v.to(self._resolved_device) if hasattr(v, "to") else v for v in batch]
-                return model(batch)
         except ImportError:
             return model(batch)
+        with torch.set_grad_enabled(gradients):
+            if self._resolved_device:
+                if hasattr(batch, "to"):
+                    batch = batch.to(self._resolved_device)
+                elif isinstance(batch, list):
+                    # a detection batch is a LIST of tensors — each rides to the device
+                    batch = [v.to(self._resolved_device) if hasattr(v, "to") else v for v in batch]
+            return model(batch)
+
+    def loaded_model(self) -> Any:
+        """The model as every forward of this op runs it: built (``solidify``), in eval mode, on the op's device,
+        its tapped modules hooked. Built on the first call, the same object from then on."""
+        return self._model()
+
+    def forward(self, batch: Any, gradients: bool = False) -> "tuple[Any, Dict[str, Any]]":
+        """ONE forward of the model on a batch already in the model's own form, nothing converted.
+
+        What :meth:`predict_batch` runs, without reading records or writing any: the caller hands the batch the
+        model takes (a stacked tensor; a list of tensors for a detector) and gets the model's own output and
+        what each tapped module gave, as the model's tensors. With ``gradients`` the forward keeps its graph, so
+        the caller may differentiate the output, or a tap, with respect to the batch.
+
+        Args:
+            batch: The model's input for several records.
+            gradients: Keep the forward's graph (torch autograd); off = as a prediction runs.
+
+        Returns:
+            ``(output, tapped)`` — the model's output, and record entry -> the tapped module's output.
+        """
+        self._tapped = {}
+        try:
+            out = self._call(batch, gradients)
+            tapped = dict(self._tapped)
+        finally:
+            self._tapped = {}
+        absent = [field for field in self.taps if field not in tapped]
+        if absent:
+            raise ValueError(
+                f"ModelPredict: the model's forward did not run the tapped module(s) of {absent} "
+                f"({[self.taps[field] for field in absent]})"
+            )
+        return out, tapped
 
     def __call__(self, record: Dict[str, Any]) -> Dict[str, Any]:
         return self.predict_batch([record])[0]
@@ -277,14 +310,7 @@ class ModelPredict:
         # DETECTION models take a LIST of per-image tensors — the torchvision convention
         # (FasterRCNN, DETR wrappers); everything else gets the stacked batch.
         batch = list(values) if self.kind == "detection" else self._stack(values)
-        self._tapped = {}
-        out = self._call(batch)
-        absent = [field for field in self.taps if field not in self._tapped]
-        if absent:
-            raise ValueError(
-                f"ModelPredict: the model's forward did not run the tapped module(s) of {absent} "
-                f"({[self.taps[field] for field in absent]})"
-            )
+        out, tapped_now = self.forward(batch)
         steps = self._model_frames(len(records))
         stamped: "list[Dict[str, Any]]" = []
         for index, record in enumerate(records):
@@ -301,14 +327,13 @@ class ModelPredict:
                 one = {**record, self.output: self._restoration(out, index)}
             if self.raw:
                 one[self.raw] = self._raw(out, index)
-            for field, tapped in self._tapped.items():
+            for field, tapped in tapped_now.items():
                 one[field] = _to_numpy(_nth(tapped, index))
             if steps is not None:
                 from recordstream.frames import add_step
 
                 one = add_step(one, self.model_frame, steps[index])
             stamped.append(one)
-        self._tapped = {}
         return stamped
 
     def _model_frames(self, count: int) -> "Optional[list[tuple[float, float, float, float]]]":

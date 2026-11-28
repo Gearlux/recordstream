@@ -385,6 +385,23 @@ class TestTheRawOutputAndTheTaps:
         with pytest.raises(ValueError, match="no get_submodule"):
             ModelPredict(model=_Classifier(), kind="classification", taps={"latent": "x"})({"image": np.zeros(2)})
 
+    def test_a_forward_alone_gives_the_models_tensors_and_keeps_its_graph_when_asked(self) -> None:
+        torch = pytest.importorskip("torch")
+        net = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(6, 4), torch.nn.Linear(4, 2))
+        op = ModelPredict(model=net, kind="classification", device="cpu", taps={"latent": "1"})
+        batch = torch.ones((3, 2, 3), requires_grad=True)
+
+        out, tapped = op.forward(batch, gradients=True)
+        assert out.shape == (3, 2) and tapped["latent"].shape == (3, 4)
+        out[:, 1].sum().backward()
+        expected = (net[2].weight[1] @ net[1].weight).detach().reshape(2, 3)  # the network is linear
+        assert torch.allclose(batch.grad[0], expected, atol=1e-6)
+
+        plain, _ = op.forward(batch)
+        assert plain.grad_fn is None and torch.allclose(plain, out)
+        assert op.loaded_model() is net and not net.training
+        assert np.allclose(op({"image": torch.ones((2, 3))})["latent"], tapped["latent"][0].detach().numpy())
+
 
 class TestAModelThatResizesInsideItselfSaysWhere:
     class _Halving:

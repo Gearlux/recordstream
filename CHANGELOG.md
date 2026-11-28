@@ -20,6 +20,9 @@ All notable changes to this project are documented here. The format follows
 - **`ModelPredict` writes what is inside the model** — `raw` names the entry the model's raw output is written
   under, and `taps` maps a record entry to the dotted path of a module inside a torch model, whose output for the
   record is written under that entry.
+- `ModelPredict.forward(batch, gradients=False)` — one forward on a batch in the model's own form: its output and
+  the tapped modules' outputs as the model's tensors, the graph kept when asked; `loaded_model()` is the model as the
+  op runs it.
 - `Subgraph.lineage` — the names of the inner steps on the lineage of the result step.
 - **A record carries its frames** — `recordstream.frames`: the `Frames` item under the `frames` entry holds, per
   named frame, the mapping from the record as stored into it (a scale and an offset per axis); `add_step` is what a
